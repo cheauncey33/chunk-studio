@@ -1,0 +1,143 @@
+"""File upload / list / page-image / delete."""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import time
+import uuid
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi.responses import Response
+
+from .. import config, db, jobs, pdf
+
+router = APIRouter(prefix="/files", tags=["files"])
+
+_PDF_MAGIC = b"%PDF-"
+
+
+@router.post("")
+async def upload(file: UploadFile = File(...), metadata: str = Form("{}")):
+    """Upload a PDF. Validates magic bytes, content-addressed copy into data/files."""
+    raw = await file.read()
+    if not raw.startswith(_PDF_MAGIC):
+        raise HTTPException(422, "not a valid PDF (bad magic bytes)")
+    try:
+        file_meta = json.loads(metadata or "{}")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(422, f"invalid metadata JSON: {exc.msg}") from exc
+    if not isinstance(file_meta, dict):
+        raise HTTPException(422, "metadata must be a JSON object")
+    file_meta = {k: v for k, v in file_meta.items() if v not in ("", None, [], {})}
+    sha = hashlib.sha256(raw).hexdigest()[:16]
+    safe_name = Path(file.filename or "upload.pdf").name
+    stored = f"{sha}_{safe_name}"
+    dest = config.FILES_DIR / stored
+    if not dest.exists():
+        dest.write_bytes(raw)
+    file_id = uuid.uuid4().hex
+    file_rel = config.to_rel(dest)
+    # page count in a thread
+    n_pages = await asyncio.to_thread(pdf.page_count, file_rel)
+    created = time.strftime("%Y-%m-%dT%H:%M:%S")
+    with db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO files(id,name,path,sha,page_count,metadata,created_at) VALUES(?,?,?,?,?,?,?)",
+            (
+                file_id, safe_name, file_rel, sha, n_pages,
+                json.dumps(file_meta, ensure_ascii=False), created,
+            ),
+        )
+    try:
+        jobs.enqueue_parse_file(file_id)
+    except Exception:
+        pass
+    return _file_out({
+        "id": file_id,
+        "name": safe_name,
+        "path": file_rel,
+        "sha": sha,
+        "page_count": n_pages,
+        "metadata": json.dumps(file_meta, ensure_ascii=False),
+        "created_at": created,
+    })
+
+
+@router.get("")
+def list_files():
+    rows = db.get_conn().execute("SELECT * FROM files ORDER BY created_at DESC").fetchall()
+    return [_file_out(dict(r)) for r in rows]
+
+
+@router.get("/{file_id}")
+def get_file(file_id: str):
+    row = db.get_conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "file not found")
+    return _file_out(dict(row))
+
+
+@router.get("/{file_id}/parses")
+def list_file_parses(file_id: str):
+    _get_file(file_id)
+    rows = db.get_conn().execute(
+        """SELECT * FROM document_parses
+           WHERE file_id=?
+           ORDER BY created_at DESC""",
+        (file_id,),
+    ).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["result"] = json.loads(item.get("result") or "{}")
+        except Exception:
+            item["result"] = {}
+        out.append(item)
+    return out
+
+
+@router.get("/{file_id}/pages/{page_no}")
+async def page_image(file_id: str, page_no: int):
+    f = _get_file(file_id)
+    if page_no < 1 or page_no > f["page_count"]:
+        raise HTTPException(404, "page out of range")
+    png = await asyncio.to_thread(pdf.render_page_png, f["path"], page_no - 1)
+    return Response(content=png, media_type="image/png")
+
+
+@router.delete("/{file_id}")
+def delete_file(file_id: str):
+    f = _get_file(file_id)
+    with db.transaction() as conn:
+        conn.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
+        conn.execute("DELETE FROM files WHERE id=?", (file_id,))
+    # best-effort delete the stored PDF
+    try:
+        config.from_rel(f["path"]).unlink(missing_ok=True)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+def _get_file(file_id: str):
+    row = db.get_conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "file not found")
+    return dict(row)
+
+
+def _file_out(row: dict):
+    try:
+        metadata = json.loads(row.get("metadata") or "{}")
+    except Exception:
+        metadata = {}
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "page_count": row["page_count"],
+        "metadata": metadata,
+        "created_at": row["created_at"],
+    }

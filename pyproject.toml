@@ -1,0 +1,7 @@
+[project]
+name = "chunk-studio"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "dashscope>=1.26.2",
+]
