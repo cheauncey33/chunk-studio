@@ -31,3 +31,16 @@ def enqueue_ocr_chunk(chunk_id: str, force: bool = False):
     except KeyError:
         raise HTTPException(404, "chunk not found")
     return _get_chunk(chunk_id)
+
+
+@router.post("/{chunk_id}/sync")
+async def ocr_chunk_sync(chunk_id: str):
+    """Synchronously run MinerU OCR for a chunk and return the updated chunk."""
+    _get_chunk(chunk_id)
+    try:
+        ok, error = await job_service.ocr_chunk_sync(chunk_id)
+    except KeyError:
+        raise HTTPException(404, "chunk not found")
+    if not ok:
+        raise HTTPException(502, error or "MinerU OCR failed")
+    return _get_chunk(chunk_id)

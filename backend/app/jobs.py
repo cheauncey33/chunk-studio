@@ -253,6 +253,66 @@ def _write_parse_outputs(
     return config.to_rel(md_path), zip_rel
 
 
+async def ocr_chunk_sync(chunk_id: str) -> tuple[bool, str]:
+    """Run MinerU OCR synchronously and update the chunk. Returns (ok, error)."""
+    row = db.get_conn().execute("SELECT id FROM chunks WHERE id=?", (chunk_id,)).fetchone()
+    if not row:
+        raise KeyError("chunk not found")
+
+    result = await ocr_adapter.ocr_chunk(chunk_id)
+    if not result.ok:
+        finished = now_iso()
+        jid = uuid.uuid4().hex
+        with db.transaction() as conn:
+            conn.execute(
+                """INSERT INTO jobs
+                   (id, type, target_type, target_id, status, priority, attempts,
+                    max_attempts, error, result, created_at, started_at, finished_at)
+                   VALUES (?, 'ocr', 'chunk', ?, 'failed', 0, 1, 1, ?, '{}', ?, ?, ?)""",
+                (jid, chunk_id, result.error or "ocr failed", finished, finished, finished),
+            )
+        return False, result.error or "ocr failed"
+
+    finished = now_iso()
+    jid = uuid.uuid4().hex
+    with db.transaction() as conn:
+        conn.execute(
+            "UPDATE chunks SET text=?, text_source='ocr', status='pending', updated_at=? WHERE id=?",
+            (result.text, finished, chunk_id),
+        )
+        row = conn.execute(
+            "SELECT text, metadata, file_id FROM chunks WHERE id=?", (chunk_id,)
+        ).fetchone()
+        fname_row = conn.execute(
+            "SELECT name FROM files WHERE id=?", (row["file_id"],)
+        ).fetchone()
+        fname = fname_row["name"] if fname_row else ""
+        try:
+            meta = json.loads(row["metadata"] or "{}")
+        except Exception:
+            meta = {}
+        extractors.merge_auto_metadata(meta, row["text"], fname)
+        conn.execute(
+            "UPDATE chunks SET metadata=? WHERE id=?",
+            (json.dumps(meta, ensure_ascii=False), chunk_id),
+        )
+        conn.execute(
+            """INSERT INTO jobs
+               (id, type, target_type, target_id, status, priority, attempts,
+                max_attempts, error, result, created_at, started_at, finished_at)
+               VALUES (?, 'ocr', 'chunk', ?, 'done', 0, 1, 1, '', ?, ?, ?, ?)""",
+            (
+                jid,
+                chunk_id,
+                json.dumps({"text_length": len(result.text), "sync": True}, ensure_ascii=False),
+                finished,
+                finished,
+                finished,
+            ),
+        )
+    return True, ""
+
+
 async def _run_ocr_job(job: dict[str, Any]) -> None:
     chunk_id = job["target_id"]
     result = await ocr_adapter.ocr_chunk(chunk_id)

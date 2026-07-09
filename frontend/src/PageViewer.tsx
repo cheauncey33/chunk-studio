@@ -1,16 +1,22 @@
 import { useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react'
 import { api, type Chunk, type BBox } from './api'
+import type { ChunkKind } from './ChunkList'
 
 interface Props {
   fileId: string
   page: number
   chunks: Chunk[]
   selectedChunkId: string | null
+  visibleKind: ChunkKind
+  autoParseOnCreate: boolean
   onChunkCreated: (c: Chunk) => void
   onSelectChunk: (id: string | null) => void
+  onDeleteChunk: (id: string) => void
+  onCreatingChange?: (creating: boolean) => void
 }
 
 interface DragRect { x: number; y: number; w: number; h: number }
+interface PageBox { x: number; y: number; w: number; h: number }
 
 /**
  * Renders one PDF page as an <img> with a transparent overlay for box-select.
@@ -22,11 +28,23 @@ interface DragRect { x: number; y: number; w: number; h: number }
  * measure the img's rect with a ResizeObserver and position the overlay to match.
  * Mouse coords ÷ overlay size → 0..1 normalized bbox, so zoom/DPR are irrelevant.
  */
-export function PageViewer({ fileId, page, chunks, selectedChunkId, onChunkCreated, onSelectChunk }: Props) {
+export function PageViewer({
+  fileId,
+  page,
+  chunks,
+  selectedChunkId,
+  visibleKind,
+  autoParseOnCreate,
+  onChunkCreated,
+  onSelectChunk,
+  onDeleteChunk,
+  onCreatingChange,
+}: Props) {
   const imgRef = useRef<HTMLImageElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [box, setBox] = useState<{ left: number; top: number; w: number; h: number } | null>(null)
   const [drag, setDrag] = useState<DragRect | null>(null)
+  const [creating, setCreating] = useState(false)
   const startRef = useRef<{ x: number; y: number } | null>(null)
 
   // Position the overlay to exactly cover the rendered <img>.
@@ -84,11 +102,19 @@ export function PageViewer({ fileId, page, chunks, selectedChunkId, onChunkCreat
     if (!s || !d) return
     if (d.w < 0.01 || d.h < 0.01) return // ignore accidental clicks
     const bbox: BBox = { x: d.x, y: d.y, w: d.w, h: d.h }
+    setCreating(true)
+    onCreatingChange?.(true)
     try {
       const c = await api.createChunk({ file_id: fileId, page, bbox })
       onChunkCreated(c)
+      if (c.ocr_status === 'failed') {
+        alert('切片已创建，但 MinerU 解析失败: ' + (c.ocr_error || '未知错误'))
+      }
     } catch (err) {
       alert('建 chunk 失败: ' + (err as Error).message)
+    } finally {
+      setCreating(false)
+      onCreatingChange?.(false)
     }
   }
 
@@ -97,9 +123,18 @@ export function PageViewer({ fileId, page, chunks, selectedChunkId, onChunkCreat
   }
 
   const pct = (v: number) => `${v * 100}%`
+  const visibleChunks = chunks
+    .map(chunk => ({ chunk, pageBox: pageBoxForChunk(chunk, page, visibleKind) }))
+    .filter((item): item is { chunk: Chunk; pageBox: PageBox } => Boolean(item.pageBox))
 
   return (
     <div className="page-viewer" ref={containerRef}>
+      {creating && autoParseOnCreate && (
+        <div className="page-viewer-loading">
+          <span className="spinner" />
+          <span>MinerU 正在解析切片…</span>
+        </div>
+      )}
       <img
         ref={imgRef}
         src={api.pageImageUrl(fileId, page)}
@@ -113,28 +148,40 @@ export function PageViewer({ fileId, page, chunks, selectedChunkId, onChunkCreat
           style={{
             position: 'absolute',
             left: box.left, top: box.top, width: box.w, height: box.h,
-            cursor: 'crosshair',
+            cursor: creating ? 'wait' : 'crosshair',
+            pointerEvents: creating ? 'none' : undefined,
           }}
           onMouseDown={onMouseDown}
           onMouseMove={onMouseMove}
           onMouseUp={onMouseUp}
           onMouseLeave={onMouseLeave}
         >
-          {chunks.filter(c => c.page === page).map(c => {
+          {visibleChunks.map(({ chunk: c, pageBox }) => {
             const sel = c.id === selectedChunkId
             return (
               <div
                 key={c.id}
-                className={`chunk-rect ${sel ? 'selected' : ''}`}
+                className={`chunk-rect ${chunkKind(c)} ${sel ? 'selected' : ''}`}
                 style={{
                   position: 'absolute',
-                  left: pct(c.bbox.x), top: pct(c.bbox.y),
-                  width: pct(c.bbox.w), height: pct(c.bbox.h),
+                  left: pct(pageBox.x), top: pct(pageBox.y),
+                  width: pct(pageBox.w), height: pct(pageBox.h),
                 }}
                 onMouseDown={(e) => { e.stopPropagation(); onSelectChunk(c.id) }}
                 title={c.text?.slice(0, 60) || '(无文本)'}
               >
                 <span className="chunk-rect-badge">{c.page}</span>
+                <button
+                  className="chunk-rect-delete"
+                  title="删除切片"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDeleteChunk(c.id)
+                  }}
+                >
+                  ×
+                </button>
               </div>
             )
           })}
@@ -152,4 +199,62 @@ export function PageViewer({ fileId, page, chunks, selectedChunkId, onChunkCreat
       )}
     </div>
   )
+}
+
+function chunkKind(chunk: Chunk): ChunkKind {
+  const type = String(chunk.metadata?.content_type || '')
+  if (type === 'section') return 'section'
+  if (type === 'table') return 'table'
+  if (type === 'image') return 'image'
+  return 'manual'
+}
+
+function pageBoxForChunk(chunk: Chunk, page: number, visibleKind: ChunkKind): PageBox | null {
+  const kind = chunkKind(chunk)
+  if (kind !== visibleKind) return null
+  if (kind !== 'section') return chunk.page === page ? chunk.bbox : null
+
+  const box = sectionPageBox(chunk, page)
+  if (box) return box
+  return chunk.page === page ? chunk.bbox : null
+}
+
+function sectionPageBox(chunk: Chunk, page: number): PageBox | null {
+  const sourceBlocks = chunk.metadata?.source_blocks
+  if (!Array.isArray(sourceBlocks)) return null
+
+  const pageIdx = page - 1
+  const boxes = sourceBlocks
+    .map(block => {
+      if (!block || typeof block !== 'object') return null
+      const record = block as Record<string, unknown>
+      if (Number(record.page_idx) !== pageIdx) return null
+      return rawBoxToPageBox(record.bbox)
+    })
+    .filter((box): box is PageBox => Boolean(box))
+
+  if (!boxes.length) return null
+  return unionPageBoxes(boxes)
+}
+
+function rawBoxToPageBox(value: unknown): PageBox | null {
+  if (!Array.isArray(value) || value.length < 4) return null
+  const [x0, y0, x1, y1] = value.map(Number)
+  if (![x0, y0, x1, y1].every(Number.isFinite)) return null
+  const x = Math.max(0, Math.min(1, x0))
+  const y = Math.max(0, Math.min(1, y0))
+  const right = Math.max(0, Math.min(1, x1))
+  const bottom = Math.max(0, Math.min(1, y1))
+  const w = right - x
+  const h = bottom - y
+  if (w <= 0 || h <= 0) return null
+  return { x, y, w, h }
+}
+
+function unionPageBoxes(boxes: PageBox[]): PageBox {
+  const x0 = Math.min(...boxes.map(box => box.x))
+  const y0 = Math.min(...boxes.map(box => box.y))
+  const x1 = Math.max(...boxes.map(box => box.x + box.w))
+  const y1 = Math.max(...boxes.map(box => box.y + box.h))
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
 }

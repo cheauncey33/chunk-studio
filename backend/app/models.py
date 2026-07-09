@@ -26,6 +26,31 @@ class ChunkUpdate(BaseModel):
     status: str | None = None
 
 
+class AutoTableChunkRequest(BaseModel):
+    parse_id: str | None = None
+    dry_run: bool = True
+    include_caption: bool = True
+    max_caption_gap: float = 0.04
+    skip_existing: bool = True
+
+
+class AutoSectionChunkRequest(BaseModel):
+    parse_id: str | None = None
+    dry_run: bool = True
+    target_level: int = 2
+    max_chars: int = 8192
+    skip_existing: bool = True
+
+
+class AutoImageChunkRequest(BaseModel):
+    parse_id: str | None = None
+    dry_run: bool = True
+    include_caption: bool = True
+    require_caption: bool = True
+    max_caption_gap: float = 0.04
+    skip_existing: bool = True
+
+
 class ChunkOut(BaseModel):
     id: str
     file_id: str

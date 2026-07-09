@@ -53,8 +53,12 @@ async def create_chunk(body: ChunkCreate):
                 json.dumps(meta, ensure_ascii=False), "{}", "pending", now, now,
             ),
         )
-    if result.text_source == "pending" and db.get_setting("ocr.auto_on_create", "false") == "true":
-        jobs.enqueue_ocr_chunk(cid)
+    if (
+        result.text_source == "pending"
+        and db.get_setting("ocr.auto_on_create", "false") == "true"
+        and _mineru_configured()
+    ):
+        await jobs.ocr_chunk_sync(cid)
     return _get_chunk(cid)
 
 
@@ -128,6 +132,12 @@ def delete_chunk(chunk_id: str):
 
 
 # --- helpers ---
+def _mineru_configured() -> bool:
+    import os
+    token = db.get_setting("mineru.token", "") or os.environ.get("MINERU_TOKEN", "")
+    return bool(token.strip())
+
+
 def _get_chunk(cid: str) -> ChunkOut:
     row = db.get_conn().execute("SELECT * FROM chunks WHERE id=?", (cid,)).fetchone()
     if not row:

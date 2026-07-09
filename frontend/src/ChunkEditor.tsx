@@ -34,6 +34,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
   }, [chunk?.text, chunk?.updated_at, dirtyText]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const renderedText = useMemo(() => renderChunkText(text), [text])
+  const parsing = ocring || chunk?.ocr_status === 'running'
 
   if (!chunk) {
     return (
@@ -44,16 +45,17 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
   }
 
   const editableFields = fields.filter(field => field.extract_source !== 'llm')
-  const ocrBusy = chunk.ocr_status === 'queued' || chunk.ocr_status === 'running'
+  const isAutoChunk = Boolean(chunk.metadata?.auto_source)
+  const sourceLabel = isAutoChunk ? 'auto' : chunk.text_source
 
   const runOcr = async () => {
     setOcring(true)
     try {
-      const updated = await api.ocrChunk(chunk.id)
+      const updated = await api.ocrChunkSync(chunk.id)
       onSaved(updated)
       onQueued()
     } catch (error) {
-      alert('OCR 入队失败: ' + (error as Error).message)
+      alert('MinerU 解析失败: ' + (error as Error).message)
     } finally {
       setOcring(false)
     }
@@ -158,7 +160,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
   return (
     <div className="editor">
       <div className="editor-head">
-        <span>第 {chunk.page} 页 · {chunk.text_source}</span>
+        <span>第 {chunk.page} 页 · {sourceLabel}</span>
         <span className={`status ${chunk.status}`}>{chunk.status}</span>
       </div>
 
@@ -168,7 +170,13 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
         <label>切片文本</label>
         <div className="segmented">
           <button className={textMode === 'source' ? 'on' : ''} onClick={() => setTextMode('source')}>源码</button>
-          <button className={textMode === 'preview' ? 'on' : ''} onClick={() => setTextMode('preview')}>渲染</button>
+          <button
+            className={`${textMode === 'preview' ? 'on' : ''} ${parsing ? 'loading' : ''}`}
+            onClick={() => setTextMode('preview')}
+            disabled={parsing}
+          >
+            {parsing ? <><span className="spinner" />解析中</> : '渲染'}
+          </button>
         </div>
       </div>
 
@@ -181,6 +189,11 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
           }}
           rows={8}
         />
+      ) : parsing ? (
+        <div className="rendered-text parsing">
+          <span className="spinner" />
+          <p>MinerU 正在解析切片，请稍候…</p>
+        </div>
       ) : (
         <div
           className="rendered-text"
@@ -189,11 +202,17 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
       )}
 
       <div className="ocr-actions">
-        {chunk.ocr_status && <span className={`job-status ${chunk.ocr_status}`}>OCR {chunk.ocr_status}</span>}
-        {chunk.ocr_status === 'failed' && chunk.ocr_error && <span className="muted">{chunk.ocr_error}</span>}
-        <button onClick={runOcr} disabled={ocring || ocrBusy}>
-          {ocring ? '加入中...' : '加入 MinerU OCR 队列'}
-        </button>
+        {!isAutoChunk && chunk.ocr_status && !parsing && (
+          <span className={`job-status ${chunk.ocr_status}`}>OCR {chunk.ocr_status}</span>
+        )}
+        {!isAutoChunk && chunk.ocr_status === 'failed' && chunk.ocr_error && <span className="muted">{chunk.ocr_error}</span>}
+        {isAutoChunk ? (
+          <span className="muted">自动切片已包含 MinerU 解析文本，不需要再解析。</span>
+        ) : (
+          <button onClick={runOcr} disabled={ocring || parsing}>
+            {ocring ? <><span className="spinner" />解析中…</> : 'MinerU 解析'}
+          </button>
+        )}
         {dirtyText && <span className="muted">文本有未保存修改</span>}
       </div>
 
@@ -223,7 +242,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
       <div className="editor-actions">
         <button onClick={save} disabled={saving}>{saving ? '保存中...' : '保存'}</button>
         <button
-          onClick={() => { if (confirm('删除这个切片?')) onDelete(chunk.id) }}
+          onClick={() => onDelete(chunk.id)}
           className="danger"
         >
           删除

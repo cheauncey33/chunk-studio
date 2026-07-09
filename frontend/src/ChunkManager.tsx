@@ -7,6 +7,14 @@ interface Props {
   compact?: boolean
 }
 
+function isAutoChunk(chunk: Chunk): boolean {
+  return Boolean(chunk.metadata?.auto_source)
+}
+
+function sourceLabel(chunk: Chunk): string {
+  return isAutoChunk(chunk) ? 'auto' : chunk.text_source
+}
+
 type SourceFilter = 'all' | Chunk['text_source']
 type JobFilter = 'all' | 'queued' | 'running' | 'done' | 'failed' | 'none'
 
@@ -18,6 +26,7 @@ export function ChunkManager({ files, onOpenChunk, compact = false }: Props) {
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Chunk | null>(null)
 
   const refresh = async () => {
     setLoading(true)
@@ -62,19 +71,21 @@ export function ChunkManager({ files, onOpenChunk, compact = false }: Props) {
   const enqueueOcr = async (chunk: Chunk) => {
     setBusyId(chunk.id)
     try {
-      await api.ocrChunk(chunk.id)
+      await api.ocrChunkSync(chunk.id)
       await refresh()
+    } catch (err) {
+      alert('MinerU 解析失败: ' + (err as Error).message)
     } finally {
       setBusyId(null)
     }
   }
 
   const deleteChunk = async (chunk: Chunk) => {
-    if (!confirm(`删除第 ${chunk.page} 页的这个切片?`)) return
     setBusyId(chunk.id)
     try {
       await api.deleteChunk(chunk.id)
       setChunks(prev => prev.filter(item => item.id !== chunk.id))
+      setDeleteTarget(null)
     } finally {
       setBusyId(null)
     }
@@ -140,9 +151,9 @@ export function ChunkManager({ files, onOpenChunk, compact = false }: Props) {
               <div className="manager-body">
                 <div className="manager-line">
                   <span className="mono">P{chunk.page}</span>
-                  <span className={`src ${chunk.text_source}`}>{chunk.text_source}</span>
+                  <span className={`src ${sourceLabel(chunk)}`}>{sourceLabel(chunk)}</span>
                   <span className={`status ${chunk.status}`}>{chunk.status}</span>
-                  {chunk.ocr_status && <span className={`job-status ${chunk.ocr_status}`}>ocr:{chunk.ocr_status}</span>}
+                  {!isAutoChunk(chunk) && chunk.ocr_status && <span className={`job-status ${chunk.ocr_status}`}>ocr:{chunk.ocr_status}</span>}
                 </div>
                 <div className="manager-file">{fileNameById[chunk.file_id] || chunk.file_id}</div>
                 <p>{chunk.text?.trim() || '无文本'}</p>
@@ -150,18 +161,38 @@ export function ChunkManager({ files, onOpenChunk, compact = false }: Props) {
               </div>
               <div className="manager-actions">
                 <button onClick={() => onOpenChunk(chunk)}>打开</button>
-                <button
-                  onClick={() => enqueueOcr(chunk)}
-                  disabled={busyId === chunk.id || chunk.ocr_status === 'queued' || chunk.ocr_status === 'running'}
-                >
-                  OCR
-                </button>
-                <button className="danger" onClick={() => deleteChunk(chunk)} disabled={busyId === chunk.id}>删</button>
+                {!isAutoChunk(chunk) && (
+                  <button
+                    onClick={() => enqueueOcr(chunk)}
+                    disabled={busyId === chunk.id || chunk.ocr_status === 'queued' || chunk.ocr_status === 'running'}
+                  >
+                    OCR
+                  </button>
+                )}
+                <button className="danger" onClick={() => setDeleteTarget(chunk)} disabled={busyId === chunk.id}>删</button>
               </div>
             </article>
           ))}
         </div>
       </section>
+      {deleteTarget && (
+        <div className="modal confirm-modal-layer">
+          <div className="modal-panel confirm-modal">
+            <div className="modal-title">
+              <div>
+                <h4>删除切片？</h4>
+                <p>第 {deleteTarget.page} 页的这个切片会被永久删除。</p>
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button onClick={() => setDeleteTarget(null)}>取消</button>
+              <button className="danger solid" onClick={() => deleteChunk(deleteTarget)} disabled={busyId === deleteTarget.id}>
+                确认删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -45,7 +45,7 @@ export function SettingsPage() {
       </div>
 
       <h4>OCR / MinerU 云端解析</h4>
-      <p className="muted">每个 pending chunk 点 OCR 按钮 → 裁剪图包成 1 页 PDF 上传 MinerU 云端 → 取回 markdown 文本。
+      <p className="muted">手动框选切片时，若 PDF 内嵌文本不可用，将同步调用 MinerU 云端解析（裁剪图 → 1 页 PDF → 返回 markdown）。
         token 也可放后端 .env 的 MINERU_TOKEN。</p>
       <Field k="mineru.token" label="MinerU Token" type="password" />
       <Field k="mineru.base_url" label="Base URL (默认 https://mineru.net)" />

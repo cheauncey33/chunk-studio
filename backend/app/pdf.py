@@ -19,10 +19,11 @@ _CROP_DPI = 300
 
 # Heuristic for "is the extracted text actually usable". Some Chinese PDFs
 # (notably standards/GBT) embed fonts without a ToUnicode CMap, so get_text
-# returns glyph codes that look like "!#\$&" garbage. We count word characters
-# (re.UNICODE includes CJK); if too few relative to total non-space chars, we
-# treat the text as not-meaningful and mark the chunk as pending OCR.
+# returns glyph codes that look like "!#\$&öÜÐ" garbage. Real Chinese content
+# should contain CJK; Latin-only garbage with many symbols is rejected.
 _WORD_RE = re.compile(r"[\w]", re.UNICODE)
+_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]")
+_SYMBOL_RE = re.compile(r'[;:%#!"\'\(\)\*\+\=\[\]\\\^\`\{\}\|<>@&~]')
 
 
 def _is_meaningful_text(text: str) -> bool:
@@ -31,8 +32,14 @@ def _is_meaningful_text(text: str) -> bool:
     non_space = [c for c in text if not c.isspace()]
     if not non_space:
         return False
+    cjk_count = sum(1 for c in non_space if _CJK_RE.match(c))
+    if cjk_count > 0:
+        return cjk_count / len(non_space) >= 0.25
     word_count = sum(1 for c in non_space if _WORD_RE.match(c))
-    return word_count / len(non_space) >= 0.4
+    symbol_count = sum(1 for c in non_space if _SYMBOL_RE.match(c))
+    if symbol_count / len(non_space) > 0.15:
+        return False
+    return word_count / len(non_space) >= 0.55
 
 
 def _open(file_rel: str) -> fitz.Document:

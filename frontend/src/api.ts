@@ -62,6 +62,66 @@ export interface DocumentParse {
   updated_at: string
 }
 
+export interface AutoTableChunkResult {
+  file_id: string
+  parse_id: string
+  dry_run: boolean
+  candidates: Array<{
+    page: number
+    bbox: BBox
+    table_bbox: number[]
+    caption_bbox: number[] | null
+    caption: string
+    text: string
+    block_index: number
+    metadata: Record<string, unknown>
+  }>
+  created: Chunk[]
+  skipped: number
+}
+
+export interface AutoSectionChunkResult {
+  file_id: string
+  parse_id: string
+  dry_run: boolean
+  candidates: Array<{
+    page: number
+    bbox: BBox
+    text: string
+    section: string
+    section_title: string
+    section_level: number
+    section_path: Array<{ section: string; title: string }>
+    source_blocks: Array<Record<string, unknown>>
+    split_from: string | null
+    split_reason: string | null
+    chunk_part: number | null
+    chunk_parts: number | null
+    metadata: Record<string, unknown>
+  }>
+  created: Chunk[]
+  skipped: number
+}
+
+export interface AutoImageChunkResult {
+  file_id: string
+  parse_id: string
+  dry_run: boolean
+  candidates: Array<{
+    page: number
+    bbox: BBox
+    image_bbox: number[]
+    caption_bbox: number[] | null
+    caption: string
+    block_index: number
+    section: string | null
+    section_path: Array<{ section: string; title: string }>
+    metadata: Record<string, unknown>
+  }>
+  created: Chunk[]
+  skipped: number
+}
+
 export interface FieldConfig {
   field_key: string
   display_name: string
@@ -90,6 +150,12 @@ export const api = {
     return fetch(`${API}/files`, { method: 'POST', body: fd }).then(j<CSFile>)
   },
   deleteFile: (id: string) => fetch(`${API}/files/${id}`, { method: 'DELETE' }).then(j),
+  updateFile: (id: string, body: Partial<{ metadata: Record<string, unknown> }>) =>
+    fetch(`${API}/files/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<CSFile>),
   listFileParses: (id: string) =>
     fetch(`${API}/files/${id}/parses`).then(j<DocumentParse[]>),
 
@@ -118,12 +184,51 @@ export const api = {
 
   ocrChunk: (id: string) =>
     fetch(`${API}/ocr/${id}`, { method: 'POST' }).then(j<Chunk>),
+  ocrChunkSync: (id: string) =>
+    fetch(`${API}/ocr/${id}/sync`, { method: 'POST' }).then(j<Chunk>),
   ocrBulk: (fileId: string, opts: { page?: number; pending_only?: boolean } = {}) => {
     const qs = new URLSearchParams({ file_id: fileId })
     if (opts.page != null) qs.set('page', String(opts.page))
     if (opts.pending_only != null) qs.set('pending_only', String(opts.pending_only))
     return fetch(`${API}/ocr/bulk?${qs}`, { method: 'POST' }).then(j<{ queued: number; jobs: Job[] }>)
   },
+  autoTableChunks: (fileId: string, opts: {
+    parse_id?: string
+    dry_run?: boolean
+    include_caption?: boolean
+    require_caption?: boolean
+    max_caption_gap?: number
+    skip_existing?: boolean
+  } = {}) =>
+    fetch(`${API}/auto-chunks/tables/${fileId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts),
+    }).then(j<AutoTableChunkResult>),
+  autoSectionChunks: (fileId: string, opts: {
+    parse_id?: string
+    dry_run?: boolean
+    target_level?: number
+    max_chars?: number
+    skip_existing?: boolean
+  } = {}) =>
+    fetch(`${API}/auto-chunks/sections/${fileId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts),
+    }).then(j<AutoSectionChunkResult>),
+  autoImageChunks: (fileId: string, opts: {
+    parse_id?: string
+    dry_run?: boolean
+    include_caption?: boolean
+    max_caption_gap?: number
+    skip_existing?: boolean
+  } = {}) =>
+    fetch(`${API}/auto-chunks/images/${fileId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts),
+    }).then(j<AutoImageChunkResult>),
   listJobs: (params: { target_id?: string; status?: string; type?: string } = {}) => {
     const qs = new URLSearchParams()
     Object.entries(params).forEach(([k, v]) => { if (v) qs.set(k, v) })

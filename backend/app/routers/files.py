@@ -7,15 +7,21 @@ import json
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import Response
+from pydantic import BaseModel
 
 from .. import config, db, jobs, pdf
 
 router = APIRouter(prefix="/files", tags=["files"])
 
 _PDF_MAGIC = b"%PDF-"
+
+
+class FileUpdate(BaseModel):
+    metadata: dict[str, Any] | None = None
 
 
 @router.post("")
@@ -77,6 +83,22 @@ def get_file(file_id: str):
     if not row:
         raise HTTPException(404, "file not found")
     return _file_out(dict(row))
+
+
+@router.patch("/{file_id}")
+def update_file(file_id: str, body: FileUpdate):
+    row = db.get_conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "file not found")
+    if body.metadata is not None:
+        metadata = {k: v for k, v in body.metadata.items() if v not in ("", None, [], {})}
+        with db.transaction() as conn:
+            conn.execute(
+                "UPDATE files SET metadata=? WHERE id=?",
+                (json.dumps(metadata, ensure_ascii=False), file_id),
+            )
+    updated = db.get_conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
+    return _file_out(dict(updated))
 
 
 @router.get("/{file_id}/parses")
