@@ -1,9 +1,9 @@
 """Programmatic (regex/heuristic) metadata extractors for `auto` fields.
 
 These produce deterministic values — standard_no (from filename), content_type,
-table_no, table_header, table_columns, table_ref — that are written into
-chunk.metadata. The caller merges them *only into empty fields*, never
-overwriting user edits.
+table_no, table_header, table_columns, table_ref — that are written into the
+stable business metadata layer. The caller merges them *only into empty fields*,
+never overwriting user edits.
 
 LLM-derived fields (summary/keywords/scope) live elsewhere and are not touched
 here; this module is the cheap, deterministic layer that can run synchronously

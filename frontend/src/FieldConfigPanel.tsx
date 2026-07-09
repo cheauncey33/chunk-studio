@@ -18,6 +18,13 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
     value_type: 'text',
     llm_description: '',
     order_index: fields.length,
+    storage_path: '',
+    accepted_storage_path: '',
+    scope: 'chunk',
+    editable: true,
+    filterable: true,
+    indexable: true,
+    visible: true,
   })
 
   const save = async () => {
@@ -64,6 +71,8 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
                 <th>来源</th>
                 <th>约束</th>
                 <th>类型</th>
+                <th>存储路径</th>
+                <th>属性</th>
                 <th>标签</th>
                 <th></th>
               </tr>
@@ -76,6 +85,15 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
                   <td><span className={`pill ${f.extract_source}`}>{f.extract_source}</span></td>
                   <td>{f.value_constraint}</td>
                   <td>{f.value_type}</td>
+                  <td className="mono">{f.storage_path || 'metadata_v2.' + f.field_key}</td>
+                  <td className="labels-cell">
+                    {[
+                      f.editable && 'editable',
+                      f.visible && 'visible',
+                      f.filterable && 'filterable',
+                      f.indexable && 'indexable',
+                    ].filter(Boolean).join(' / ') || '—'}
+                  </td>
                   <td className="labels-cell">{f.value_constraint === 'enum' ? f.label_list.join(' / ') : '—'}</td>
                   <td className="row-actions">
                     <button onClick={() => setDraft({ ...f, label_list: [...f.label_list] })}>编辑</button>
@@ -144,6 +162,63 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
                   <option value="structured">structured 结构化</option>
                 </select>
               </div>
+            </div>
+
+            <label>存储路径</label>
+            <input
+              value={draft.storage_path}
+              onChange={e => setDraft({ ...draft, storage_path: e.target.value })}
+              placeholder={draft.extract_source === 'llm' ? `metadata_llm.${draft.field_key || 'summary'}` : `metadata_v2.${draft.field_key || 'standard_no'}`}
+            />
+
+            <label>采纳后存储路径</label>
+            <input
+              value={draft.accepted_storage_path}
+              onChange={e => setDraft({ ...draft, accepted_storage_path: e.target.value })}
+              placeholder={draft.extract_source === 'llm' ? `metadata_v2.${draft.field_key || 'summary'}` : 'LLM 字段使用，可留空'}
+            />
+
+            <div className="form-grid">
+              <div>
+                <label>scope</label>
+                <input
+                  value={draft.scope}
+                  onChange={e => setDraft({ ...draft, scope: e.target.value })}
+                  placeholder="chunk"
+                />
+              </div>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={draft.editable}
+                  onChange={e => setDraft({ ...draft, editable: e.target.checked })}
+                />
+                editable
+              </label>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={draft.visible}
+                  onChange={e => setDraft({ ...draft, visible: e.target.checked })}
+                />
+                visible
+              </label>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={draft.filterable}
+                  onChange={e => setDraft({ ...draft, filterable: e.target.checked })}
+                />
+                filterable
+              </label>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={draft.indexable}
+                  onChange={e => setDraft({ ...draft, indexable: e.target.checked })}
+                />
+                indexable
+              </label>
             </div>
 
             <label>标签列表</label>

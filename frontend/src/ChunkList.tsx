@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import type { Chunk } from './api'
+import { chunkKind as schemaChunkKind, getChunkMetadata, isAutoChunk } from './chunkSchema'
 
 export type ChunkKind = 'manual' | 'table' | 'image' | 'section'
 
@@ -81,11 +82,7 @@ export function ChunkList({ chunks, selectedId, activeKind, onKindChange, onSele
 }
 
 export function chunkKind(chunk: Chunk): ChunkKind {
-  const type = String(chunk.metadata?.content_type || '')
-  if (type === 'section') return 'section'
-  if (type === 'table') return 'table'
-  if (type === 'image') return 'image'
-  return 'manual'
+  return schemaChunkKind(chunk)
 }
 
 function chunkTypeLabel(chunk: Chunk): string {
@@ -96,16 +93,12 @@ function chunkTypeLabel(chunk: Chunk): string {
   return '手动'
 }
 
-function isAutoChunk(chunk: Chunk): boolean {
-  return Boolean(chunk.metadata?.auto_source)
-}
-
 function sourceLabel(chunk: Chunk): string {
   return isAutoChunk(chunk) ? 'auto' : chunk.text_source
 }
 
 function chunkSummary(chunk: Chunk): string {
-  const meta = chunk.metadata || {}
+  const meta = getChunkMetadata(chunk)
   if (meta.content_type === 'section') {
     const section = String(meta.section || '')
     const title = String(meta.section_title || '')

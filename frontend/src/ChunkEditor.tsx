@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type Chunk, type FieldConfig } from './api'
+import {
+  acceptedPathForField,
+  getByPath,
+  getChunkMetadata,
+  isAutoChunk,
+  setByPath,
+  storagePathForField,
+  suggestionValue,
+} from './chunkSchema'
 
 interface Props {
   chunk: Chunk | null
@@ -23,7 +32,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
   useEffect(() => {
     if (!chunk) return
     setText(chunk.text || '')
-    setMeta({ ...(chunk.metadata || {}) })
+    setMeta({ ...getChunkMetadata(chunk) })
     setDirtyText(false)
     setTextMode('preview')
   }, [chunk?.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -44,9 +53,14 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
     )
   }
 
-  const editableFields = fields.filter(field => field.extract_source !== 'llm')
-  const isAutoChunk = Boolean(chunk.metadata?.auto_source)
-  const sourceLabel = isAutoChunk ? 'auto' : chunk.text_source
+  const editableFields = fields.filter(field => (
+    field.extract_source !== 'llm'
+    && field.editable
+    && field.visible
+    && storagePathForField(field).startsWith('metadata_v2.')
+  ))
+  const autoChunk = isAutoChunk(chunk)
+  const sourceLabel = autoChunk ? 'auto' : chunk.text_source
 
   const runOcr = async () => {
     setOcring(true)
@@ -64,7 +78,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
   const save = async () => {
     setSaving(true)
     try {
-      const updated = await api.updateChunk(chunk.id, { text, metadata: meta })
+      const updated = await api.updateChunk(chunk.id, { text, metadata_v2: meta })
       setDirtyText(false)
       onSaved(updated)
     } catch (error) {
@@ -75,20 +89,33 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
   }
 
   const adopt = async (key: string) => {
-    const value = chunk.metadata_llm[key]
+    const value = suggestionValue(chunk.metadata_llm[key])
     if (value === undefined) return
-    const next = { ...meta, [key]: value }
+    const field = fields.find(item => item.field_key === key)
+    const path = field ? acceptedPathForField(field) : `metadata_v2.${key}`
+    const next = setByPath({ metadata_v2: meta }, path, value).metadata_v2 as Record<string, unknown>
+    const nextLlm = { ...(chunk.metadata_llm || {}) }
+    const rawSuggestion = nextLlm[key]
+    if (rawSuggestion && typeof rawSuggestion === 'object') {
+      nextLlm[key] = { ...(rawSuggestion as Record<string, unknown>), status: 'accepted' }
+    } else {
+      nextLlm[key] = { value, status: 'accepted' }
+    }
     setMeta(next)
-    const updated = await api.updateChunk(chunk.id, { metadata: next })
+    const updated = await api.updateChunk(chunk.id, { metadata_v2: next, metadata_llm: nextLlm })
     onSaved(updated)
   }
 
   const setMetaField = (key: string, value: unknown) => {
-    setMeta(prev => ({ ...prev, [key]: value }))
+    setMeta(prev => setByPath(prev, key, value))
   }
 
   const renderField = (field: FieldConfig) => {
-    const value = meta[field.field_key]
+    const storagePath = storagePathForField(field)
+    const localPath = storagePath.startsWith('metadata_v2.')
+      ? storagePath.slice('metadata_v2.'.length)
+      : field.field_key
+    const value = getByPath(meta, localPath)
 
     if (field.value_constraint === 'enum') {
       if (field.value_type === 'list') {
@@ -103,7 +130,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
                   type="button"
                   className={`chip ${arr.includes(option) ? 'on' : ''}`}
                   onClick={() => setMetaField(
-                    field.field_key,
+                    localPath,
                     arr.includes(option) ? arr.filter(item => item !== option) : [...arr, option],
                   )}
                 >
@@ -120,7 +147,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
           <label>{field.display_name}</label>
           <select
             value={(value as string) || ''}
-            onChange={event => setMetaField(field.field_key, event.target.value)}
+            onChange={event => setMetaField(localPath, event.target.value)}
           >
             <option value="">未选择</option>
             {field.label_list.map(option => <option key={option} value={option}>{option}</option>)}
@@ -138,7 +165,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
             value={arr.join(', ')}
             placeholder="用逗号分隔多个值"
             onChange={event => setMetaField(
-              field.field_key,
+              localPath,
               event.target.value.split(/[,，]+/).map(item => item.trim()).filter(Boolean),
             )}
           />
@@ -151,7 +178,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
         <label>{field.display_name}</label>
         <input
           value={(value as string) || ''}
-          onChange={event => setMetaField(field.field_key, event.target.value)}
+          onChange={event => setMetaField(localPath, event.target.value)}
         />
       </div>
     )
@@ -202,11 +229,11 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
       )}
 
       <div className="ocr-actions">
-        {!isAutoChunk && chunk.ocr_status && !parsing && (
+        {!autoChunk && chunk.ocr_status && !parsing && (
           <span className={`job-status ${chunk.ocr_status}`}>OCR {chunk.ocr_status}</span>
         )}
-        {!isAutoChunk && chunk.ocr_status === 'failed' && chunk.ocr_error && <span className="muted">{chunk.ocr_error}</span>}
-        {isAutoChunk ? (
+        {!autoChunk && chunk.ocr_status === 'failed' && chunk.ocr_error && <span className="muted">{chunk.ocr_error}</span>}
+        {autoChunk ? (
           <span className="muted">自动切片已包含 MinerU 解析文本，不需要再解析。</span>
         ) : (
           <button onClick={runOcr} disabled={ocring || parsing}>
@@ -221,7 +248,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
           {showMeta ? '收起元数据' : '展开元数据'}
         </button>
         <p className="muted">
-          chunk 级元数据。auto 字段在创建/OCR 完成时由正则自动填入（不覆盖手改）；llm 字段在下方采纳。
+          chunk 级业务元数据。auto 字段在创建/OCR 完成时写入 metadata_v2（不覆盖手改）；llm 字段在下方采纳。
         </p>
         {showMeta && <div className="fields">{editableFields.map(renderField)}</div>}
       </div>

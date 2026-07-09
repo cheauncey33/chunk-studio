@@ -1,6 +1,7 @@
 import { useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react'
 import { api, type Chunk, type BBox } from './api'
 import type { ChunkKind } from './ChunkList'
+import { chunkKind, getSourceTrace } from './chunkSchema'
 
 interface Props {
   fileId: string
@@ -201,14 +202,6 @@ export function PageViewer({
   )
 }
 
-function chunkKind(chunk: Chunk): ChunkKind {
-  const type = String(chunk.metadata?.content_type || '')
-  if (type === 'section') return 'section'
-  if (type === 'table') return 'table'
-  if (type === 'image') return 'image'
-  return 'manual'
-}
-
 function pageBoxForChunk(chunk: Chunk, page: number, visibleKind: ChunkKind): PageBox | null {
   const kind = chunkKind(chunk)
   if (kind !== visibleKind) return null
@@ -220,7 +213,7 @@ function pageBoxForChunk(chunk: Chunk, page: number, visibleKind: ChunkKind): Pa
 }
 
 function sectionPageBox(chunk: Chunk, page: number): PageBox | null {
-  const sourceBlocks = chunk.metadata?.source_blocks
+  const sourceBlocks = getSourceTrace(chunk).source_blocks
   if (!Array.isArray(sourceBlocks)) return null
 
   const pageIdx = page - 1

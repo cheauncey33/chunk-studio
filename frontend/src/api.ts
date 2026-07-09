@@ -24,7 +24,12 @@ export interface Chunk {
   text: string | null
   text_source: 'digital' | 'manual' | 'ocr' | 'pending'
   metadata: Record<string, unknown>
+  metadata_v2: Record<string, unknown>
   metadata_llm: Record<string, unknown>
+  source_trace: Record<string, unknown>
+  chunk_logic: Record<string, unknown>
+  ui_state: Record<string, unknown>
+  indexing: Record<string, unknown>
   status: string
   ocr_status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | null
   ocr_error: string | null
@@ -131,6 +136,13 @@ export interface FieldConfig {
   value_type: 'text' | 'list' | 'structured'
   llm_description: string
   order_index: number
+  storage_path: string
+  accepted_storage_path: string
+  scope: string
+  editable: boolean
+  filterable: boolean
+  indexable: boolean
+  visible: boolean
 }
 
 async function j<T>(res: Response): Promise<T> {
@@ -156,6 +168,8 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }).then(j<CSFile>),
+  parseFile: (id: string) =>
+    fetch(`${API}/files/${id}/parse`, { method: 'POST' }).then(j<Job>),
   listFileParses: (id: string) =>
     fetch(`${API}/files/${id}/parses`).then(j<DocumentParse[]>),
 
@@ -173,7 +187,16 @@ export const api = {
       body: JSON.stringify(body),
     }).then(j<Chunk>),
   updateChunk: (id: string, body: Partial<{
-    text: string; metadata: Record<string, unknown>; text_source: string; status: string
+    text: string
+    metadata: Record<string, unknown>
+    metadata_v2: Record<string, unknown>
+    metadata_llm: Record<string, unknown>
+    source_trace: Record<string, unknown>
+    chunk_logic: Record<string, unknown>
+    ui_state: Record<string, unknown>
+    indexing: Record<string, unknown>
+    text_source: string
+    status: string
   }>) =>
     fetch(`${API}/chunks/${id}`, {
       method: 'PATCH',

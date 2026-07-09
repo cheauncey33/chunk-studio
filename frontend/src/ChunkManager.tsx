@@ -1,14 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type Chunk, type CSFile } from './api'
+import { getChunkMetadata, isAutoChunk } from './chunkSchema'
 
 interface Props {
   files: CSFile[]
   onOpenChunk: (chunk: Chunk) => void
   compact?: boolean
-}
-
-function isAutoChunk(chunk: Chunk): boolean {
-  return Boolean(chunk.metadata?.auto_source)
 }
 
 function sourceLabel(chunk: Chunk): string {
@@ -63,7 +60,7 @@ export function ChunkManager({ files, onOpenChunk, compact = false }: Props) {
       chunk.text || '',
       chunk.text_source,
       chunk.status,
-      JSON.stringify(chunk.metadata || {}),
+      JSON.stringify(getChunkMetadata(chunk)),
     ].join('\n').toLowerCase()
     return haystack.includes(needle)
   })

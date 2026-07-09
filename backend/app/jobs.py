@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Any
 
-from . import config, db, extractors
+from . import chunk_schema, config, db, extractors
 from .adapters import ocr as ocr_adapter
 
 JOB_POLL_SECONDS = 1.0
@@ -281,19 +281,20 @@ async def ocr_chunk_sync(chunk_id: str) -> tuple[bool, str]:
             (result.text, finished, chunk_id),
         )
         row = conn.execute(
-            "SELECT text, metadata, file_id FROM chunks WHERE id=?", (chunk_id,)
+            "SELECT text, metadata, metadata_v2, file_id FROM chunks WHERE id=?", (chunk_id,)
         ).fetchone()
         fname_row = conn.execute(
             "SELECT name FROM files WHERE id=?", (row["file_id"],)
         ).fetchone()
         fname = fname_row["name"] if fname_row else ""
-        try:
-            meta = json.loads(row["metadata"] or "{}")
-        except Exception:
-            meta = {}
+        layers = chunk_schema.ensure_layered_chunk(
+            metadata=row["metadata"],
+            metadata_v2=row["metadata_v2"],
+        )
+        meta = layers["metadata_v2"]
         extractors.merge_auto_metadata(meta, row["text"], fname)
         conn.execute(
-            "UPDATE chunks SET metadata=? WHERE id=?",
+            "UPDATE chunks SET metadata_v2=? WHERE id=?",
             (json.dumps(meta, ensure_ascii=False), chunk_id),
         )
         conn.execute(
@@ -332,19 +333,20 @@ async def _run_ocr_job(job: dict[str, Any]) -> None:
         # OCR produced new text (often a <table> for spec pages); backfill the
         # auto fields that depend on it, without overwriting any user edits.
         row = conn.execute(
-            "SELECT text, metadata, file_id FROM chunks WHERE id=?", (chunk_id,)
+            "SELECT text, metadata, metadata_v2, file_id FROM chunks WHERE id=?", (chunk_id,)
         ).fetchone()
         fname_row = conn.execute(
             "SELECT name FROM files WHERE id=?", (row["file_id"],)
         ).fetchone()
         fname = fname_row["name"] if fname_row else ""
-        try:
-            meta = json.loads(row["metadata"] or "{}")
-        except Exception:
-            meta = {}
+        layers = chunk_schema.ensure_layered_chunk(
+            metadata=row["metadata"],
+            metadata_v2=row["metadata_v2"],
+        )
+        meta = layers["metadata_v2"]
         extractors.merge_auto_metadata(meta, row["text"], fname)
         conn.execute(
-            "UPDATE chunks SET metadata=? WHERE id=?",
+            "UPDATE chunks SET metadata_v2=? WHERE id=?",
             (json.dumps(meta, ensure_ascii=False), chunk_id),
         )
         conn.execute(

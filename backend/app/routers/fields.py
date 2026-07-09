@@ -24,8 +24,10 @@ def upsert_field(field_key: str, body: FieldConfig):
         conn.execute(
             """INSERT INTO field_config
                (field_key, display_name, extract_source, value_constraint,
-                label_list, value_type, llm_description, order_index)
-               VALUES (?,?,?,?,?,?,?,?)
+                label_list, value_type, llm_description, order_index,
+                storage_path, accepted_storage_path, scope, editable, filterable,
+                indexable, visible)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(field_key) DO UPDATE SET
                  display_name=excluded.display_name,
                  extract_source=excluded.extract_source,
@@ -33,11 +35,21 @@ def upsert_field(field_key: str, body: FieldConfig):
                  label_list=excluded.label_list,
                  value_type=excluded.value_type,
                  llm_description=excluded.llm_description,
-                 order_index=excluded.order_index""",
+                 order_index=excluded.order_index,
+                 storage_path=excluded.storage_path,
+                 accepted_storage_path=excluded.accepted_storage_path,
+                 scope=excluded.scope,
+                 editable=excluded.editable,
+                 filterable=excluded.filterable,
+                 indexable=excluded.indexable,
+                 visible=excluded.visible""",
             (
                 body.field_key, body.display_name, body.extract_source,
                 body.value_constraint, json.dumps(body.label_list, ensure_ascii=False),
                 body.value_type, body.llm_description, body.order_index,
+                body.storage_path, body.accepted_storage_path, body.scope,
+                int(body.editable), int(body.filterable), int(body.indexable),
+                int(body.visible),
             ),
         )
     return db.get_field_configs()

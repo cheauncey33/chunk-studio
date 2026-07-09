@@ -22,6 +22,12 @@ class ChunkCreate(BaseModel):
 class ChunkUpdate(BaseModel):
     text: str | None = None
     metadata: dict[str, Any] | None = None
+    metadata_v2: dict[str, Any] | None = None
+    metadata_llm: dict[str, Any] | None = None
+    source_trace: dict[str, Any] | None = None
+    chunk_logic: dict[str, Any] | None = None
+    ui_state: dict[str, Any] | None = None
+    indexing: dict[str, Any] | None = None
     text_source: str | None = None
     status: str | None = None
 
@@ -62,7 +68,12 @@ class ChunkOut(BaseModel):
     text: str | None
     text_source: str
     metadata: dict[str, Any]
+    metadata_v2: dict[str, Any]
     metadata_llm: dict[str, Any]
+    source_trace: dict[str, Any]
+    chunk_logic: dict[str, Any]
+    ui_state: dict[str, Any]
+    indexing: dict[str, Any]
     status: str
     ocr_status: str | None = None
     ocr_error: str | None = None
@@ -80,6 +91,13 @@ class FieldConfig(BaseModel):
     value_type: str = "text"  # text | list | structured
     llm_description: str = ""
     order_index: int = 0
+    storage_path: str = ""
+    accepted_storage_path: str = ""
+    scope: str = "chunk"
+    editable: bool = True
+    filterable: bool = True
+    indexable: bool = True
+    visible: bool = True
 
 
 class SettingsUpdate(BaseModel):

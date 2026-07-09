@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from .. import config, db, extractors, pdf
+from .. import chunk_schema, config, db, extractors, pdf
 from ..adapters.ocr import _repair_mojibake
 from ..models import AutoImageChunkRequest, AutoSectionChunkRequest, AutoTableChunkRequest
 from .chunks import _row_to_out
@@ -705,8 +705,11 @@ def _metadata_for_section_candidate(
     child_sections = _extract_child_sections_from_blocks(source_blocks, text, unit.section)
     meta.update({
         "content_type": "section",
+        "chunk_type": "auto_section",
         "auto_source": "mineru_section",
+        "strategy": "section_by_heading",
         "mineru_parse_id": parse["id"],
+        "parser": "mineru_vlm",
         "section": unit.section,
         "section_title": unit.title,
         "section_level": unit.level,
@@ -728,6 +731,7 @@ def _metadata_for_section_candidate(
         meta["split_from"] = split_from
     if split_reason:
         meta["split_reason"] = split_reason
+        meta["strategy"] = split_reason
     if chunk_part is not None:
         meta["chunk_part"] = chunk_part
     if chunk_parts is not None:
@@ -755,12 +759,14 @@ async def _create_section_chunk(f: dict[str, Any], candidate: SectionCandidate):
     crop = await asyncio.to_thread(
         pdf.crop_region, f["path"], candidate.page - 1, candidate.bbox
     )
+    metadata_v2, source_trace, chunk_logic = chunk_schema.split_flat_metadata_for_write(candidate.metadata)
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO chunks
                (id, file_id, page, bbox, rotation, crop_path, text, text_source,
-                metadata, metadata_llm, status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                metadata, metadata_v2, metadata_llm, source_trace, chunk_logic,
+                status, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cid,
                 f["id"],
@@ -770,8 +776,11 @@ async def _create_section_chunk(f: dict[str, Any], candidate: SectionCandidate):
                 crop.crop_rel,
                 candidate.text,
                 "digital",
-                json.dumps(candidate.metadata, ensure_ascii=False),
                 "{}",
+                json.dumps(metadata_v2, ensure_ascii=False),
+                "{}",
+                json.dumps(source_trace, ensure_ascii=False),
+                json.dumps(chunk_logic, ensure_ascii=False),
                 "pending",
                 now,
                 now,
@@ -801,8 +810,11 @@ def _metadata_for_image_candidate(
     figure_header = title.group(2).strip() if title and title.group(2) else caption
     meta.update({
         "content_type": "image",
+        "chunk_type": "auto_image",
         "auto_source": "mineru_image",
+        "strategy": "image_with_caption" if caption_bbox else "image_only",
         "mineru_parse_id": parse["id"],
+        "parser": "mineru_vlm",
         "mineru_page_idx": page_idx,
         "mineru_block_index": block_index,
         "mineru_image_bbox": image_bbox,
@@ -823,12 +835,14 @@ async def _create_image_chunk(f: dict[str, Any], candidate: ImageCandidate):
     crop = await asyncio.to_thread(
         pdf.crop_region, f["path"], candidate.page - 1, candidate.bbox
     )
+    metadata_v2, source_trace, chunk_logic = chunk_schema.split_flat_metadata_for_write(candidate.metadata)
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO chunks
                (id, file_id, page, bbox, rotation, crop_path, text, text_source,
-                metadata, metadata_llm, status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                metadata, metadata_v2, metadata_llm, source_trace, chunk_logic,
+                status, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cid,
                 f["id"],
@@ -838,8 +852,11 @@ async def _create_image_chunk(f: dict[str, Any], candidate: ImageCandidate):
                 crop.crop_rel,
                 text,
                 "digital",
-                json.dumps(candidate.metadata, ensure_ascii=False),
                 "{}",
+                json.dumps(metadata_v2, ensure_ascii=False),
+                "{}",
+                json.dumps(source_trace, ensure_ascii=False),
+                json.dumps(chunk_logic, ensure_ascii=False),
                 "pending",
                 now,
                 now,
@@ -1019,8 +1036,11 @@ def _metadata_for_candidate(
             meta.setdefault("table_header", title.group(2).strip())
     meta.update({
         "content_type": "table",
+        "chunk_type": "auto_table",
         "auto_source": "mineru_table",
+        "strategy": "table_with_caption" if caption_bbox else "table_only",
         "mineru_parse_id": parse["id"],
+        "parser": "mineru_vlm",
         "mineru_page_idx": page_idx,
         "mineru_block_index": block_index,
         "mineru_table_bbox": table_bbox,
@@ -1039,12 +1059,14 @@ async def _create_chunk_from_candidate(
     crop = await asyncio.to_thread(
         pdf.crop_region, f["path"], candidate.page - 1, candidate.bbox
     )
+    metadata_v2, source_trace, chunk_logic = chunk_schema.split_flat_metadata_for_write(candidate.metadata)
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO chunks
                (id, file_id, page, bbox, rotation, crop_path, text, text_source,
-                metadata, metadata_llm, status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                metadata, metadata_v2, metadata_llm, source_trace, chunk_logic,
+                status, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cid,
                 f["id"],
@@ -1054,8 +1076,11 @@ async def _create_chunk_from_candidate(
                 crop.crop_rel,
                 text,
                 "digital",
-                json.dumps(candidate.metadata, ensure_ascii=False),
                 "{}",
+                json.dumps(metadata_v2, ensure_ascii=False),
+                "{}",
+                json.dumps(source_trace, ensure_ascii=False),
+                json.dumps(chunk_logic, ensure_ascii=False),
                 "pending",
                 now,
                 now,

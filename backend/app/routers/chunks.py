@@ -8,7 +8,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException
 
-from .. import config, db, extractors, jobs, pdf
+from .. import chunk_schema, config, db, extractors, jobs, pdf
 from ..models import BBox, ChunkCreate, ChunkOut, ChunkUpdate
 
 router = APIRouter(prefix="/chunks", tags=["chunks"])
@@ -40,17 +40,23 @@ async def create_chunk(body: ChunkCreate):
     # file-level metadata copy, so all derived keys fill only empty slots;
     # re-runs (e.g. after OCR) won't clobber file or user edits.
     meta = extractors.merge_auto_metadata(meta, result.text, f["name"])
+    source_trace = chunk_schema.source_trace_for_region(body.page, body.bbox.model_dump())
+    chunk_logic = chunk_schema.chunk_logic_for_manual()
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO chunks
                (id, file_id, page, bbox, rotation, crop_path, text, text_source,
-                metadata, metadata_llm, status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                metadata, metadata_v2, metadata_llm, source_trace, chunk_logic,
+                status, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cid, body.file_id, body.page,
                 json.dumps(body.bbox.model_dump()),
                 0, result.crop_rel, result.text, result.text_source,
-                json.dumps(meta, ensure_ascii=False), "{}", "pending", now, now,
+                "{}", json.dumps(meta, ensure_ascii=False), "{}",
+                json.dumps(source_trace, ensure_ascii=False),
+                json.dumps(chunk_logic, ensure_ascii=False),
+                "pending", now, now,
             ),
         )
     if (
@@ -99,9 +105,49 @@ def update_chunk(chunk_id: str, body: ChunkUpdate):
                 (body.text, now, chunk_id),
             )
         if body.metadata is not None:
+            metadata_v2, source_trace, chunk_logic = chunk_schema.split_flat_metadata_for_write(body.metadata)
             conn.execute(
-                "UPDATE chunks SET metadata=?, updated_at=? WHERE id=?",
-                (json.dumps(body.metadata, ensure_ascii=False), now, chunk_id),
+                """UPDATE chunks
+                   SET metadata=?, metadata_v2=?, source_trace=?, chunk_logic=?, updated_at=?
+                   WHERE id=?""",
+                (
+                    json.dumps(body.metadata, ensure_ascii=False),
+                    json.dumps(metadata_v2, ensure_ascii=False),
+                    json.dumps(source_trace, ensure_ascii=False),
+                    json.dumps(chunk_logic, ensure_ascii=False),
+                    now,
+                    chunk_id,
+                ),
+            )
+        if body.metadata_v2 is not None:
+            conn.execute(
+                "UPDATE chunks SET metadata_v2=?, updated_at=? WHERE id=?",
+                (json.dumps(body.metadata_v2, ensure_ascii=False), now, chunk_id),
+            )
+        if body.metadata_llm is not None:
+            conn.execute(
+                "UPDATE chunks SET metadata_llm=?, updated_at=? WHERE id=?",
+                (json.dumps(body.metadata_llm, ensure_ascii=False), now, chunk_id),
+            )
+        if body.source_trace is not None:
+            conn.execute(
+                "UPDATE chunks SET source_trace=?, updated_at=? WHERE id=?",
+                (json.dumps(body.source_trace, ensure_ascii=False), now, chunk_id),
+            )
+        if body.chunk_logic is not None:
+            conn.execute(
+                "UPDATE chunks SET chunk_logic=?, updated_at=? WHERE id=?",
+                (json.dumps(body.chunk_logic, ensure_ascii=False), now, chunk_id),
+            )
+        if body.ui_state is not None:
+            conn.execute(
+                "UPDATE chunks SET ui_state=?, updated_at=? WHERE id=?",
+                (json.dumps(body.ui_state, ensure_ascii=False), now, chunk_id),
+            )
+        if body.indexing is not None:
+            conn.execute(
+                "UPDATE chunks SET indexing=?, updated_at=? WHERE id=?",
+                (json.dumps(body.indexing, ensure_ascii=False), now, chunk_id),
             )
         if body.text_source is not None:
             conn.execute(
@@ -150,12 +196,29 @@ def _row_to_out(r) -> ChunkOut:
     bbox = json.loads(d["bbox"])
     crop_url = f"/crops/{d['crop_path'].split('/')[-1]}" if d.get("crop_path") else None
     ocr_job = jobs.latest_job_for_target(d["id"], "ocr")
+    layers = chunk_schema.ensure_layered_chunk(
+        metadata=d.get("metadata"),
+        metadata_v2=d.get("metadata_v2"),
+        source_trace=d.get("source_trace"),
+        chunk_logic=d.get("chunk_logic"),
+    )
+    metadata = chunk_schema.flatten_for_legacy(
+        layers["metadata_v2"],
+        layers["source_trace"],
+        layers["chunk_logic"],
+        d.get("metadata"),
+    )
     return ChunkOut(
         id=d["id"], file_id=d["file_id"], page=d["page"], bbox=BBox(**bbox),
         rotation=d.get("rotation", 0), crop_path=d.get("crop_path"), crop_url=crop_url,
         text=d.get("text"), text_source=d["text_source"],
-        metadata=json.loads(d.get("metadata") or "{}"),
-        metadata_llm=json.loads(d.get("metadata_llm") or "{}"),
+        metadata=metadata,
+        metadata_v2=layers["metadata_v2"],
+        metadata_llm=chunk_schema.parse_json_object(d.get("metadata_llm")),
+        source_trace=layers["source_trace"],
+        chunk_logic=layers["chunk_logic"],
+        ui_state=chunk_schema.parse_json_object(d.get("ui_state")),
+        indexing=chunk_schema.parse_json_object(d.get("indexing")),
         status=d["status"],
         ocr_status=ocr_job["status"] if ocr_job else None,
         ocr_error=ocr_job["error"] if ocr_job else None,
