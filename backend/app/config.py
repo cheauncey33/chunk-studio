@@ -7,6 +7,7 @@ resolving them back to absolute.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -23,10 +24,11 @@ except Exception:
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = BACKEND_DIR.parent
 
-DATA_DIR = Path("DATA_DIR")
-# config.py literal default points at ./data relative to backend cwd.
-_DATA_DIR_RAW = "./data"
-DATA_DIR = (BACKEND_DIR / _DATA_DIR_RAW).resolve()
+# Keep the repository-local directory as the default, while allowing maintenance
+# scripts and tests to operate on an isolated copy of runtime data.
+_DATA_DIR_RAW = os.environ.get("CHUNK_STUDIO_DATA_DIR", "./data")
+_data_dir = Path(_DATA_DIR_RAW)
+DATA_DIR = (_data_dir if _data_dir.is_absolute() else BACKEND_DIR / _data_dir).resolve()
 
 FILES_DIR = DATA_DIR / "files"
 CROPS_DIR = DATA_DIR / "crops"

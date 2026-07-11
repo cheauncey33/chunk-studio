@@ -109,6 +109,12 @@ def test_preserves_sqrt_and_fraction_meaning_when_normalizing_latex() -> None:
     assert "(120×额定频率)/(试验频率)" in text
 
 
+def test_removes_unmatched_latex_delimiters_and_spacing_slashes() -> None:
+    text = extractors.normalize_latex_text("A.2 high inductance (L_t>100\\ mH) \\( (A.6) \\")
+
+    assert text == "A.2 high inductance (L_t>100 mH) (A.6)"
+
+
 def test_bare_number_caption_requires_explicit_flag() -> None:
     assert auto_chunks._parse_numbered_title("16 220 kV 油浸式变压器能效等级", "table") == (None, None)
 

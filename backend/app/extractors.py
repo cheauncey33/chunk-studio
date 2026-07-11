@@ -56,6 +56,8 @@ _LATEX_TEXT_RE = re.compile(r'\\text\s*\{\s*([^{}]+?)\s*\}')
 _LATEX_SQRT_RE = re.compile(r'\\sqrt\s*\{\s*([^{}]+?)\s*\}')
 _LATEX_FRAC_RE = re.compile(r'\\frac\s*\{\s*([^{}]+?)\s*\}\s*\{\s*([^{}]+?)\s*\}')
 _LATEX_COMMAND_RE = re.compile(r'\\[a-zA-Z]+')
+_LATEX_DELIMITER_RE = re.compile(r'\\[()\[\]]')
+_LATEX_SPACING_RE = re.compile(r'\\(?=\s|$)')
 
 
 def extract_standard_no(filename: str | None) -> str | None:
@@ -94,6 +96,11 @@ def normalize_latex_text(text: str) -> str:
 
 
 def _normalize_latex_fragment(text: str) -> str:
+    # MinerU occasionally emits an unmatched math delimiter or TeX spacing
+    # slash. They carry no mathematical meaning and otherwise survive the
+    # paired-inline normalizer above.
+    text = _LATEX_DELIMITER_RE.sub(' ', text)
+    text = _LATEX_SPACING_RE.sub(' ', text)
     text = _LATEX_MATHRM_RE.sub(r' \1', text)
     # Preserve mathematical meaning before stripping remaining presentation commands.
     # Iteration handles MinerU's \frac{\text{...}}{\text{...}} form.
