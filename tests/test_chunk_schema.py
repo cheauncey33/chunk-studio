@@ -1,9 +1,11 @@
+import json
 from pathlib import Path
+import sqlite3
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from app import chunk_schema
+from app import chunk_schema, db
 
 
 def test_migrates_table_trace_logic_and_relations() -> None:
@@ -69,3 +71,83 @@ def test_existing_business_values_win_over_legacy_fallback() -> None:
 
     assert layers["business_metadata"]["table_no"] == "2"
     assert layers["chunk_logic"]["creation_mode"] == "auto"
+
+
+def test_upgrades_metadata_v2_database_without_losing_edits(monkeypatch, tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "legacy-metadata-v2.db")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            metadata TEXT NOT NULL DEFAULT '{}',
+            metadata_v2 TEXT NOT NULL DEFAULT '{}',
+            source_trace TEXT NOT NULL DEFAULT '{}',
+            chunk_logic TEXT NOT NULL DEFAULT '{}'
+        )"""
+    )
+    conn.executemany(
+        "INSERT INTO chunks(id, metadata, metadata_v2, source_trace, chunk_logic) VALUES(?,?,?,?,?)",
+        [
+            (
+                "old-only",
+                json.dumps({
+                    "standard_no": "GB/T 1-2026",
+                    "table_no": "1",
+                    "summary": "flat fallback",
+                    "table_ref": ["7"],
+                }),
+                json.dumps({
+                    "table_no": "2",
+                    "table_title": "user-edited title",
+                    "custom_field": "keep me",
+                }),
+                "{}",
+                "{}",
+            ),
+            (
+                "interrupted-upgrade",
+                json.dumps({"table_no": "1", "summary": "flat fallback"}),
+                json.dumps({"table_no": "2", "table_title": "v2 title"}),
+                "{}",
+                "{}",
+            ),
+        ],
+    )
+    monkeypatch.setattr(db, "_conn", conn)
+
+    db._migrate_chunk_layer_columns()
+    conn.execute(
+        "UPDATE chunks SET business_metadata=? WHERE id='interrupted-upgrade'",
+        (json.dumps({"table_no": "3", "reviewed": True}),),
+    )
+    db._backfill_chunk_layers()
+
+    old_row = conn.execute(
+        "SELECT business_metadata, relations FROM chunks WHERE id='old-only'"
+    ).fetchone()
+    old_business = json.loads(old_row["business_metadata"])
+    assert old_business == {
+        "standard_no": "GB/T 1-2026",
+        "table_no": "2",
+        "summary": "flat fallback",
+        "table_title": "user-edited title",
+        "custom_field": "keep me",
+    }
+    assert json.loads(old_row["relations"])["references"][0]["no"] == "7"
+
+    upgraded = json.loads(conn.execute(
+        "SELECT business_metadata FROM chunks WHERE id='interrupted-upgrade'"
+    ).fetchone()["business_metadata"])
+    assert upgraded == {
+        "table_no": "3",
+        "reviewed": True,
+        "summary": "flat fallback",
+        "table_title": "v2 title",
+    }
+
+    db._backfill_chunk_layers()
+    rerun = json.loads(conn.execute(
+        "SELECT business_metadata FROM chunks WHERE id='interrupted-upgrade'"
+    ).fetchone()["business_metadata"])
+    assert rerun == upgraded
+    conn.close()

@@ -246,15 +246,31 @@ def _migrate_field_config_columns() -> None:
 
 
 def _backfill_chunk_layers() -> None:
-    """Populate layer columns from legacy flat metadata if empty."""
+    """Populate layer columns without losing values from intermediate schemas.
+
+    Upgrade precedence is ``business_metadata > metadata_v2 > metadata``:
+    current writes win, the previous business layer supplies missing values,
+    and the oldest flat object is only a final compatibility fallback.
+    """
+    cols = {
+        row["name"]
+        for row in _conn.execute("PRAGMA table_info(chunks)").fetchall()
+    }
+    metadata_v2_select = "metadata_v2" if "metadata_v2" in cols else "'{}' AS metadata_v2"
     rows = _conn.execute(
-        """SELECT id, metadata, business_metadata, source_trace, chunk_logic, relations
-           FROM chunks"""
+        f"""SELECT id, metadata, {metadata_v2_select}, business_metadata,
+                   source_trace, chunk_logic, relations
+            FROM chunks"""
     ).fetchall()
     for r in rows:
+        business_metadata = chunk_schema.parse_json_object(r["business_metadata"])
+        chunk_schema.merge_missing(
+            business_metadata,
+            chunk_schema.parse_json_object(r["metadata_v2"]),
+        )
         layers = chunk_schema.ensure_layered_chunk(
             metadata=r["metadata"],
-            business_metadata=r["business_metadata"],
+            business_metadata=business_metadata,
             source_trace=r["source_trace"],
             chunk_logic=r["chunk_logic"],
             relations=r["relations"],
