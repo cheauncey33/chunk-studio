@@ -83,6 +83,21 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_file_page ON chunks(file_id, page);
 CREATE INDEX IF NOT EXISTS idx_chunks_status ON chunks(status);
 
+CREATE TABLE IF NOT EXISTS chunk_embeddings (
+    chunk_id     TEXT NOT NULL,
+    model        TEXT NOT NULL,
+    dimension    INTEGER NOT NULL,
+    text_sha256  TEXT NOT NULL,
+    embedding    BLOB NOT NULL,
+    token_count  INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    PRIMARY KEY (chunk_id, model, dimension),
+    FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_model
+    ON chunk_embeddings(model, dimension);
+
 CREATE TABLE IF NOT EXISTS field_config (
     field_key        TEXT PRIMARY KEY,
     display_name     TEXT NOT NULL,
