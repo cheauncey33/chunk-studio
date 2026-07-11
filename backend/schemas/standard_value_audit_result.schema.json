@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chunk-studio.local/schemas/standard-value-audit-result-1.0.json",
+  "title": "Standard Value Audit Result",
+  "description": "A result contract that separates evidence completeness, rule judgment, issue type, adopted evidence, and human review state.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "result_id",
+    "card_id",
+    "basis_assessment",
+    "audit_assessment",
+    "adopted_evidence",
+    "human_review"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "result_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"},
+    "card_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"},
+    "basis_assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "adopted_basis_ids", "missing_basis_ids", "explanation"],
+      "properties": {
+        "status": {"enum": ["complete", "missing_declared_basis", "unresolved_reference", "conflicting_bases"]},
+        "adopted_basis_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "missing_basis_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "explanation": {"type": "string", "minLength": 1}
+      }
+    },
+    "audit_assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "scope", "error_types", "normalized_rule", "explanation", "missing_context_fields"],
+      "properties": {
+        "status": {"enum": ["supported", "mismatch", "insufficient_context", "not_audited"]},
+        "scope": {"enum": ["final", "available_bases_only"]},
+        "error_types": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "wrong_value",
+              "wrong_unit",
+              "wrong_comparator",
+              "wrong_variant_selection",
+              "incomplete_rule",
+              "inapplicable_basis",
+              "missing_context",
+              "obsolete_basis",
+              "conflicting_basis",
+              "extraction_inconsistency",
+              "unresolvable_evidence"
+            ]
+          }
+        },
+        "normalized_rule": {"type": "string", "minLength": 1},
+        "calculated_value": {"$ref": "#/$defs/typedValue"},
+        "explanation": {"type": "string", "minLength": 1},
+        "missing_context_fields": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+      }
+    },
+    "adopted_evidence": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/adoptedEvidence"}
+    },
+    "human_review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "status", "reasons"],
+      "properties": {
+        "required": {"type": "boolean"},
+        "status": {"enum": ["not_required", "pending", "confirmed", "corrected"]},
+        "reasons": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "reviewer": {"type": "string", "minLength": 1},
+        "note": {"type": "string"}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "typedValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value"],
+      "properties": {
+        "value": {"type": ["number", "string", "boolean"]},
+        "unit": {"type": "string", "minLength": 1},
+        "expression": {"type": "string", "minLength": 1}
+      }
+    },
+    "evidenceLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["standard_no", "content_type", "page_start", "page_end", "text_sha256"],
+      "properties": {
+        "standard_no": {"type": "string", "minLength": 1},
+        "content_type": {"enum": ["section", "table", "text", "image"]},
+        "section": {"type": "string", "minLength": 1},
+        "section_title": {"type": "string", "minLength": 1},
+        "table_no": {"type": "string", "minLength": 1},
+        "table_title": {"type": "string", "minLength": 1},
+        "page_start": {"type": "integer", "minimum": 1},
+        "page_end": {"type": "integer", "minimum": 1},
+        "text_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"content_type": {"const": "section"}}},
+          "then": {"required": ["section"]}
+        },
+        {
+          "if": {"properties": {"content_type": {"const": "table"}}},
+          "then": {"required": ["table_no"]}
+        }
+      ]
+    },
+    "adoptedEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["basis_id", "role", "locator", "source_excerpt", "text_quote", "relevance"],
+      "properties": {
+        "basis_id": {"type": "string", "minLength": 1},
+        "role": {"enum": ["primary", "corroborating", "applicability"]},
+        "locator": {"$ref": "#/$defs/evidenceLocator"},
+        "source_excerpt": {"type": "string", "minLength": 1, "description": "Exact contiguous text from the resolved chunk."},
+        "text_quote": {"type": "string", "minLength": 1, "description": "Human-readable normalized display text; it may be a table-row rendering."},
+        "relevance": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}
