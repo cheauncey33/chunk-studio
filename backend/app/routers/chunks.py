@@ -13,6 +13,22 @@ from ..models import BBox, ChunkCreate, ChunkOut, ChunkUpdate
 
 router = APIRouter(prefix="/chunks", tags=["chunks"])
 
+_ALLOWED_STATUS_TRANSITIONS = {
+    "pending": {"reviewed"},
+    "reviewed": {"approved", "rejected"},
+    "approved": set(),
+    "rejected": set(),
+}
+
+_REVIEW_SENSITIVE_JSON_FIELDS = (
+    "metadata",
+    "business_metadata",
+    "metadata_llm",
+    "source_trace",
+    "chunk_logic",
+    "relations",
+)
+
 
 @router.post("")
 async def create_chunk(body: ChunkCreate):
@@ -97,9 +113,15 @@ def update_chunk(chunk_id: str, body: ChunkUpdate):
     cur = db.get_conn().execute("SELECT * FROM chunks WHERE id=?", (chunk_id,)).fetchone()
     if not cur:
         raise HTTPException(404, "chunk not found")
+    cur = dict(cur)
+    content_changed = _review_sensitive_change(cur, body)
+    if body.status is not None:
+        if content_changed:
+            raise HTTPException(409, "content and review status must be updated separately")
+        _validate_status_transition(cur["status"], body.status)
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     with db.transaction() as conn:
-        if body.text is not None:
+        if body.text is not None and body.text != cur.get("text"):
             # manual text edit switches source to 'manual'
             conn.execute(
                 "UPDATE chunks SET text=?, text_source='manual', updated_at=? WHERE id=?",
@@ -166,6 +188,11 @@ def update_chunk(chunk_id: str, body: ChunkUpdate):
                 "UPDATE chunks SET status=?, updated_at=? WHERE id=?",
                 (body.status, now, chunk_id),
             )
+        elif content_changed and cur["status"] != "pending":
+            conn.execute(
+                "UPDATE chunks SET status='pending', updated_at=? WHERE id=?",
+                (now, chunk_id),
+            )
     return _get_chunk(chunk_id)
 
 
@@ -189,6 +216,28 @@ def _mineru_configured() -> bool:
     import os
     token = db.get_setting("mineru.token", "") or os.environ.get("MINERU_TOKEN", "")
     return bool(token.strip())
+
+
+def _validate_status_transition(current: str, target: str) -> None:
+    if current == target:
+        return
+    allowed = _ALLOWED_STATUS_TRANSITIONS.get(current, set())
+    if target not in allowed:
+        raise HTTPException(409, f"invalid chunk status transition: {current} -> {target}")
+
+
+def _review_sensitive_change(current: dict, body: ChunkUpdate) -> bool:
+    if body.text is not None and body.text != current.get("text"):
+        return True
+    if body.text_source is not None and body.text_source != current.get("text_source"):
+        return True
+    for field in _REVIEW_SENSITIVE_JSON_FIELDS:
+        value = getattr(body, field)
+        if value is None:
+            continue
+        if value != chunk_schema.parse_json_object(current.get(field)):
+            return True
+    return False
 
 
 def _get_chunk(cid: str) -> ChunkOut:

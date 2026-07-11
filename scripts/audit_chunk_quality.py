@@ -57,6 +57,7 @@ REVIEW_SEVERITY = {
     "table_without_columns": "minor",
     "duplicate_candidate": "minor",
     "continued_table": "info",
+    "not_approved": "info",
 }
 INDEX_BLOCKING_TAGS = {
     "missing_standard_no",
@@ -66,6 +67,7 @@ INDEX_BLOCKING_TAGS = {
     "missing_bbox",
     "old_metadata_keys",
     "latex_residue",
+    "not_approved",
 }
 
 
@@ -83,6 +85,7 @@ class ChunkAudit:
     page: int
     content_type: str
     text_length: int
+    status: str
     business_metadata: dict[str, Any]
     source_trace: dict[str, Any]
     chunk_logic: dict[str, Any]
@@ -99,6 +102,7 @@ class ChunkAudit:
             "page": self.page,
             "content_type": self.content_type,
             "text_length": self.text_length,
+            "status": self.status,
             "indexable": self.indexable,
             "needs_review": self.needs_review,
             "issues": [{"tag": issue.tag, "detail": issue.detail} for issue in self.issues],
@@ -155,7 +159,7 @@ def build_report(*, sample_limit: int) -> dict[str, Any]:
         by_file.append(summarize_file(file_info, file_audits, sample_limit=sample_limit))
 
     return {
-        "version": 1,
+        "version": 2,
         "generated_from": str(config.DB_PATH),
         "summary": totals,
         "files": by_file,
@@ -185,6 +189,7 @@ def audit_chunk(row: Any, file_info: dict[str, Any]) -> ChunkAudit:
         page=row["page"],
         content_type=content_type,
         text_length=len(text),
+        status=str(row["status"] or "pending"),
         business_metadata=business,
         source_trace=source_trace,
         chunk_logic=chunk_logic,
@@ -192,6 +197,7 @@ def audit_chunk(row: Any, file_info: dict[str, Any]) -> ChunkAudit:
     )
 
     add_common_issues(audit, text, metadata)
+    add_workflow_issues(audit)
     if content_type == "table":
         add_table_issues(audit)
     elif content_type == "image":
@@ -232,6 +238,11 @@ def add_common_issues(audit: ChunkAudit, text: str, legacy_metadata: dict[str, A
         audit.issues.append(ChunkIssue("short_text", str(len(text.strip()))))
     if len(text) > 20000:
         audit.issues.append(ChunkIssue("very_long_text", str(len(text))))
+
+
+def add_workflow_issues(audit: ChunkAudit) -> None:
+    if audit.status != "approved":
+        audit.issues.append(ChunkIssue("not_approved", audit.status))
 
 
 def add_table_issues(audit: ChunkAudit) -> None:
@@ -316,6 +327,7 @@ def summarize_audits(audits: list[ChunkAudit]) -> dict[str, Any]:
         "indexable_chunks": sum(1 for audit in audits if audit.indexable),
         "needs_review_chunks": sum(1 for audit in audits if audit.needs_review),
         "by_content_type": dict(Counter(audit.content_type for audit in audits)),
+        "by_status": dict(Counter(audit.status for audit in audits)),
         "by_table_kind": dict(sorted(table_kind_counts.items())),
         "issue_counts": dict(sorted(tag_counts.items())),
     }
@@ -349,6 +361,7 @@ def summarize_file(file_info: dict[str, Any], audits: list[ChunkAudit], *, sampl
             "indexable_chunks": sum(1 for audit in audits if audit.indexable),
             "needs_review_chunks": sum(1 for audit in audits if audit.needs_review),
             "by_content_type": dict(Counter(audit.content_type for audit in audits)),
+            "by_status": dict(Counter(audit.status for audit in audits)),
             "by_table_kind": dict(sorted(Counter(
                 str(audit.business_metadata.get("table_kind") or "unknown")
                 for audit in audits
@@ -370,6 +383,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Indexable chunks: {summary['indexable_chunks']}",
         f"- Needs review: {summary['needs_review_chunks']}",
         f"- By content type: `{json.dumps(summary['by_content_type'], ensure_ascii=False)}`",
+        f"- By review status: `{json.dumps(summary['by_status'], ensure_ascii=False)}`",
         f"- By table kind: `{json.dumps(summary.get('by_table_kind', {}), ensure_ascii=False)}`",
         f"- Issue counts: `{json.dumps(summary['issue_counts'], ensure_ascii=False)}`",
         "",
@@ -385,6 +399,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- Indexable chunks: {file_summary['indexable_chunks']}",
             f"- Needs review: {file_summary['needs_review_chunks']}",
             f"- By content type: `{json.dumps(file_summary['by_content_type'], ensure_ascii=False)}`",
+            f"- By review status: `{json.dumps(file_summary['by_status'], ensure_ascii=False)}`",
             f"- By table kind: `{json.dumps(file_summary.get('by_table_kind', {}), ensure_ascii=False)}`",
             f"- Issue counts: `{json.dumps(file_summary['issue_counts'], ensure_ascii=False)}`",
             "",

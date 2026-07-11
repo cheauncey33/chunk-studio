@@ -1,9 +1,12 @@
 """Pydantic models for API request/response bodies."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+
+ChunkStatus = Literal["pending", "reviewed", "approved", "rejected"]
 
 
 class BBox(BaseModel):
@@ -30,7 +33,7 @@ class ChunkUpdate(BaseModel):
     ui_state: dict[str, Any] | None = None
     indexing: dict[str, Any] | None = None
     text_source: str | None = None
-    status: str | None = None
+    status: ChunkStatus | None = None
 
 
 class AutoTableChunkRequest(BaseModel):
@@ -76,7 +79,7 @@ class ChunkOut(BaseModel):
     relations: dict[str, Any]
     ui_state: dict[str, Any]
     indexing: dict[str, Any]
-    status: str
+    status: ChunkStatus
     ocr_status: str | None = None
     ocr_error: str | None = None
     ocr_job_id: str | None = None

@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "backend"))
 
 from app.evidence_locator import chunk_text_sha256, resolve_evidence_locator
-from scripts.audit_chunk_quality import ChunkAudit, mark_duplicates
+from scripts.audit_chunk_quality import ChunkAudit, audit_chunk, mark_duplicates
 from scripts.validate_audit_eval import validate_dataset
 
 
@@ -81,6 +81,7 @@ def test_declared_section_parts_are_not_duplicate_candidates() -> None:
         "page": 1,
         "content_type": "section",
         "text_length": 100,
+        "status": "pending",
         "business_metadata": {
             "content_type": "section",
             "section": "A.2",
@@ -95,3 +96,34 @@ def test_declared_section_parts_are_not_duplicate_candidates() -> None:
     mark_duplicates([first, second])
 
     assert second.issues == []
+
+
+def test_only_approved_quality_clean_chunk_is_indexable() -> None:
+    base = {
+        "id": "chunk-1",
+        "file_id": "file-1",
+        "page": 1,
+        "text": "A sufficiently long and reviewable chunk text.",
+        "metadata": "{}",
+        "business_metadata": json.dumps({
+            "standard_no": "TEST 1-2026",
+            "content_type": "section",
+            "section": "1",
+        }),
+        "source_trace": json.dumps({
+            "page_start": 1,
+            "page_end": 1,
+            "source_blocks": [{"page": 1, "type": "text", "bbox": [0.1, 0.1, 0.9, 0.2]}],
+        }),
+        "chunk_logic": "{}",
+        "relations": "{}",
+    }
+
+    pending = audit_chunk({**base, "status": "pending"}, {"name": "test.pdf"})
+    approved = audit_chunk({**base, "status": "approved"}, {"name": "test.pdf"})
+
+    assert not pending.indexable
+    assert not pending.needs_review
+    assert [issue.tag for issue in pending.issues] == ["not_approved"]
+    assert approved.indexable
+    assert approved.issues == []

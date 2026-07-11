@@ -75,12 +75,13 @@ CREATE TABLE IF NOT EXISTS chunks (
     relations      TEXT NOT NULL DEFAULT '{}',
     ui_state       TEXT NOT NULL DEFAULT '{}',
     indexing       TEXT NOT NULL DEFAULT '{}',
-    status        TEXT DEFAULT 'pending',
+    status        TEXT CHECK (status IN ('pending','reviewed','approved','rejected')) DEFAULT 'pending',
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_file_page ON chunks(file_id, page);
+CREATE INDEX IF NOT EXISTS idx_chunks_status ON chunks(status);
 
 CREATE TABLE IF NOT EXISTS field_config (
     field_key        TEXT PRIMARY KEY,
@@ -154,6 +155,7 @@ def init_db() -> None:
     _conn.commit()
     _migrate_files_metadata()
     _migrate_chunk_layer_columns()
+    _migrate_chunk_status_values()
     _migrate_field_config()
     _backfill_chunk_layers()
     _backfill_auto_metadata()
@@ -179,6 +181,15 @@ def _migrate_chunk_layer_columns() -> None:
     for name in ("business_metadata", "source_trace", "chunk_logic", "relations", "ui_state", "indexing"):
         if name not in cols:
             _conn.execute(f"ALTER TABLE chunks ADD COLUMN {name} TEXT NOT NULL DEFAULT '{{}}'")
+
+
+def _migrate_chunk_status_values() -> None:
+    """Normalize pre-workflow values before API transition checks apply."""
+    _conn.execute(
+        """UPDATE chunks SET status='pending'
+           WHERE status IS NULL OR status NOT IN ('pending','reviewed','approved','rejected')"""
+    )
+    _conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_status ON chunks(status)")
 
 
 def _migrate_field_config() -> None:

@@ -353,7 +353,31 @@ body {
 .editor { padding: 14px; flex: 0 0 auto; }
 .editor.empty { flex: 1 1 auto; color: var(--muted); text-align: center; margin-top: 40px; line-height: 1.6; }
 .editor-head { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 12px; color: var(--muted); font-weight: 700; }
-.editor .status.approved { color: var(--ok); }
+.editor .status.pending, .review-status.pending { color: var(--warn); }
+.editor .status.reviewed, .review-status.reviewed { color: var(--accent); }
+.editor .status.approved, .review-status.approved { color: var(--ok); }
+.editor .status.rejected, .review-status.rejected { color: var(--danger); }
+
+.review-status {
+  font-size: 10px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.review-workflow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.review-workflow h4, .review-workflow p { margin: 0; }
+.review-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .crop-preview { max-width: 100%; border: 1px solid var(--border); border-radius: 12px; margin-bottom: 10px; background: var(--panel-2); }
 .editor-section-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .editor-section-title label { margin: 0; }

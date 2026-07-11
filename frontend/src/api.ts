@@ -13,6 +13,8 @@ export interface CSFile {
 
 export interface BBox { x: number; y: number; w: number; h: number }
 
+export type ChunkStatus = 'pending' | 'reviewed' | 'approved' | 'rejected'
+
 export interface Chunk {
   id: string
   file_id: string
@@ -31,7 +33,7 @@ export interface Chunk {
   relations: Record<string, unknown>
   ui_state: Record<string, unknown>
   indexing: Record<string, unknown>
-  status: string
+  status: ChunkStatus
   ocr_status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | null
   ocr_error: string | null
   ocr_job_id: string | null
@@ -198,7 +200,7 @@ export const api = {
     ui_state: Record<string, unknown>
     indexing: Record<string, unknown>
     text_source: string
-    status: string
+    status: ChunkStatus
   }>) =>
     fetch(`${API}/chunks/${id}`, {
       method: 'PATCH',

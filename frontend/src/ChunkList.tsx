@@ -60,6 +60,7 @@ export function ChunkList({ chunks, selectedId, activeKind, onKindChange, onSele
               {chunkTypeLabel(chunk)}
             </span>
             <span className={`src ${sourceLabel(chunk)}`}>{sourceLabel(chunk)}</span>
+            <span className={`review-status ${chunk.status}`}>{chunk.status}</span>
             {!isAutoChunk(chunk) && chunk.ocr_status && (
               <span className={`job-status ${chunk.ocr_status}`}>ocr:{chunk.ocr_status}</span>
             )}

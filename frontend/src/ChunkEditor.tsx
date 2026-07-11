@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, type Chunk, type FieldConfig } from './api'
+import { api, type Chunk, type ChunkStatus, type FieldConfig } from './api'
 import {
   acceptedPathForField,
   getByPath,
@@ -24,8 +24,10 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
   const [text, setText] = useState('')
   const [meta, setMeta] = useState<Record<string, unknown>>({})
   const [saving, setSaving] = useState(false)
+  const [statusBusy, setStatusBusy] = useState(false)
   const [ocring, setOcring] = useState(false)
   const [dirtyText, setDirtyText] = useState(false)
+  const [dirtyMeta, setDirtyMeta] = useState(false)
   const [textMode, setTextMode] = useState<TextMode>('preview')
   const [showMeta, setShowMeta] = useState(false)
 
@@ -34,6 +36,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
     setText(chunk.text || '')
     setMeta({ ...getBusinessMetadata(chunk) })
     setDirtyText(false)
+    setDirtyMeta(false)
     setTextMode('preview')
   }, [chunk?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -80,6 +83,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
     try {
       const updated = await api.updateChunk(chunk.id, { text, business_metadata: meta })
       setDirtyText(false)
+      setDirtyMeta(false)
       onSaved(updated)
     } catch (error) {
       alert('保存失败: ' + (error as Error).message)
@@ -103,11 +107,25 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
     }
     setMeta(next)
     const updated = await api.updateChunk(chunk.id, { business_metadata: next, metadata_llm: nextLlm })
+    setDirtyMeta(false)
     onSaved(updated)
+  }
+
+  const changeStatus = async (status: ChunkStatus) => {
+    setStatusBusy(true)
+    try {
+      const updated = await api.updateChunk(chunk.id, { status })
+      onSaved(updated)
+    } catch (error) {
+      alert('更新审核状态失败: ' + (error as Error).message)
+    } finally {
+      setStatusBusy(false)
+    }
   }
 
   const setMetaField = (key: string, value: unknown) => {
     setMeta(prev => setByPath(prev, key, value))
+    setDirtyMeta(true)
   }
 
   const renderField = (field: FieldConfig) => {
@@ -251,6 +269,34 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
           chunk 级业务元数据。auto 字段在创建/OCR 完成时写入 business_metadata（不覆盖手改）；llm 字段在下方采纳。
         </p>
         {showMeta && <div className="fields">{editableFields.map(renderField)}</div>}
+      </div>
+
+      <div className="review-workflow">
+        <div>
+          <h4>审核状态</h4>
+          <p className="muted">pending → reviewed → approved / rejected</p>
+        </div>
+        <div className="review-actions">
+          {chunk.status === 'pending' && (
+            <button onClick={() => changeStatus('reviewed')} disabled={statusBusy || dirtyText || dirtyMeta}>
+              标记已复核
+            </button>
+          )}
+          {chunk.status === 'reviewed' && (
+            <>
+              <button className="primary" onClick={() => changeStatus('approved')} disabled={statusBusy}>
+                批准
+              </button>
+              <button className="danger" onClick={() => changeStatus('rejected')} disabled={statusBusy}>
+                驳回
+              </button>
+            </>
+          )}
+          {(chunk.status === 'approved' || chunk.status === 'rejected') && (
+            <span className="muted">修改文本或元数据后将自动回到 pending。</span>
+          )}
+          {(dirtyText || dirtyMeta) && <span className="muted">请先保存内容修改再提交审核。</span>}
+        </div>
       </div>
 
       {Object.keys(chunk.metadata_llm || {}).length > 0 && (
