@@ -107,3 +107,28 @@ class FieldConfig(BaseModel):
 
 class SettingsUpdate(BaseModel):
     settings: dict[str, str]
+
+
+class VectorSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=8192)
+    top_k: int = Field(default=10, ge=1, le=50)
+
+
+class VectorSearchHit(BaseModel):
+    chunk_id: str
+    score: float
+    file_id: str
+    file_name: str
+    page: int
+    crop_url: str | None = None
+    text: str
+    business_metadata: dict[str, Any]
+    source_trace: dict[str, Any]
+
+
+class VectorSearchResponse(BaseModel):
+    query: str
+    model: str
+    dimension: int
+    total_candidates: int
+    hits: list[VectorSearchHit]

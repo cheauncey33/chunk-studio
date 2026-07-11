@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import math
 import os
 import struct
@@ -92,6 +93,92 @@ def embed_with_dashscope(
     if len(vectors) != len(texts) or any(len(vector) != dimension for vector in vectors):
         raise RuntimeError("DashScope returned an unexpected embedding count or dimension")
     return vectors, int(response.usage.get("total_tokens") or 0)
+
+
+def embed_query_with_dashscope(
+    query: str, *, model: str = DEFAULT_MODEL, dimension: int = DEFAULT_DIMENSION
+) -> list[float]:
+    if not os.environ.get("DASHSCOPE_API_KEY"):
+        raise RuntimeError("DASHSCOPE_API_KEY is not set")
+    from dashscope import TextEmbedding
+
+    response = TextEmbedding.call(
+        model=model,
+        input=query,
+        dimension=dimension,
+        text_type="query",
+        output_type="dense",
+    )
+    if response.status_code != HTTPStatus.OK:
+        raise RuntimeError(
+            f"DashScope query embedding failed: status={response.status_code} "
+            f"code={response.code} message={response.message}"
+        )
+    vector = response.output["embeddings"][0]["embedding"]
+    if len(vector) != dimension:
+        raise RuntimeError("DashScope returned an unexpected query embedding dimension")
+    return vector
+
+
+def vector_search(
+    query: str,
+    *,
+    top_k: int = 10,
+    model: str = DEFAULT_MODEL,
+    dimension: int = DEFAULT_DIMENSION,
+    query_embedder: Callable[..., list[float]] = embed_query_with_dashscope,
+) -> dict[str, Any]:
+    query = query.strip()
+    if not query:
+        raise ValueError("query must not be blank")
+    query_vector = query_embedder(query, model=model, dimension=dimension)
+    if len(query_vector) != dimension:
+        raise ValueError("unexpected query vector dimension")
+    query_norm = math.sqrt(sum(value * value for value in query_vector))
+    if query_norm == 0:
+        raise ValueError("query vector has zero norm")
+
+    rows = db.get_conn().execute(
+        """SELECT c.id, c.file_id, f.name AS file_name, c.page, c.crop_path,
+                  c.text, c.business_metadata, c.source_trace, e.embedding
+           FROM chunk_embeddings e
+           JOIN chunks c ON c.id=e.chunk_id
+           JOIN files f ON f.id=c.file_id
+           WHERE c.status='approved' AND e.model=? AND e.dimension=?""",
+        (model, dimension),
+    ).fetchall()
+    scored: list[tuple[float, int, Any]] = []
+    for index, row in enumerate(rows):
+        blob = row["embedding"]
+        if len(blob) != dimension * 4:
+            continue
+        vector = struct.unpack(f"<{dimension}f", blob)
+        norm = math.sqrt(sum(value * value for value in vector))
+        if norm == 0:
+            continue
+        score = sum(a * b for a, b in zip(query_vector, vector, strict=True)) / (query_norm * norm)
+        scored.append((score, index, row))
+
+    hits = []
+    for score, _, row in heapq.nlargest(top_k, scored, key=lambda item: item[0]):
+        hits.append({
+            "chunk_id": row["id"],
+            "score": score,
+            "file_id": row["file_id"],
+            "file_name": row["file_name"],
+            "page": row["page"],
+            "crop_url": f"/crops/{row['crop_path'].split('/')[-1]}" if row["crop_path"] else None,
+            "text": row["text"] or "",
+            "business_metadata": chunk_schema.parse_json_object(row["business_metadata"]),
+            "source_trace": chunk_schema.parse_json_object(row["source_trace"]),
+        })
+    return {
+        "query": query,
+        "model": model,
+        "dimension": dimension,
+        "total_candidates": len(rows),
+        "hits": hits,
+    }
 
 
 def store_embeddings(
