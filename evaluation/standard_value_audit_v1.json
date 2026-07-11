@@ -363,7 +363,7 @@
               "section_title": "感应耐压试验(IVW)",
               "page_start": 20,
               "page_end": 20,
-              "text_sha256": "1add9b84fe55f223a5cb34f1886a114071c51b5a58bb77143172546e59c36e1e"
+              "text_sha256": "29262350048235c71caa429a2970919a18a62070c0a41a48b4c4daea66068019"
             },
             "text_quote": "120×额定频率/试验频率，但不少于15 s",
             "relevance": "直接规定持续时间的条件公式。",
@@ -520,7 +520,7 @@
               "section_title": "感应耐压试验(IVW)",
               "page_start": 20,
               "page_end": 20,
-              "text_sha256": "1add9b84fe55f223a5cb34f1886a114071c51b5a58bb77143172546e59c36e1e"
+              "text_sha256": "29262350048235c71caa429a2970919a18a62070c0a41a48b4c4daea66068019"
             },
             "text_quote": "试验电压出现突然下降，则试验不合格",
             "relevance": "直接给出试验现象判据。",
