@@ -121,6 +121,15 @@ def list_file_parses(file_id: str):
     return out
 
 
+@router.post("/{file_id}/parse")
+def enqueue_file_parse(file_id: str):
+    _get_file(file_id)
+    try:
+        return jobs.enqueue_parse_file(file_id)
+    except KeyError:
+        raise HTTPException(404, "file not found")
+
+
 @router.get("/{file_id}/pages/{page_no}")
 async def page_image(file_id: str, page_no: int):
     f = _get_file(file_id)

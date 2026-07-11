@@ -322,15 +322,23 @@ function App() {
     setAutoGenerating(true)
     try {
       let parseId: string | undefined
+      const existingParses = await api.listFileParses(fileId)
+      const hasDoneParse = existingParses.some(parse => parse.status === 'done' && parse.raw_zip_path)
+      const hasActiveParse = existingParses.some(parse => parse.status === 'queued' || parse.status === 'running')
+      if (!hasDoneParse && !hasActiveParse) {
+        await api.parseFile(fileId)
+      }
+
       for (let attempt = 0; attempt < 90; attempt += 1) {
         const parses = await api.listFileParses(fileId)
         const done = parses.find(parse => parse.status === 'done' && parse.raw_zip_path)
-        const failed = parses.find(parse => parse.status === 'failed')
+        const active = parses.find(parse => parse.status === 'queued' || parse.status === 'running')
+        const latest = parses[0]
         if (done) {
           parseId = done.id
           break
         }
-        if (failed) throw new Error(failed.error || 'MinerU 文档解析失败')
+        if (!active && latest?.status === 'failed') throw new Error(latest.error || 'MinerU 文档解析失败')
         await new Promise(resolve => window.setTimeout(resolve, 2000))
       }
       if (!parseId) throw new Error('等待 MinerU 文档解析超时')
@@ -353,21 +361,28 @@ function App() {
   const submitUpload = async () => {
     if (!uploadFile) return
     setUploading(true)
+    let created: CSFile
     try {
       const metadata = Object.fromEntries(
         Object.entries(uploadMeta)
           .map(([key, value]) => [key, Array.isArray(value) ? value : value.trim()])
           .filter(([, value]) => Array.isArray(value) ? value.length > 0 : Boolean(value))
       )
-      const created = await api.uploadFile(uploadFile, metadata)
+      created = await api.uploadFile(uploadFile, metadata)
       await refreshFiles()
       setCurrentFile(created)
       setUploadDialogOpen(false)
-      await runAutoGenerationForFile(created.id, uploadMeta.auto_chunk_types)
     } catch (err) {
       alert('上传失败: ' + (err as Error).message)
+      return
     } finally {
       setUploading(false)
+    }
+
+    try {
+      await runAutoGenerationForFile(created.id, uploadMeta.auto_chunk_types)
+    } catch (err) {
+      alert('自动生成切片失败: ' + (err as Error).message)
     }
   }
 
@@ -433,21 +448,29 @@ function App() {
   const saveFileSettings = async () => {
     if (!editingFile) return
     setSavingFileMeta(true)
+    let updated: CSFile
+    const autoChunkTypes = fileMetaDraft.auto_chunk_types
     try {
       const metadata = Object.fromEntries(
         Object.entries(fileMetaDraft)
           .map(([key, value]) => [key, Array.isArray(value) ? value : value.trim()])
           .filter(([, value]) => Array.isArray(value) ? value.length > 0 : Boolean(value))
       )
-      const updated = await api.updateFile(editingFile.id, { metadata })
+      updated = await api.updateFile(editingFile.id, { metadata })
       setFiles(prev => prev.map(file => file.id === updated.id ? updated : file))
       if (currentFile?.id === updated.id) setCurrentFile(updated)
       closeFileSettings()
-      await runAutoGenerationForFile(updated.id, fileMetaDraft.auto_chunk_types)
     } catch (err) {
       alert('保存文件属性失败: ' + (err as Error).message)
+      return
     } finally {
       setSavingFileMeta(false)
+    }
+
+    try {
+      await runAutoGenerationForFile(updated.id, autoChunkTypes)
+    } catch (err) {
+      alert('自动生成切片失败: ' + (err as Error).message)
     }
   }
 

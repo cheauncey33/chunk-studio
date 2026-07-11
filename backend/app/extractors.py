@@ -1,7 +1,7 @@
 """Programmatic (regex/heuristic) metadata extractors for `auto` fields.
 
 These produce deterministic values — standard_no (from filename), content_type,
-table_no, table_header, table_columns, table_ref — that are written into the
+table_no, table_title, table_columns — that are written into the
 stable business metadata layer. The caller merges them *only into empty fields*,
 never overwriting user edits.
 
@@ -16,10 +16,11 @@ import re
 from typing import Any
 
 # Standard number from a filename stem, e.g. "GBT 6451-2023", "GB/T 6451-2023",
-# "GB 50011-2019", "JGJ 3-2010". Separators between prefix/number/year may be
-# space, "+", or nothing.
+# "GB 50011-2019", "JB/T 501-2021", "Q/GDW 12126.4-2024". Separators may be spaces, plus signs,
+# ASCII slash, or common Unicode slash variants found in copied standard names.
 _STANDARD_NO_RE = re.compile(
-    r'(GB(?:/?T)?|JGJ|DBJ|DB|HJ|DL|YY|JT|BB)[\s+]*[\d.]+[\s+]*[-—-][\s+]*\d{4}',
+    r'(Q[\s+]*[\/∕／][\s+]*GDW|GB[\s+]*[\/∕／]?[\s+]*T?|JB[\s+]*[\/∕／]?[\s+]*T?|JGJ|DBJ|DB|HJ|DL|YY|JT|BB)'
+    r'[\s+]*[\d.]+[\s+]*[-—－][\s+]*\d{4}',
     re.IGNORECASE,
 )
 
@@ -28,10 +29,10 @@ _STANDARD_NO_RE = re.compile(
 # stops at a line break or the table markup so it captures:
 #   表 1 6 kV、10 kV 级 ... 配电变压器
 # as:
-#   table_no=1, table_header=6 kV、10 kV 级 ... 配电变压器
-_TABLE_NO_RE = re.compile(r'表\s*0*(\d+)')
+#   table_no=1, table_title=6 kV、10 kV 级 ... 配电变压器
+_TABLE_NO_RE = re.compile(r'表\s*0*((?:[A-Za-z]\s*\.\s*)?\d+)')
 _TABLE_TITLE_RE = re.compile(
-    r'表\s*0*(?P<no>\d+)\s+'
+    r'表\s*0*(?P<no>(?:[A-Za-z]\s*\.\s*)?\d+)\s+'
     r'(?P<title>[^\r\n<|]+?(?:变压器|电抗器|开关设备|电缆|导线|母线|装置|设备|参数|要求|限值|数据|性能|特性|表|值)?)'
     r'(?=\s*(?:\r?\n|<table\b|\||$))',
     re.IGNORECASE,
@@ -49,6 +50,12 @@ _CELL_RE = re.compile(r'<t[dh][^>]*>(.*?)</t[dh]>', re.IGNORECASE | re.DOTALL)
 _TAG_RE = re.compile(r'<[^>]+>')
 
 _TABLE_OPEN_RE = re.compile(r'<table[\s>]', re.IGNORECASE)
+_LATEX_INLINE_RE = re.compile(r'\\\((.*?)\\\)', re.DOTALL)
+_LATEX_MATHRM_RE = re.compile(r'\\mathrm\s*\{\{?([^{}]+)\}?\}')
+_LATEX_TEXT_RE = re.compile(r'\\text\s*\{\s*([^{}]+?)\s*\}')
+_LATEX_SQRT_RE = re.compile(r'\\sqrt\s*\{\s*([^{}]+?)\s*\}')
+_LATEX_FRAC_RE = re.compile(r'\\frac\s*\{\s*([^{}]+?)\s*\}\s*\{\s*([^{}]+?)\s*\}')
+_LATEX_COMMAND_RE = re.compile(r'\\[a-zA-Z]+')
 
 
 def extract_standard_no(filename: str | None) -> str | None:
@@ -60,17 +67,68 @@ def extract_standard_no(filename: str | None) -> str | None:
     if not m:
         return None
     s = m.group(0).upper()
-    s = re.sub(r'^GBT', 'GB/T', s)
+    s = s.replace('∕', '/').replace('／', '/')
     s = s.replace('+', ' ')
+    s = re.sub(r'\s*/\s*', '/', s)
+    s = re.sub(r'^GB\s*/?\s*T\b', 'GB/T', s)
+    s = re.sub(r'^JB\s*/?\s*T\b', 'JB/T', s)
+    s = re.sub(r'^Q\s*/\s*GDW\b', 'Q/GDW', s)
     s = re.sub(r'\s+', ' ', s).strip()
     s = re.sub(r'\s*-\s*', '-', s)
     return s or None
 
 
+def normalize_latex_text(text: str) -> str:
+    """Normalize simple MinerU LaTeX fragments into plain display text."""
+    if not text:
+        return text
+
+    def replace_inline(match: re.Match[str]) -> str:
+        return _normalize_latex_fragment(match.group(1))
+
+    text = _LATEX_INLINE_RE.sub(replace_inline, text)
+    text = _normalize_latex_fragment(text)
+    text = re.sub(r'\s+([,，、;；:：])', r'\1', text)
+    text = re.sub(r'([,;:])(?=\S)', r'\1 ', text)
+    return re.sub(r'[ \t]+', ' ', text).strip()
+
+
+def _normalize_latex_fragment(text: str) -> str:
+    text = _LATEX_MATHRM_RE.sub(r' \1', text)
+    # Preserve mathematical meaning before stripping remaining presentation commands.
+    # Iteration handles MinerU's \frac{\text{...}}{\text{...}} form.
+    for _ in range(3):
+        updated = _LATEX_TEXT_RE.sub(r'\1', text)
+        updated = _LATEX_SQRT_RE.sub(r'sqrt(\1)', updated)
+        updated = _LATEX_FRAC_RE.sub(r'(\1)/(\2)', updated)
+        if updated == text:
+            break
+        text = updated
+    text = text.replace(r'\times', '×')
+    text = text.replace(r'\sim', '～')
+    text = (
+        text.replace(r'\leqslant', '≤')
+        .replace(r'\geqslant', '≥')
+        .replace(r'\leq', '≤')
+        .replace(r'\geq', '≥')
+    )
+    text = text.replace(r'\%', '%')
+    text = _LATEX_COMMAND_RE.sub('', text)
+    text = re.sub(r'[{}]', '', text)
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(
+        r'(?<=\d)\s*(kV|kVA|MVA|V|W|kW|Hz|mm|cm|m|s|min|%)(?=$|[^A-Za-z0-9])',
+        r' \1',
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text.strip()
+
+
 def _strip_cell(cell: str) -> str:
     cell = _TAG_RE.sub('', cell)
     cell = html.unescape(cell)
-    return re.sub(r'\s+', ' ', cell).strip()
+    return normalize_latex_text(re.sub(r'\s+', ' ', cell).strip())
 
 
 def _extract_table_columns(text: str) -> list[str]:
@@ -88,6 +146,7 @@ def _text_before_first_table(text: str) -> str:
     before = re.sub(r'</(?:p|div|h\d|br|tr|table)>', '\n', before, flags=re.IGNORECASE)
     before = _TAG_RE.sub('', before)
     before = html.unescape(before)
+    before = normalize_latex_text(before)
     before = before.replace('\u3000', ' ')
     lines = [re.sub(r'[ \t]+', ' ', line).strip() for line in before.splitlines()]
     return '\n'.join(line for line in lines if line)
@@ -103,7 +162,7 @@ def _extract_table_caption(text: str) -> tuple[str | None, str | None]:
     candidates = [_text_before_first_table(text), text[:1000]]
     for candidate in candidates:
         for m in _TABLE_TITLE_RE.finditer(candidate):
-            title = re.sub(r'\s+', ' ', m.group('title')).strip(' ：:;；')
+            title = normalize_latex_text(re.sub(r'\s+', ' ', m.group('title')).strip(' ：:;；'))
             if title:
                 return m.group('no'), title
     no = _extract_table_no(text)
@@ -112,7 +171,7 @@ def _extract_table_caption(text: str) -> tuple[str | None, str | None]:
 
 def _extract_table_no(text: str) -> str | None:
     m = _TABLE_NO_RE.search(text)
-    return m.group(1) if m else None
+    return re.sub(r"\s+", "", m.group(1)).upper() if m else None
 
 
 def _extract_table_ref(text: str) -> list[str]:
@@ -149,7 +208,7 @@ def extract_auto_metadata(text: str | None, filename: str | None) -> dict[str, A
     if ct:
         out['content_type'] = ct
 
-    # table_no / table_header only make sense for chunks that actually contain
+    # table_no / table_title only make sense for chunks that actually contain
     # a table; otherwise "表3" in running prose is a reference, not this chunk's
     # own number.
     if ct == 'table':
@@ -157,14 +216,10 @@ def extract_auto_metadata(text: str | None, filename: str | None) -> dict[str, A
         if tn:
             out['table_no'] = tn
         if title:
-            out['table_header'] = title
+            out['table_title'] = title
         columns = _extract_table_columns(text)
         if columns:
             out['table_columns'] = columns
-
-    refs = _extract_table_ref(text)
-    if refs:
-        out['table_ref'] = refs
 
     return out
 
@@ -175,7 +230,7 @@ def _is_empty(value: Any) -> bool:
 
 def _is_legacy_table_header(key: str, value: Any) -> bool:
     """Old builds stored table column cells in table_header as a list."""
-    return key == 'table_header' and isinstance(value, list)
+    return key in {'table_header', 'table_title'} and isinstance(value, list)
 
 
 def merge_auto_metadata(
