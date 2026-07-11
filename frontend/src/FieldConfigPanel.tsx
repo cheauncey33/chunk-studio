@@ -85,7 +85,7 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
                   <td><span className={`pill ${f.extract_source}`}>{f.extract_source}</span></td>
                   <td>{f.value_constraint}</td>
                   <td>{f.value_type}</td>
-                  <td className="mono">{f.storage_path || 'metadata_v2.' + f.field_key}</td>
+                  <td className="mono">{f.storage_path || 'business_metadata.' + f.field_key}</td>
                   <td className="labels-cell">
                     {[
                       f.editable && 'editable',
@@ -168,14 +168,14 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
             <input
               value={draft.storage_path}
               onChange={e => setDraft({ ...draft, storage_path: e.target.value })}
-              placeholder={draft.extract_source === 'llm' ? `metadata_llm.${draft.field_key || 'summary'}` : `metadata_v2.${draft.field_key || 'standard_no'}`}
+              placeholder={draft.extract_source === 'llm' ? `metadata_llm.${draft.field_key || 'summary'}` : `business_metadata.${draft.field_key || 'standard_no'}`}
             />
 
             <label>采纳后存储路径</label>
             <input
               value={draft.accepted_storage_path}
               onChange={e => setDraft({ ...draft, accepted_storage_path: e.target.value })}
-              placeholder={draft.extract_source === 'llm' ? `metadata_v2.${draft.field_key || 'summary'}` : 'LLM 字段使用，可留空'}
+              placeholder={draft.extract_source === 'llm' ? `business_metadata.${draft.field_key || 'summary'}` : 'LLM 字段使用，可留空'}
             />
 
             <div className="form-grid">

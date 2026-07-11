@@ -24,10 +24,11 @@ export interface Chunk {
   text: string | null
   text_source: 'digital' | 'manual' | 'ocr' | 'pending'
   metadata: Record<string, unknown>
-  metadata_v2: Record<string, unknown>
+  business_metadata: Record<string, unknown>
   metadata_llm: Record<string, unknown>
   source_trace: Record<string, unknown>
   chunk_logic: Record<string, unknown>
+  relations: Record<string, unknown>
   ui_state: Record<string, unknown>
   indexing: Record<string, unknown>
   status: string
@@ -189,10 +190,11 @@ export const api = {
   updateChunk: (id: string, body: Partial<{
     text: string
     metadata: Record<string, unknown>
-    metadata_v2: Record<string, unknown>
+    business_metadata: Record<string, unknown>
     metadata_llm: Record<string, unknown>
     source_trace: Record<string, unknown>
     chunk_logic: Record<string, unknown>
+    relations: Record<string, unknown>
     ui_state: Record<string, unknown>
     indexing: Record<string, unknown>
     text_source: string

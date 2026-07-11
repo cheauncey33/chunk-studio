@@ -46,9 +46,9 @@ async def create_chunk(body: ChunkCreate):
         conn.execute(
             """INSERT INTO chunks
                (id, file_id, page, bbox, rotation, crop_path, text, text_source,
-                metadata, metadata_v2, metadata_llm, source_trace, chunk_logic,
+                metadata, business_metadata, metadata_llm, source_trace, chunk_logic, relations,
                 status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cid, body.file_id, body.page,
                 json.dumps(body.bbox.model_dump()),
@@ -56,6 +56,7 @@ async def create_chunk(body: ChunkCreate):
                 "{}", json.dumps(meta, ensure_ascii=False), "{}",
                 json.dumps(source_trace, ensure_ascii=False),
                 json.dumps(chunk_logic, ensure_ascii=False),
+                "{}",
                 "pending", now, now,
             ),
         )
@@ -105,24 +106,25 @@ def update_chunk(chunk_id: str, body: ChunkUpdate):
                 (body.text, now, chunk_id),
             )
         if body.metadata is not None:
-            metadata_v2, source_trace, chunk_logic = chunk_schema.split_flat_metadata_for_write(body.metadata)
+            business_metadata, source_trace, chunk_logic, relations = chunk_schema.split_flat_metadata_for_write(body.metadata)
             conn.execute(
                 """UPDATE chunks
-                   SET metadata=?, metadata_v2=?, source_trace=?, chunk_logic=?, updated_at=?
+                   SET metadata=?, business_metadata=?, source_trace=?, chunk_logic=?, relations=?, updated_at=?
                    WHERE id=?""",
                 (
                     json.dumps(body.metadata, ensure_ascii=False),
-                    json.dumps(metadata_v2, ensure_ascii=False),
+                    json.dumps(business_metadata, ensure_ascii=False),
                     json.dumps(source_trace, ensure_ascii=False),
                     json.dumps(chunk_logic, ensure_ascii=False),
+                    json.dumps(relations, ensure_ascii=False),
                     now,
                     chunk_id,
                 ),
             )
-        if body.metadata_v2 is not None:
+        if body.business_metadata is not None:
             conn.execute(
-                "UPDATE chunks SET metadata_v2=?, updated_at=? WHERE id=?",
-                (json.dumps(body.metadata_v2, ensure_ascii=False), now, chunk_id),
+                "UPDATE chunks SET business_metadata=?, updated_at=? WHERE id=?",
+                (json.dumps(body.business_metadata, ensure_ascii=False), now, chunk_id),
             )
         if body.metadata_llm is not None:
             conn.execute(
@@ -138,6 +140,11 @@ def update_chunk(chunk_id: str, body: ChunkUpdate):
             conn.execute(
                 "UPDATE chunks SET chunk_logic=?, updated_at=? WHERE id=?",
                 (json.dumps(body.chunk_logic, ensure_ascii=False), now, chunk_id),
+            )
+        if body.relations is not None:
+            conn.execute(
+                "UPDATE chunks SET relations=?, updated_at=? WHERE id=?",
+                (json.dumps(body.relations, ensure_ascii=False), now, chunk_id),
             )
         if body.ui_state is not None:
             conn.execute(
@@ -198,14 +205,16 @@ def _row_to_out(r) -> ChunkOut:
     ocr_job = jobs.latest_job_for_target(d["id"], "ocr")
     layers = chunk_schema.ensure_layered_chunk(
         metadata=d.get("metadata"),
-        metadata_v2=d.get("metadata_v2"),
+        business_metadata=d.get("business_metadata"),
         source_trace=d.get("source_trace"),
         chunk_logic=d.get("chunk_logic"),
+        relations=d.get("relations"),
     )
     metadata = chunk_schema.flatten_for_legacy(
-        layers["metadata_v2"],
+        layers["business_metadata"],
         layers["source_trace"],
         layers["chunk_logic"],
+        layers["relations"],
         d.get("metadata"),
     )
     return ChunkOut(
@@ -213,10 +222,11 @@ def _row_to_out(r) -> ChunkOut:
         rotation=d.get("rotation", 0), crop_path=d.get("crop_path"), crop_url=crop_url,
         text=d.get("text"), text_source=d["text_source"],
         metadata=metadata,
-        metadata_v2=layers["metadata_v2"],
+        business_metadata=layers["business_metadata"],
         metadata_llm=chunk_schema.parse_json_object(d.get("metadata_llm")),
         source_trace=layers["source_trace"],
         chunk_logic=layers["chunk_logic"],
+        relations=layers["relations"],
         ui_state=chunk_schema.parse_json_object(d.get("ui_state")),
         indexing=chunk_schema.parse_json_object(d.get("indexing")),
         status=d["status"],

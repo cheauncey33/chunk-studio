@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import type { Chunk } from './api'
-import { chunkKind as schemaChunkKind, getChunkMetadata, isAutoChunk } from './chunkSchema'
+import { chunkKind as schemaChunkKind, getBusinessMetadata, getRelations, isAutoChunk } from './chunkSchema'
 
 export type ChunkKind = 'manual' | 'table' | 'image' | 'section'
 
@@ -98,13 +98,14 @@ function sourceLabel(chunk: Chunk): string {
 }
 
 function chunkSummary(chunk: Chunk): string {
-  const meta = getChunkMetadata(chunk)
+  const meta = getBusinessMetadata(chunk)
+  const relationRefs = relationReferences(chunk)
   if (meta.content_type === 'section') {
     const section = String(meta.section || '')
     const title = String(meta.section_title || '')
-    const childRange = summarizeSectionRefs(meta.child_sections)
-    const figs = summarizeRefs(meta.figure_ref, '图')
-    const tables = summarizeRefs(meta.table_ref, '表')
+    const childRange = summarizeSectionRefs(relationChildren(chunk))
+    const figs = summarizeRefs(relationRefs.figure, '图')
+    const tables = summarizeRefs(relationRefs.table, '表')
     const parts = [
       section && `${section} ${title}`.trim(),
       childRange && `包含 ${childRange}`,
@@ -115,15 +116,41 @@ function chunkSummary(chunk: Chunk): string {
   }
   if (meta.content_type === 'table') {
     const no = meta.table_no ? `表 ${meta.table_no}` : '表格'
-    const title = meta.table_header ? String(meta.table_header) : ''
+    const title = meta.table_title ? String(meta.table_title) : ''
     return `${no} ${title}`.trim() || chunk.text?.slice(0, 80) || '无文本'
   }
   if (meta.content_type === 'image') {
     const no = meta.figure_no ? `图 ${meta.figure_no}` : '图片'
-    const title = meta.figure_header ? String(meta.figure_header) : ''
+    const title = meta.figure_title ? String(meta.figure_title) : ''
     return `${no} ${title}`.trim() || chunk.text?.slice(0, 80) || '无文本'
   }
   return chunk.text?.slice(0, 80) || '无文本'
+}
+
+function relationChildren(chunk: Chunk): string[] {
+  const children = getRelations(chunk).children
+  if (!Array.isArray(children)) return []
+  return children
+    .map(child => {
+      if (!child || typeof child !== 'object') return ''
+      const record = child as Record<string, unknown>
+      return typeof record.section === 'string' ? record.section : ''
+    })
+    .filter(Boolean)
+}
+
+function relationReferences(chunk: Chunk): Record<'table' | 'figure', string[]> {
+  const refs = getRelations(chunk).references
+  const out: Record<'table' | 'figure', string[]> = { table: [], figure: [] }
+  if (!Array.isArray(refs)) return out
+  refs.forEach(ref => {
+    if (!ref || typeof ref !== 'object') return
+    const record = ref as Record<string, unknown>
+    const kind = record.kind === 'figure' ? 'figure' : record.kind === 'table' ? 'table' : null
+    const no = record.no ?? record.target_no
+    if (kind && no != null) out[kind].push(String(no))
+  })
+  return out
 }
 
 function summarizeRefs(value: unknown, prefix = ''): string {

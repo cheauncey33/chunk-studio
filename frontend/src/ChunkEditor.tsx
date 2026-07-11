@@ -3,7 +3,7 @@ import { api, type Chunk, type FieldConfig } from './api'
 import {
   acceptedPathForField,
   getByPath,
-  getChunkMetadata,
+  getBusinessMetadata,
   isAutoChunk,
   setByPath,
   storagePathForField,
@@ -32,7 +32,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
   useEffect(() => {
     if (!chunk) return
     setText(chunk.text || '')
-    setMeta({ ...getChunkMetadata(chunk) })
+    setMeta({ ...getBusinessMetadata(chunk) })
     setDirtyText(false)
     setTextMode('preview')
   }, [chunk?.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -57,7 +57,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
     field.extract_source !== 'llm'
     && field.editable
     && field.visible
-    && storagePathForField(field).startsWith('metadata_v2.')
+    && storagePathForField(field).startsWith('business_metadata.')
   ))
   const autoChunk = isAutoChunk(chunk)
   const sourceLabel = autoChunk ? 'auto' : chunk.text_source
@@ -78,7 +78,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
   const save = async () => {
     setSaving(true)
     try {
-      const updated = await api.updateChunk(chunk.id, { text, metadata_v2: meta })
+      const updated = await api.updateChunk(chunk.id, { text, business_metadata: meta })
       setDirtyText(false)
       onSaved(updated)
     } catch (error) {
@@ -92,8 +92,8 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
     const value = suggestionValue(chunk.metadata_llm[key])
     if (value === undefined) return
     const field = fields.find(item => item.field_key === key)
-    const path = field ? acceptedPathForField(field) : `metadata_v2.${key}`
-    const next = setByPath({ metadata_v2: meta }, path, value).metadata_v2 as Record<string, unknown>
+    const path = field ? acceptedPathForField(field) : `business_metadata.${key}`
+    const next = setByPath({ business_metadata: meta }, path, value).business_metadata as Record<string, unknown>
     const nextLlm = { ...(chunk.metadata_llm || {}) }
     const rawSuggestion = nextLlm[key]
     if (rawSuggestion && typeof rawSuggestion === 'object') {
@@ -102,7 +102,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
       nextLlm[key] = { value, status: 'accepted' }
     }
     setMeta(next)
-    const updated = await api.updateChunk(chunk.id, { metadata_v2: next, metadata_llm: nextLlm })
+    const updated = await api.updateChunk(chunk.id, { business_metadata: next, metadata_llm: nextLlm })
     onSaved(updated)
   }
 
@@ -112,8 +112,8 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
 
   const renderField = (field: FieldConfig) => {
     const storagePath = storagePathForField(field)
-    const localPath = storagePath.startsWith('metadata_v2.')
-      ? storagePath.slice('metadata_v2.'.length)
+    const localPath = storagePath.startsWith('business_metadata.')
+      ? storagePath.slice('business_metadata.'.length)
       : field.field_key
     const value = getByPath(meta, localPath)
 
@@ -248,7 +248,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
           {showMeta ? '收起元数据' : '展开元数据'}
         </button>
         <p className="muted">
-          chunk 级业务元数据。auto 字段在创建/OCR 完成时写入 metadata_v2（不覆盖手改）；llm 字段在下方采纳。
+          chunk 级业务元数据。auto 字段在创建/OCR 完成时写入 business_metadata（不覆盖手改）；llm 字段在下方采纳。
         </p>
         {showMeta && <div className="fields">{editableFields.map(renderField)}</div>}
       </div>

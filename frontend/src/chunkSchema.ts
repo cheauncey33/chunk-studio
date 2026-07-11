@@ -1,24 +1,26 @@
 import type { Chunk, FieldConfig } from './api'
 import type { ChunkKind } from './ChunkList'
 
-export function getChunkMetadata(chunk: Chunk): Record<string, unknown> {
-  const metadataV2 = chunk.metadata_v2 || {}
-  if (Object.keys(metadataV2).length) return metadataV2
-  return chunk.metadata || {}
+export function getBusinessMetadata(chunk: Chunk): Record<string, unknown> {
+  const business = chunk.business_metadata || {}
+  if (Object.keys(business).length) return business
+  return migrateLegacyBusiness(chunk.metadata || {})
 }
 
 export function getSourceTrace(chunk: Chunk): Record<string, unknown> {
-  const legacy = chunk.metadata || {}
-  return { ...pickLegacyTrace(legacy), ...(chunk.source_trace || {}) }
+  return { ...pickLegacyTrace(chunk.metadata || {}), ...(chunk.source_trace || {}) }
 }
 
 export function getChunkLogic(chunk: Chunk): Record<string, unknown> {
-  const legacy = chunk.metadata || {}
-  return { ...pickLegacyLogic(legacy), ...(chunk.chunk_logic || {}) }
+  return { ...pickLegacyLogic(chunk.metadata || {}), ...(chunk.chunk_logic || {}) }
+}
+
+export function getRelations(chunk: Chunk): Record<string, unknown> {
+  return { ...pickLegacyRelations(chunk.metadata || {}), ...(chunk.relations || {}) }
 }
 
 export function chunkKind(chunk: Chunk): ChunkKind {
-  const type = String(getChunkMetadata(chunk).content_type || '')
+  const type = String(getBusinessMetadata(chunk).content_type || '')
   if (type === 'section') return 'section'
   if (type === 'table') return 'table'
   if (type === 'image') return 'image'
@@ -26,18 +28,18 @@ export function chunkKind(chunk: Chunk): ChunkKind {
 }
 
 export function isAutoChunk(chunk: Chunk): boolean {
-  return Boolean(getChunkLogic(chunk).auto_source)
+  return getChunkLogic(chunk).creation_mode === 'auto'
 }
 
 export function storagePathForField(field: FieldConfig): string {
   if (field.storage_path) return field.storage_path
   return field.extract_source === 'llm'
     ? `metadata_llm.${field.field_key}`
-    : `metadata_v2.${field.field_key}`
+    : `business_metadata.${field.field_key}`
 }
 
 export function acceptedPathForField(field: FieldConfig): string {
-  return field.accepted_storage_path || `metadata_v2.${field.field_key}`
+  return field.accepted_storage_path || `business_metadata.${field.field_key}`
 }
 
 export function getByPath(root: Record<string, unknown>, path: string): unknown {
@@ -74,46 +76,59 @@ export function suggestionValue(value: unknown): unknown {
   return value
 }
 
+function migrateLegacyBusiness(metadata: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...metadata }
+  if (out.table_header !== undefined && out.table_title === undefined) out.table_title = out.table_header
+  if (out.figure_header !== undefined && out.figure_title === undefined) out.figure_title = out.figure_header
+  delete out.table_header
+  delete out.figure_header
+  delete out.table_ref
+  delete out.figure_ref
+  delete out.notes
+  delete out.auto_chunk_types
+  return out
+}
+
 function pickLegacyTrace(metadata: Record<string, unknown>): Record<string, unknown> {
-  const keys = [
-    'mineru_parse_id',
-    'mineru_model',
-    'mineru_page_idx',
-    'mineru_block_index',
-    'mineru_table_bbox',
-    'mineru_image_bbox',
-    'mineru_caption_bbox',
-    'source_blocks',
+  const out = pick(metadata, [
+    'parser',
+    'parser_version',
+    'parse_id',
     'page_start',
     'page_end',
+    'source_blocks',
     'bbox_union',
     'snapshot_path',
-    'source_file_id',
     'source_file_hash',
-    'parser',
-  ]
-  return pick(metadata, keys)
+  ])
+  if (metadata.mineru_parse_id !== undefined && out.parse_id === undefined) out.parse_id = metadata.mineru_parse_id
+  if (metadata.mineru_model !== undefined && out.parser_version === undefined) out.parser_version = metadata.mineru_model
+  return out
 }
 
 function pickLegacyLogic(metadata: Record<string, unknown>): Record<string, unknown> {
-  const keys = [
-    'auto_source',
+  const out = pick(metadata, [
+    'creation_mode',
+    'generator',
     'chunk_type',
     'strategy',
     'strategy_version',
-    'split_from',
-    'split_reason',
-    'chunk_part',
-    'chunk_parts',
-    'child_sections',
-    'parent_section',
-    'parent_title',
-    'parent_chunk_id',
-    'child_chunk_ids',
-    'related_chunk_ids',
-    'relations',
-  ]
-  return pick(metadata, keys)
+    'split',
+  ])
+  if (metadata.auto_source && out.creation_mode === undefined) {
+    out.creation_mode = 'auto'
+    out.generator = String(metadata.auto_source).startsWith('mineru') ? 'mineru' : 'rule'
+  }
+  return out
+}
+
+function pickLegacyRelations(metadata: Record<string, unknown>): Record<string, unknown> {
+  const references = []
+  const tableRefs = Array.isArray(metadata.table_ref) ? metadata.table_ref : []
+  const figureRefs = Array.isArray(metadata.figure_ref) ? metadata.figure_ref : []
+  for (const item of tableRefs) references.push({ kind: 'table', no: String(item), type: 'references_table' })
+  for (const item of figureRefs) references.push({ kind: 'figure', no: String(item), type: 'references_figure' })
+  return references.length ? { references } : {}
 }
 
 function pick(source: Record<string, unknown>, keys: string[]): Record<string, unknown> {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type Chunk, type CSFile } from './api'
-import { getChunkMetadata, isAutoChunk } from './chunkSchema'
+import { getBusinessMetadata, isAutoChunk } from './chunkSchema'
 
 interface Props {
   files: CSFile[]
@@ -60,7 +60,7 @@ export function ChunkManager({ files, onOpenChunk, compact = false }: Props) {
       chunk.text || '',
       chunk.text_source,
       chunk.status,
-      JSON.stringify(getChunkMetadata(chunk)),
+      JSON.stringify(getBusinessMetadata(chunk)),
     ].join('\n').toLowerCase()
     return haystack.includes(needle)
   })

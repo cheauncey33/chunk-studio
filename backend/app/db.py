@@ -22,20 +22,21 @@ from . import chunk_schema, config
 #   auto   — regex/heuristic, populated on create/OCR (see app.extractors)
 #   llm    — small-model suggestion, written to metadata_llm and adopted by user
 #
-# Auto fields write into chunk.metadata_v2 only when empty, never overwriting edits.
+# Auto fields write into chunk.business_metadata only when empty, never overwriting edits.
 SEED_FIELDS = [
     ("standard_no", "标准号", "auto", "free", "[]", "text",
      "文件名正则抽取，如 GB/T 6451-2023。", 1),
     ("content_type", "内容形态", "auto", "enum", '["table","text"]', "text",
      "含 <table> 标 table，否则 text。", 2),
+    ("table_kind", "表格类型", "auto", "enum",
+     '["numbered_table","continued_table","symbol_table","formula_table","report_form","calculation_table","unnumbered_table"]',
+     "text", "表格细分角色，用于质量审计和检索过滤。", 3),
     ("table_no", "表号", "auto", "free", "[]", "text",
-     "正则 表\\s*(\\d+) 取首个，仅表格 chunk。", 3),
-    ("table_header", "表头", "auto", "free", "[]", "text",
-     "表格标题：正则抽取“表 N”后、表格主体前的标题文本。", 4),
+     "正则 表\\s*(\\d+) 取首个，仅表格 chunk。", 4),
+    ("table_title", "表标题", "auto", "free", "[]", "text",
+     "表格标题：正则抽取“表 N”后、表格主体前的标题文本。", 5),
     ("table_columns", "表列名", "auto", "free", "[]", "list",
-     "<table> 首行单元格文本。", 5),
-    ("table_ref", "表引用", "auto", "free", "[]", "list",
-     "见?表\\d+ / 如表N所示，记录引用的表号。", 6),
+     "<table> 首行单元格文本。", 6),
     ("summary", "摘要", "llm", "free", "[]", "text",
      "一句话概括这段内容。", 7),
     ("keywords", "关键词", "llm", "free", "[]", "list",
@@ -67,10 +68,11 @@ CREATE TABLE IF NOT EXISTS chunks (
     text          TEXT,
     text_source   TEXT CHECK (text_source IN ('digital','manual','ocr','pending')) DEFAULT 'pending',
     metadata       TEXT NOT NULL DEFAULT '{}',
-    metadata_v2    TEXT NOT NULL DEFAULT '{}',
+    business_metadata TEXT NOT NULL DEFAULT '{}',
     metadata_llm   TEXT NOT NULL DEFAULT '{}',
     source_trace   TEXT NOT NULL DEFAULT '{}',
     chunk_logic    TEXT NOT NULL DEFAULT '{}',
+    relations      TEXT NOT NULL DEFAULT '{}',
     ui_state       TEXT NOT NULL DEFAULT '{}',
     indexing       TEXT NOT NULL DEFAULT '{}',
     status        TEXT DEFAULT 'pending',
@@ -169,12 +171,12 @@ def _migrate_files_metadata() -> None:
 
 
 def _migrate_chunk_layer_columns() -> None:
-    """Add v2 JSON layer columns to existing chunk tables."""
+    """Add JSON layer columns to existing chunk tables."""
     cols = {
         row["name"]
         for row in _conn.execute("PRAGMA table_info(chunks)").fetchall()
     }
-    for name in ("metadata_v2", "source_trace", "chunk_logic", "ui_state", "indexing"):
+    for name in ("business_metadata", "source_trace", "chunk_logic", "relations", "ui_state", "indexing"):
         if name not in cols:
             _conn.execute(f"ALTER TABLE chunks ADD COLUMN {name} TEXT NOT NULL DEFAULT '{{}}'")
 
@@ -196,6 +198,7 @@ def _migrate_field_config() -> None:
         _migrate_field_config_columns()
         _seed_fields_if_empty()  # fresh install: ensure defaults present
         _normalize_field_config_paths()
+        _retire_deprecated_field_configs()
         return  # already new schema
     _conn.execute("DROP TABLE IF EXISTS field_config")
     _conn.execute(
@@ -219,6 +222,7 @@ def _migrate_field_config() -> None:
     )
     _seed_fields_if_empty()
     _normalize_field_config_paths()
+    _retire_deprecated_field_configs()
     _backfill_auto_metadata()
 
 
@@ -242,31 +246,34 @@ def _migrate_field_config_columns() -> None:
 
 
 def _backfill_chunk_layers() -> None:
-    """Populate v2 layer columns from legacy flat metadata if empty."""
+    """Populate layer columns from legacy flat metadata if empty."""
     rows = _conn.execute(
-        """SELECT id, metadata, metadata_v2, source_trace, chunk_logic
+        """SELECT id, metadata, business_metadata, source_trace, chunk_logic, relations
            FROM chunks"""
     ).fetchall()
     for r in rows:
         layers = chunk_schema.ensure_layered_chunk(
             metadata=r["metadata"],
-            metadata_v2=r["metadata_v2"],
+            business_metadata=r["business_metadata"],
             source_trace=r["source_trace"],
             chunk_logic=r["chunk_logic"],
+            relations=r["relations"],
         )
         if (
-            chunk_schema.parse_json_object(r["metadata_v2"]) != layers["metadata_v2"]
+            chunk_schema.parse_json_object(r["business_metadata"]) != layers["business_metadata"]
             or chunk_schema.parse_json_object(r["source_trace"]) != layers["source_trace"]
             or chunk_schema.parse_json_object(r["chunk_logic"]) != layers["chunk_logic"]
+            or chunk_schema.parse_json_object(r["relations"]) != layers["relations"]
         ):
             _conn.execute(
                 """UPDATE chunks
-                   SET metadata_v2=?, source_trace=?, chunk_logic=?
+                   SET business_metadata=?, source_trace=?, chunk_logic=?, relations=?
                    WHERE id=?""",
                 (
-                    json.dumps(layers["metadata_v2"], ensure_ascii=False),
+                    json.dumps(layers["business_metadata"], ensure_ascii=False),
                     json.dumps(layers["source_trace"], ensure_ascii=False),
                     json.dumps(layers["chunk_logic"], ensure_ascii=False),
+                    json.dumps(layers["relations"], ensure_ascii=False),
                     r["id"],
                 ),
             )
@@ -279,7 +286,7 @@ def _backfill_auto_metadata() -> None:
     a one-shot migration and conceptually the same merge that runs on create.
     """
     from . import extractors  # local import: extractors imports nothing from db
-    rows = _conn.execute("SELECT id, file_id, text, metadata, metadata_v2 FROM chunks").fetchall()
+    rows = _conn.execute("SELECT id, file_id, text, metadata, business_metadata FROM chunks").fetchall()
     file_name_cache: dict[str, str] = {}
     for r in rows:
         fname = file_name_cache.get(r["file_id"])
@@ -291,14 +298,14 @@ def _backfill_auto_metadata() -> None:
             file_name_cache[r["file_id"]] = fname
         layers = chunk_schema.ensure_layered_chunk(
             metadata=r["metadata"],
-            metadata_v2=r["metadata_v2"],
+            business_metadata=r["business_metadata"],
         )
-        meta = layers["metadata_v2"]
+        meta = layers["business_metadata"]
         before = dict(meta)
         extractors.merge_auto_metadata(meta, r["text"], fname)
         if meta != before:
             _conn.execute(
-                "UPDATE chunks SET metadata_v2=? WHERE id=?",
+                "UPDATE chunks SET business_metadata=? WHERE id=?",
                 (json.dumps(meta, ensure_ascii=False), r["id"]),
             )
 
@@ -341,10 +348,10 @@ def _normalize_field_config_paths() -> None:
             storage_path = (
                 f"metadata_llm.{row['field_key']}"
                 if row["extract_source"] == "llm"
-                else f"metadata_v2.{row['field_key']}"
+                else f"business_metadata.{row['field_key']}"
             )
         if row["extract_source"] == "llm" and not accepted_storage_path:
-            accepted_storage_path = f"metadata_v2.{row['field_key']}"
+            accepted_storage_path = f"business_metadata.{row['field_key']}"
         if storage_path != row["storage_path"] or accepted_storage_path != row["accepted_storage_path"]:
             _conn.execute(
                 """UPDATE field_config
@@ -354,10 +361,16 @@ def _normalize_field_config_paths() -> None:
             )
 
 
+def _retire_deprecated_field_configs() -> None:
+    _conn.execute(
+        "DELETE FROM field_config WHERE field_key IN ('table_header', 'table_ref', 'figure_header', 'figure_ref')"
+    )
+
+
 def _field_seed_row(row: tuple[Any, ...]) -> tuple[Any, ...]:
     key, display, source, constraint, labels, value_type, description, order = row
-    storage_path = f"metadata_llm.{key}" if source == "llm" else f"metadata_v2.{key}"
-    accepted_storage_path = f"metadata_v2.{key}" if source == "llm" else ""
+    storage_path = f"metadata_llm.{key}" if source == "llm" else f"business_metadata.{key}"
+    accepted_storage_path = f"business_metadata.{key}" if source == "llm" else ""
     filterable = 0 if source == "llm" else 1
     indexable = 0 if key in {"tags"} else 1
     return (

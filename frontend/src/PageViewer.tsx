@@ -216,12 +216,12 @@ function sectionPageBox(chunk: Chunk, page: number): PageBox | null {
   const sourceBlocks = getSourceTrace(chunk).source_blocks
   if (!Array.isArray(sourceBlocks)) return null
 
-  const pageIdx = page - 1
   const boxes = sourceBlocks
     .map(block => {
       if (!block || typeof block !== 'object') return null
       const record = block as Record<string, unknown>
-      if (Number(record.page_idx) !== pageIdx) return null
+      const blockPage = record.page != null ? Number(record.page) : Number(record.page_idx) + 1
+      if (blockPage !== page) return null
       return rawBoxToPageBox(record.bbox)
     })
     .filter((box): box is PageBox => Boolean(box))
