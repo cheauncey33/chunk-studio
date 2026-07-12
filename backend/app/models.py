@@ -132,3 +132,13 @@ class VectorSearchResponse(BaseModel):
     dimension: int
     total_candidates: int
     hits: list[VectorSearchHit]
+
+
+class KeywordExtractRequest(BaseModel):
+    force: bool = False
+
+
+class KeywordBulkExtractRequest(BaseModel):
+    force: bool = False
+    limit: int = Field(default=32, ge=1, le=128)
+    batch_size: int = Field(default=8, ge=1, le=12)
