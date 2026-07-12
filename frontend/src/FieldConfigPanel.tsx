@@ -178,47 +178,52 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
               placeholder={draft.extract_source === 'llm' ? `business_metadata.${draft.field_key || 'summary'}` : 'LLM 字段使用，可留空'}
             />
 
-            <div className="form-grid">
-              <div>
-                <label>scope</label>
+            <div className="field-properties">
+              <div className="scope-field">
+                <label>适用范围</label>
                 <input
                   value={draft.scope}
                   onChange={e => setDraft({ ...draft, scope: e.target.value })}
                   placeholder="chunk"
                 />
               </div>
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={draft.editable}
-                  onChange={e => setDraft({ ...draft, editable: e.target.checked })}
-                />
-                editable
-              </label>
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={draft.visible}
-                  onChange={e => setDraft({ ...draft, visible: e.target.checked })}
-                />
-                visible
-              </label>
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={draft.filterable}
-                  onChange={e => setDraft({ ...draft, filterable: e.target.checked })}
-                />
-                filterable
-              </label>
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={draft.indexable}
-                  onChange={e => setDraft({ ...draft, indexable: e.target.checked })}
-                />
-                indexable
-              </label>
+              <fieldset className="field-flags">
+                <legend>字段属性</legend>
+                <div className="field-flags-grid">
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={draft.editable}
+                      onChange={e => setDraft({ ...draft, editable: e.target.checked })}
+                    />
+                    <span>可编辑 <small>editable</small></span>
+                  </label>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={draft.visible}
+                      onChange={e => setDraft({ ...draft, visible: e.target.checked })}
+                    />
+                    <span>可见 <small>visible</small></span>
+                  </label>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={draft.filterable}
+                      onChange={e => setDraft({ ...draft, filterable: e.target.checked })}
+                    />
+                    <span>可筛选 <small>filterable</small></span>
+                  </label>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={draft.indexable}
+                      onChange={e => setDraft({ ...draft, indexable: e.target.checked })}
+                    />
+                    <span>可索引 <small>indexable</small></span>
+                  </label>
+                </div>
+              </fieldset>
             </div>
 
             <label>标签列表</label>
