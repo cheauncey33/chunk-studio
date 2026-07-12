@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "status": "qwen3.6-27b_preferred_for_next_prompt_iteration",
+  "scope": "same naming Markdown, prompt, report context, and Pk retrieval experiment",
+  "models": [
+    {
+      "model": "qwen-flash",
+      "target_standalone_rank": 3,
+      "equal_rrf_fused_rank": 13,
+      "strengths": [
+        "Resolved all explicit model segments.",
+        "Generated a useful table-target query without the report's claimed loss value."
+      ],
+      "issues": [
+        "Used the NX paragraph as evidence for 400/10.",
+        "Included loss-reduction percentages in identity decoding.",
+        "Added default product features without one evidence item per feature."
+      ]
+    },
+    {
+      "model": "qwen3.6-27b",
+      "target_standalone_rank": 2,
+      "equal_rrf_fused_rank": 13,
+      "strengths": [
+        "Separated capacity and voltage segments with more relevant section evidence.",
+        "Kept relative loss-reduction percentages out of retrieval terms.",
+        "Generated a more focused load-loss table query."
+      ],
+      "issues": [
+        "Added default product features without one evidence item per feature.",
+        "Evidence quotes contain paraphrase or ellipsis and are not guaranteed exact contiguous Markdown excerpts."
+      ]
+    }
+  ],
+  "conclusion": "Use qwen3.6-27b for the next prompt iteration, but do not treat its current output as verified structured data. The unchanged fused rank shows that specialized-route preservation must be addressed separately from model choice."
+}

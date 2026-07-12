@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "status": "baseline_before_table_target_query",
+  "model": "text-embedding-v4",
+  "dimension": 1024,
+  "scope": "three previously failed HBJC table-retrieval cases",
+  "method": {
+    "candidate_pool": "Top 20 table chunks per query route, merged by RRF",
+    "query_routes": ["production", "semantic", "keyword"],
+    "query_similarity": "maximum similarity across query routes",
+    "fusion": "weighted reciprocal rank fusion",
+    "weights": {
+      "table_title_vector_rank": 0.55,
+      "base_vector_rrf_rank": 0.30,
+      "table_header_vector_rank": 0.15
+    },
+    "database_writes": false
+  },
+  "results": [
+    {
+      "case_id": "hbjc-load-loss-pk",
+      "target": "Q/GDW 12126.4-2024 表6",
+      "base_rank": 30,
+      "reranked_rank": 26,
+      "entered_top_10": false
+    },
+    {
+      "case_id": "hbjc-applied-withstand-voltage",
+      "target": "GB/T 1094.3-2017 表2",
+      "base_rank": 25,
+      "reranked_rank": 27,
+      "entered_top_10": false
+    },
+    {
+      "case_id": "hbjc-lightning-impulse-voltage",
+      "target": "GB/T 1094.3-2017 表2",
+      "base_rank": 14,
+      "reranked_rank": 21,
+      "entered_top_10": false
+    }
+  ],
+  "conclusion": "A globally title-dominant vector fusion degraded all three target ranks. Table titles are often generic or emphasize product class while the discriminating test parameter appears only in table headers. Do not promote this weighting to production."
+}

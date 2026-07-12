@@ -124,6 +124,7 @@ def vector_search(
     query: str,
     *,
     top_k: int = 10,
+    content_type: str | None = None,
     model: str = DEFAULT_MODEL,
     dimension: int = DEFAULT_DIMENSION,
     query_embedder: Callable[..., list[float]] = embed_query_with_dashscope,
@@ -138,14 +139,19 @@ def vector_search(
     if query_norm == 0:
         raise ValueError("query vector has zero norm")
 
+    content_type_clause = ""
+    params: list[Any] = [model, dimension]
+    if content_type is not None:
+        content_type_clause = " AND json_extract(c.business_metadata, '$.content_type')=?"
+        params.append(content_type)
     rows = db.get_conn().execute(
-        """SELECT c.id, c.file_id, f.name AS file_name, c.page, c.crop_path,
+        f"""SELECT c.id, c.file_id, f.name AS file_name, c.page, c.crop_path,
                   c.text, c.business_metadata, c.source_trace, e.embedding
            FROM chunk_embeddings e
            JOIN chunks c ON c.id=e.chunk_id
            JOIN files f ON f.id=c.file_id
-           WHERE c.status='approved' AND e.model=? AND e.dimension=?""",
-        (model, dimension),
+           WHERE c.status='approved' AND e.model=? AND e.dimension=?{content_type_clause}""",
+        params,
     ).fetchall()
     scored: list[tuple[float, int, Any]] = []
     for index, row in enumerate(rows):
@@ -176,6 +182,7 @@ def vector_search(
         "query": query,
         "model": model,
         "dimension": dimension,
+        "content_type": content_type,
         "total_candidates": len(rows),
         "hits": hits,
     }

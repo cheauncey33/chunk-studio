@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "material_type": "10 kV 三相油浸式无励磁变压器",
+  "report_fixture": "HBJC",
+  "retrieval_top_k_per_type_per_route": {
+    "table": 20,
+    "section": 10
+  },
+  "final_candidate_limit_per_type": 10,
+  "cases": [
+    {
+      "id": "hbjc-no-load-loss-p0",
+      "evidence_profile": "numeric_limit",
+      "queries": {
+        "production": "S20-M.RL-400/10-NX2 10 kV三相油浸式无励磁变压器 空载损耗和空载电流测量 空载损耗P0(kW):≤0.370",
+        "semantic": "10 kV 400 kVA 油浸式无励磁配电变压器 NX2 能效等级的空载损耗 P0 限值",
+        "keyword": "S20-M.RL 400 kVA 10 kV NX2 空载损耗 P0 标准值 表"
+      }
+    },
+    {
+      "id": "hbjc-no-load-current-i0",
+      "evidence_profile": "numeric_limit",
+      "queries": {
+        "production": "S20-M.RL-400/10-NX2 10 kV三相油浸式无励磁变压器 空载损耗和空载电流测量 空载电流I0(%):≤0.16(1+30%)",
+        "semantic": "10 kV 400 kVA 油浸式无励磁配电变压器的空载电流 I0 标准限值和允许偏差",
+        "keyword": "S20-M.RL 400 kVA 10 kV 空载电流 I0 0.16 允许偏差"
+      }
+    },
+    {
+      "id": "hbjc-load-loss-pk",
+      "evidence_profile": "numeric_limit",
+      "probe_targets": [
+        {
+          "standard_no": "Q/GDW 12126.4-2024",
+          "content_type": "table",
+          "table_no": "6"
+        }
+      ],
+      "queries": {
+        "production": "S20-M.RL-400/10-NX2 10 kV三相油浸式无励磁变压器 短路阻抗和负载损耗测量 负载损耗Pk(kW):≤3.615",
+        "semantic": "10 kV 400 kVA 油浸式无励磁配电变压器 NX2 能效等级的负载损耗 Pk 限值",
+        "keyword": "S20-M.RL 400 kVA 10 kV NX2 负载损耗 Pk 标准值 表",
+        "table_target": "S20-M.RL-400/10-NX2 10 kV 400 kVA 三相油浸式无励磁变压器性能参数表 负载损耗"
+      }
+    },
+    {
+      "id": "hbjc-total-loss",
+      "evidence_profile": "derived_numeric_rule",
+      "queries": {
+        "production": "S20-M.RL-400/10-NX2 10 kV三相油浸式无励磁变压器 短路阻抗和负载损耗测量 总损耗P总(kW):≤3.985",
+        "semantic": "10 kV 400 kVA 油浸式无励磁配电变压器总损耗如何由空载损耗和负载损耗确定",
+        "keyword": "400 kVA 10 kV 变压器 总损耗 空载损耗 P0 负载损耗 Pk 相加"
+      }
+    },
+    {
+      "id": "hbjc-top-oil-temperature-rise",
+      "evidence_profile": "rule_and_limit",
+      "queries": {
+        "production": "S20-M.RL-400/10-NX2 10 kV三相油浸式无励磁变压器 温升试验 顶层油温升:≤55",
+        "semantic": "油浸式变压器温升试验的顶层油温升限值",
+        "keyword": "油浸式变压器 顶层油温升 温升限值 55 K"
+      }
+    },
+    {
+      "id": "hbjc-applied-withstand-voltage",
+      "evidence_profile": "rule_and_limit",
+      "probe_targets": [
+        {
+          "standard_no": "GB/T 1094.3-2017",
+          "content_type": "table",
+          "table_no": "2"
+        }
+      ],
+      "queries": {
+        "production": "10 kV三相油浸式变压器 外施耐压试验 高压对低压及地试验电压(kV):35 持续时间(s):60",
+        "semantic": "10 kV 油浸式变压器外施耐压试验 AV 的试验电压和加压时间",
+        "keyword": "GB/T 1094.3 外施耐压试验 AV 10 kV 35 kV 60 s",
+        "table_target": "10 kV 油浸式变压器绕组的试验电压水平表 外施耐压 AV"
+      }
+    },
+    {
+      "id": "hbjc-induced-withstand-duration",
+      "evidence_profile": "method_rule",
+      "queries": {
+        "production": "10 kV三相油浸式变压器 感应耐压试验 频率150 Hz 全电压持续时间(s):15≤t≤60",
+        "semantic": "变压器感应耐压试验 IVW 在试验频率高于额定频率时的持续时间计算和上下限",
+        "keyword": "GB/T 1094.3 感应耐压 IVW 试验时间 120 乘额定频率除试验频率 15 s 60 s"
+      }
+    },
+    {
+      "id": "hbjc-lightning-impulse-voltage",
+      "evidence_profile": "rule_and_limit",
+      "probe_targets": [
+        {
+          "standard_no": "GB/T 1094.3-2017",
+          "content_type": "table",
+          "table_no": "2"
+        }
+      ],
+      "queries": {
+        "production": "10 kV三相油浸式变压器 雷电冲击试验 高压线端雷电全波冲击耐受电压 75 kV",
+        "semantic": "10 kV 油浸式变压器高压线端雷电全波冲击试验 LI 的耐受电压",
+        "keyword": "GB/T 1094.3 10 kV 雷电全波冲击 LI 线端 75 kV 试验电压",
+        "table_target": "10 kV 油浸式变压器绕组的试验电压水平表 雷电全波冲击 LI"
+      }
+    }
+  ]
+}

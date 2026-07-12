@@ -19,7 +19,11 @@ def test_vector_search_ranks_approved_chunks_and_returns_evidence(monkeypatch, t
     conn.execute(
         "INSERT INTO files(id,name,path,created_at) VALUES ('f','standard.pdf','files/f.pdf','now')"
     )
-    for chunk_id, status, page in (("best", "approved", 2), ("other", "approved", 3), ("hidden", "rejected", 4)):
+    for chunk_id, status, page, content_type in (
+        ("best", "approved", 2, "table"),
+        ("other", "approved", 3, "section"),
+        ("hidden", "rejected", 4, "table"),
+    ):
         conn.execute(
             """INSERT INTO chunks
                (id,file_id,page,bbox,crop_path,text,business_metadata,source_trace,status,created_at,updated_at)
@@ -31,7 +35,11 @@ def test_vector_search_ranks_approved_chunks_and_returns_evidence(monkeypatch, t
                 "{}",
                 f"crops/{chunk_id}.png",
                 f"text {chunk_id}",
-                json.dumps({"standard_no": "GB/T 1-2024", "section": str(page)}),
+                json.dumps({
+                    "standard_no": "GB/T 1-2024",
+                    "section": str(page),
+                    "content_type": content_type,
+                }),
                 json.dumps({"page_start": page, "page_end": page}),
                 status,
                 "now",
@@ -61,4 +69,16 @@ def test_vector_search_ranks_approved_chunks_and_returns_evidence(monkeypatch, t
     assert result["hits"][0]["score"] == 1.0
     assert result["hits"][0]["source_trace"] == {"page_start": 2, "page_end": 2}
     assert result["hits"][0]["crop_url"] == "/crops/best.png"
+
+    table_result = embeddings.vector_search(
+        "query",
+        top_k=2,
+        content_type="table",
+        model="test-model",
+        dimension=2,
+        query_embedder=lambda query, **kwargs: [1.0, 0.0],
+    )
+    assert table_result["content_type"] == "table"
+    assert table_result["total_candidates"] == 1
+    assert [hit["chunk_id"] for hit in table_result["hits"]] == ["best"]
     conn.close()

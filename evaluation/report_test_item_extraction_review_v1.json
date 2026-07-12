@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "status": "model_extracted_and_structurally_reviewed",
+  "model": "qwen3.6-27b",
+  "prompt": "evaluation/prompts/report_test_item_extraction_v1.md",
+  "reports": [
+    {
+      "report_id": "HBJC",
+      "items": 22,
+      "requirements": 73,
+      "initial_items": 14,
+      "repeat_routine_items": 8,
+      "review_notes": []
+    },
+    {
+      "report_id": "EZC",
+      "items": 12,
+      "requirements": 41,
+      "initial_items": 12,
+      "repeat_routine_items": 0,
+      "review_notes": [
+        "The source summary itself merged AV values into '605/skV'. EZC item 6 is excluded from retrieval_case_pool_v1 rather than repaired from the report body.",
+        "The short-time overload pressure-protection text contains a source OCR prefix artifact; that requirement is not selected."
+      ]
+    },
+    {
+      "report_id": "WHC",
+      "items": 23,
+      "requirements": 83,
+      "initial_items": 15,
+      "repeat_routine_items": 8,
+      "review_notes": [
+        "All eight repeated routine projects were retained separately.",
+        "The IVW duration source contains split equation markup but remains semantically readable and is preserved verbatim."
+      ]
+    },
+    {
+      "report_id": "XYC",
+      "items": 12,
+      "requirements": 42,
+      "initial_items": 12,
+      "repeat_routine_items": 0,
+      "review_notes": []
+    }
+  ],
+  "checks": {
+    "grouping_only_rows_excluded": true,
+    "repeat_projects_kept_separate": true,
+    "measured_result_fields_absent": true,
+    "operators_parentheses_and_formula_markup_preserved": true,
+    "source_quality_exclusions_recorded": true
+  },
+  "note": "This review validates extraction structure and selected source text, not the domain correctness of every reported requirement."
+}
