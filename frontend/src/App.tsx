@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type CSFile, type Chunk, type FieldConfig } from './api'
 import { PageViewer } from './PageViewer'
-import { ChunkList, type ChunkKind } from './ChunkList'
+import { ChunkList, chunkKind, type ChunkKind } from './ChunkList'
 import { ChunkEditor } from './ChunkEditor'
 import { FieldConfigPanel } from './FieldConfigPanel'
+import { SearchPage } from './SearchPage'
 import { SettingsPage } from './SettingsPage'
 import './App.css'
 
-type Tab = 'studio' | 'fields' | 'settings'
+type Tab = 'studio' | 'search' | 'fields' | 'settings'
 type AutoChunkKind = 'table' | 'section' | 'image'
 type CategoryTarget = 'upload' | 'file'
 type UploadMeta = {
@@ -113,6 +114,8 @@ function App() {
   const [leftW, setLeftW] = useState(300)
   const [rightW, setRightW] = useState(480)
   const [rightListH, setRightListH] = useState(320)
+  const [pendingLocation, setPendingLocation] = useState<{ fileId: string; chunkId: string; page: number } | null>(null)
+  const [returnToSearchAvailable, setReturnToSearchAvailable] = useState(false)
 
   const startResize = (side: 'left' | 'right') => (e: React.MouseEvent) => {
     e.preventDefault()
@@ -253,6 +256,16 @@ function App() {
   useEffect(() => {
     setPageDraft(String(page))
   }, [page])
+
+  useEffect(() => {
+    if (!pendingLocation || currentFile?.id !== pendingLocation.fileId) return
+    const target = chunks.find(chunk => chunk.id === pendingLocation.chunkId)
+    if (!target) return
+    setPage(pendingLocation.page)
+    setSelectedId(target.id)
+    setChunkViewKind(chunkKind(target))
+    setPendingLocation(null)
+  }, [chunks, currentFile?.id, pendingLocation])
 
   useEffect(() => {
     if (!chunks.some(c => c.ocr_status === 'queued' || c.ocr_status === 'running')) return
@@ -538,6 +551,19 @@ function App() {
   const pendingCount = chunks.filter(chunk => chunk.text_source === 'pending').length
   const parsedCount = chunks.filter(chunk => chunk.text_source === 'ocr' || chunk.text_source === 'digital').length
 
+  const locateSearchHit = (hit: { file_id: string; chunk_id: string; page: number }) => {
+    const file = files.find(item => item.id === hit.file_id)
+    if (!file) {
+      alert('检索结果对应的文件已不存在。')
+      return
+    }
+    setSelectedKnowledgeCategory('all')
+    setPendingLocation({ fileId: hit.file_id, chunkId: hit.chunk_id, page: hit.page })
+    setReturnToSearchAvailable(true)
+    setCurrentFile(file)
+    setTab('studio')
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -550,6 +576,7 @@ function App() {
         </div>
         <nav>
           <button className={tab === 'studio' ? 'on' : ''} onClick={() => setTab('studio')}>文档</button>
+          <button className={tab === 'search' ? 'on' : ''} onClick={() => setTab('search')}>检索</button>
           <button className={tab === 'fields' ? 'on' : ''} onClick={() => setTab('fields')}>字段</button>
           <button className={tab === 'settings' ? 'on' : ''} onClick={() => setTab('settings')}>设置</button>
         </nav>
@@ -637,6 +664,18 @@ function App() {
                     <p>{currentFile.page_count} 页 · 当前第 {page} 页 · 拖拽框选建立切片</p>
                   </div>
                   <div className="doc-stats">
+                    {returnToSearchAvailable && (
+                      <button
+                        type="button"
+                        className="return-search"
+                        onClick={() => {
+                          setTab('search')
+                          setReturnToSearchAvailable(false)
+                        }}
+                      >
+                        返回检索结果
+                      </button>
+                    )}
                     <div className="stat-card"><strong>{chunks.length}</strong><span>切片</span></div>
                     <div className="stat-card"><strong>{parsedCount}</strong><span>已解析</span></div>
                     <button
@@ -735,6 +774,7 @@ function App() {
         </div>
       )}
 
+      <SearchPage hidden={tab !== 'search'} onLocate={locateSearchHit} />
       {tab === 'fields' && <FieldConfigPanel fields={fields} onChanged={refreshFields} />}
       {tab === 'settings' && <SettingsPage />}
 

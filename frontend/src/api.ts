@@ -148,6 +148,26 @@ export interface FieldConfig {
   visible: boolean
 }
 
+export interface VectorSearchHit {
+  chunk_id: string
+  score: number
+  file_id: string
+  file_name: string
+  page: number
+  crop_url: string | null
+  text: string
+  business_metadata: Record<string, unknown>
+  source_trace: Record<string, unknown>
+}
+
+export interface VectorSearchResponse {
+  query: string
+  model: string
+  dimension: number
+  total_candidates: number
+  hits: VectorSearchHit[]
+}
+
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const t = await res.text().catch(() => res.statusText)
@@ -272,6 +292,13 @@ export const api = {
     }).then(j<FieldConfig[]>),
   deleteField: (key: string) =>
     fetch(`${API}/fields/${key}`, { method: 'DELETE' }).then(j),
+
+  searchChunks: (query: string, topK: number) =>
+    fetch(`${API}/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, top_k: topK }),
+    }).then(j<VectorSearchResponse>),
 
   getSettings: () => fetch(`${API}/settings`).then(j<Record<string, string>>),
   updateSettings: (settings: Record<string, string>) =>
