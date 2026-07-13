@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "scope": "HBJC stratified end-to-end trial",
+  "semantics": "alternatives inside a group are OR; required groups are AND",
+  "cases": {
+    "hbjc-4-r1": {
+      "required_groups": [
+        {
+          "group_id": "no_load_loss_limit",
+          "alternatives": [
+            {"standard_no": "Q/GDW 12126.4-2024", "content_type": "table", "table_no": "6"},
+            {"standard_no": "GB 20052-2024", "content_type": "table", "table_no": "1"}
+          ]
+        }
+      ]
+    },
+    "hbjc-4-r2": {
+      "required_groups": [
+        {
+          "group_id": "no_load_current_limit",
+          "alternatives": [
+            {"standard_no": "Q/GDW 12126.4-2024", "content_type": "table", "table_no": "6"}
+          ]
+        },
+        {
+          "group_id": "no_load_current_tolerance",
+          "alternatives": [
+            {"standard_no": "GB/T 1094.1-2013", "content_type": "table", "table_no": "1"},
+            {"standard_no": "JB/T 501-2021", "content_type": "section", "section": "5.3"}
+          ]
+        }
+      ]
+    },
+    "hbjc-5-r1": {
+      "required_groups": [
+        {
+          "group_id": "load_loss_limit",
+          "alternatives": [
+            {"standard_no": "Q/GDW 12126.4-2024", "content_type": "table", "table_no": "6"},
+            {"standard_no": "GB 20052-2024", "content_type": "table", "table_no": "1"}
+          ]
+        }
+      ]
+    },
+    "hbjc-7-r1": {
+      "required_groups": [
+        {
+          "group_id": "applied_voltage_value",
+          "alternatives": [
+            {"standard_no": "GB/T 1094.3-2017", "content_type": "table", "table_no": "2"}
+          ]
+        }
+      ]
+    },
+    "hbjc-14-r1": {
+      "required_groups": [
+        {
+          "group_id": "lightning_impulse_voltage",
+          "alternatives": [
+            {"standard_no": "GB/T 1094.3-2017", "content_type": "table", "table_no": "2"}
+          ]
+        },
+        {
+          "group_id": "lightning_impulse_waveform",
+          "alternatives": [
+            {"standard_no": "GB/T 1094.3-2017", "content_type": "section", "section": "13.2"}
+          ]
+        }
+      ]
+    },
+    "hbjc-5-r3": {
+      "required_groups": [
+        {
+          "group_id": "loss_components",
+          "alternatives": [
+            {"standard_no": "Q/GDW 12126.4-2024", "content_type": "table", "table_no": "6"},
+            {"standard_no": "GB 20052-2024", "content_type": "table", "table_no": "1"}
+          ]
+        },
+        {
+          "group_id": "total_loss_sum_rule",
+          "alternatives": [
+            {"standard_no": "GB/T 1094.2-2013", "content_type": "section", "section": "7.3"}
+          ]
+        }
+      ]
+    },
+    "hbjc-6-r4": {
+      "required_groups": [
+        {
+          "group_id": "induced_voltage_duration_rule",
+          "alternatives": [
+            {"standard_no": "GB/T 1094.3-2017", "content_type": "section", "section": "11.2"}
+          ]
+        }
+      ]
+    },
+    "hbjc-15-5-r1": {
+      "required_groups": [
+        {
+          "group_id": "repeat_load_loss_limit",
+          "alternatives": [
+            {"standard_no": "Q/GDW 12126.4-2024", "content_type": "table", "table_no": "6"},
+            {"standard_no": "GB 20052-2024", "content_type": "table", "table_no": "1"}
+          ]
+        }
+      ]
+    },
+    "hbjc-13-r4": {
+      "evaluation_status": "context_required",
+      "missing_context_fields": ["winding_structure"]
+    },
+    "hbjc-9-r3": {
+      "evaluation_status": "context_required",
+      "missing_context_fields": ["tank_structure_type"]
+    }
+  }
+}

@@ -43,6 +43,14 @@ construction for the 2% reactance-change rule. They intentionally remain
 uncertain instead of being forced into gold. Gold-discovery queries are never
 valid evaluated retrieval inputs.
 
+`retrieval_evidence_groups_hbjc_v1.json` defines the evidence contract for the
+10-case HBJC end-to-end trial. Alternatives inside one group are OR-equivalent;
+all required groups for a case are AND-required. Cases whose applicability
+depends on report attributes absent from the extraction schema are reported as
+`context_required` and excluded from retrieval-recall denominators. This avoids
+both undercounting equivalent standard tables and overstating recall for
+multi-chunk evidence chains.
+
 `retrieval_seed_cases_v1.json` defines eight HBJC retrieval seeds. Each case has
 one production-style query plus semantic and keyword rewrites. Candidate
 generation retrieves Top 20 tables and Top 10 sections independently for each
