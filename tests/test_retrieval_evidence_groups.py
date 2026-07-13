@@ -51,3 +51,22 @@ def test_missing_one_required_group_makes_case_incomplete() -> None:
     result = evaluate_groups(candidates, groups)
     assert result["recalled_group_count"] == 1
     assert result["all_required_groups_recalled"] is False
+
+
+def test_manual_rule_can_satisfy_required_group() -> None:
+    result = evaluate_groups(
+        candidates=[],
+        groups=[
+            {
+                "group_id": "total_loss_sum_rule",
+                "alternatives": [
+                    {"manual_rule_id": "transformer_total_loss_sum_v1"}
+                ],
+            }
+        ],
+        manual_rule_ids={"transformer_total_loss_sum_v1"},
+    )
+
+    assert result["recalled_group_count"] == 1
+    assert result["all_required_groups_recalled"] is True
+    assert result["groups"][0]["matched_manual_rules"] == ["transformer_total_loss_sum_v1"]

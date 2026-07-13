@@ -80,7 +80,8 @@
         {
           "group_id": "total_loss_sum_rule",
           "alternatives": [
-            {"standard_no": "GB/T 1094.2-2013", "content_type": "section", "section": "7.3"}
+            {"standard_no": "GB/T 1094.2-2013", "content_type": "section", "section": "7.3"},
+            {"manual_rule_id": "transformer_total_loss_sum_v1"}
           ]
         }
       ]
@@ -107,8 +108,14 @@
       ]
     },
     "hbjc-13-r4": {
-      "evaluation_status": "context_required",
-      "missing_context_fields": ["winding_structure"]
+      "required_groups": [
+        {
+          "group_id": "short_circuit_reactance_change_limit",
+          "alternatives": [
+            {"standard_no": "Q/GDW 12126.4-2024", "content_type": "table", "table_no": "29"}
+          ]
+        }
+      ]
     },
     "hbjc-9-r3": {
       "evaluation_status": "context_required",

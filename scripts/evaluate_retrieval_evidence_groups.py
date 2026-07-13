@@ -23,6 +23,8 @@ DEFAULT_OUTPUT = BACKEND / "data" / "reports" / "hbjc_retrieval_group_eval_v1.js
 
 
 def selector_matches(candidate: dict[str, Any], selector: dict[str, str]) -> bool:
+    if "manual_rule_id" in selector:
+        return False
     metadata = candidate["business_metadata"]
     if candidate["content_type"] != selector["content_type"]:
         return False
@@ -33,12 +35,26 @@ def selector_matches(candidate: dict[str, Any], selector: dict[str, str]) -> boo
     )
 
 
-def evaluate_groups(candidates: list[dict[str, Any]], groups: list[dict[str, Any]]) -> dict[str, Any]:
+def evaluate_groups(
+    candidates: list[dict[str, Any]],
+    groups: list[dict[str, Any]],
+    manual_rule_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    manual_rule_ids = manual_rule_ids or set()
     results = []
     for group in groups:
         matched = []
+        matched_manual_rules = []
         for alternative in group["alternatives"]:
-            hits = [candidate for candidate in candidates if selector_matches(candidate, alternative)]
+            if "manual_rule_id" in alternative:
+                rule_id = alternative["manual_rule_id"]
+                if rule_id in manual_rule_ids:
+                    matched_manual_rules.append(rule_id)
+                continue
+            hits = [
+                candidate for candidate in candidates
+                if selector_matches(candidate, alternative)
+            ]
             if hits:
                 matched.append({
                     "alternative": alternative,
@@ -46,8 +62,9 @@ def evaluate_groups(candidates: list[dict[str, Any]], groups: list[dict[str, Any
                 })
         results.append({
             "group_id": group["group_id"],
-            "recalled": bool(matched),
+            "recalled": bool(matched or matched_manual_rules),
             "matched_alternatives": matched,
+            "matched_manual_rules": matched_manual_rules,
         })
     return {
         "required_group_count": len(results),
@@ -81,7 +98,16 @@ def main() -> None:
         candidates.sort(key=lambda item: item["rrf_score"], reverse=True)
         for rank, candidate in enumerate(candidates, start=1):
             candidate["candidate_key"] = f"c{rank:02d}"
-        evaluated = evaluate_groups(candidates, definition["required_groups"])
+        manual_rule_ids = {
+            rule.get("rule_id")
+            for rule in case.get("manual_knowledge_rules", {}).get("rules", [])
+            if rule.get("rule_id")
+        }
+        evaluated = evaluate_groups(
+            candidates,
+            definition["required_groups"],
+            manual_rule_ids=manual_rule_ids,
+        )
         results.append({"case_id": case["case_id"], "evaluation_status": "evaluated", **evaluated})
         print(f"evaluated {index}/{len(workflow['cases'])} {case['case_id']}: {evaluated['recalled_group_count']}/{evaluated['required_group_count']}", flush=True)
 
@@ -90,7 +116,7 @@ def main() -> None:
     recalled_groups = sum(case["recalled_group_count"] for case in evaluated_cases)
     output = {
         "version": 1,
-        "retrieval_policy": "Top 20 per query and content type; RRF; final 10 table + 10 section",
+        "retrieval_policy": "Top 20 per query and content type; RRF; final 20 table + 20 section",
         "summary": {
             "cases": len(results),
             "evaluated_cases": len(evaluated_cases),

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "scope": "knowledge_base_manual_rules",
+  "status": "project_owner_approved_pending_domain_review",
+  "rules": [
+    {
+      "rule_id": "transformer_total_loss_sum_v1",
+      "domain": "transformer_standard_value_audit",
+      "rule_type": "derived_numeric_formula",
+      "rule_text": "在变压器损耗审查中，总损耗 P总 可以按空载损耗 P0 与负载损耗 Pk 之和计算，即 P总 = P0 + Pk。",
+      "applies_when": [
+        "目标审查字段是总损耗、P总、total loss 或等价表述。",
+        "候选标准证据或同报告上下文已经分别给出适用产品的空载损耗 P0 和负载损耗 Pk 数值。",
+        "不存在候选证据表明该报告、标准或试验项目使用不同的总损耗定义。"
+      ],
+      "allowed_use": [
+        "可用于把已确认的 P0 和 Pk 数值派生为 P总。",
+        "可与产品性能参数表、能效表、报告同项/跨项事实一起组成判断链。"
+      ],
+      "not_allowed_use": [
+        "不能提供 P0 或 Pk 的限值来源。",
+        "不能证明某个标准表适用于具体产品。",
+        "不能覆盖候选证据中明确冲突的定义、适用条件或协议要求。"
+      ],
+      "review_note": "这是项目人工规则，不是模型常识，也不是从当前候选 Chunk 临时推断出的规则。后续如有专家复核，应更新 status 或添加 reviewed_by 字段。"
+    }
+  ]
+}

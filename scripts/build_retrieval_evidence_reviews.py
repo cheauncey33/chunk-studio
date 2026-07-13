@@ -29,7 +29,7 @@ DEFAULT_OUTPUT = ROOT / "evaluation" / "retrieval_evidence_candidates_v1.json"
 MODEL = "qwen3.6-27b"
 CONTENT_TYPES = ("table", "section")
 ROUTE_TOP_K = 20
-FINAL_PER_TYPE = 10
+FINAL_PER_TYPE = 20
 RRF_K = 60
 LABELS = {"direct_candidate", "supporting_candidate", "uncertain"}
 
@@ -58,25 +58,102 @@ def _parse_json_object(content: Any) -> dict[str, Any]:
     return parsed
 
 
-def _call_model(system_prompt: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _call_openai_compatible_model(
+    system_prompt: str,
+    payload: dict[str, Any],
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+) -> dict[str, Any]:
+    import httpx
+
+    response = httpx.post(
+        f"{base_url.rstrip('/')}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "stream": False,
+        },
+        timeout=180,
+    )
+    if response.status_code != HTTPStatus.OK:
+        raise RuntimeError(
+            f"model call failed: status={response.status_code} body={response.text[:500]}"
+        )
+    data = response.json()
+    return _parse_json_object(data["choices"][0]["message"]["content"])
+
+
+def _call_model(
+    system_prompt: str,
+    payload: dict[str, Any],
+    *,
+    model: str = MODEL,
+    provider: str = "dashscope",
+    base_url: str | None = None,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    if provider == "openai_compatible":
+        resolved_api_key = (
+            api_key
+            or os.environ.get("DEEPSEEK_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+            or db.get_setting("llm.api_key")
+        )
+        if not resolved_api_key:
+            raise RuntimeError("OpenAI-compatible API key is not configured")
+        return _call_openai_compatible_model(
+            system_prompt,
+            payload,
+            api_key=resolved_api_key,
+            base_url=base_url or os.environ.get("DEEPSEEK_BASE_URL") or "https://api.deepseek.com",
+            model=model,
+        )
+
     api_key = os.environ.get("DASHSCOPE_API_KEY") or db.get_setting("llm.api_key")
     if not api_key:
         raise RuntimeError("DashScope API key is not configured")
-    from dashscope import MultiModalConversation
 
     last_error: Exception | None = None
     for _ in range(2):
-        response = MultiModalConversation.call(
-            api_key=api_key,
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": [{"text": system_prompt}]},
-                {"role": "user", "content": [{"text": json.dumps(payload, ensure_ascii=False)}]},
-            ],
-            result_format="message",
-            enable_thinking=False,
-            temperature=0,
-        )
+        if model == "qwen3.6-27b":
+            from dashscope import MultiModalConversation
+
+            response = MultiModalConversation.call(
+                api_key=api_key,
+                model=model,
+                messages=[
+                    {"role": "system", "content": [{"text": system_prompt}]},
+                    {"role": "user", "content": [{"text": json.dumps(payload, ensure_ascii=False)}]},
+                ],
+                result_format="message",
+                enable_thinking=False,
+                temperature=0,
+            )
+        else:
+            from dashscope import Generation
+
+            response = Generation.call(
+                api_key=api_key,
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                result_format="message",
+                response_format={"type": "json_object"},
+                temperature=0,
+            )
         if response.status_code != HTTPStatus.OK:
             raise RuntimeError(
                 f"model call failed: status={response.status_code} code={response.code} message={response.message}"
@@ -290,7 +367,7 @@ def build_review(
         "source_cases": "evaluation/retrieval_case_pool_v1.json",
         "query_model": MODEL,
         "judge_model": MODEL,
-        "retrieval_policy": "Top 20 per route and content type; RRF merge; final 10 table + 10 section",
+        "retrieval_policy": "Top 20 per route and content type; RRF merge; final 20 table + 20 section",
         "status": "candidate_model_reviewed_pending_domain_review",
         "cases": reviewed,
     }
