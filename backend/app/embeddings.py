@@ -120,6 +120,35 @@ def embed_query_with_dashscope(
     return vector
 
 
+def embed_queries_with_dashscope(
+    queries: list[str], *, model: str = DEFAULT_MODEL, dimension: int = DEFAULT_DIMENSION
+) -> list[list[float]]:
+    if not os.environ.get("DASHSCOPE_API_KEY"):
+        raise RuntimeError("DASHSCOPE_API_KEY is not set")
+    if not 1 <= len(queries) <= MAX_BATCH_SIZE:
+        raise ValueError(f"query batch size must be between 1 and {MAX_BATCH_SIZE}")
+
+    from dashscope import TextEmbedding
+
+    response = TextEmbedding.call(
+        model=model,
+        input=queries,
+        dimension=dimension,
+        text_type="query",
+        output_type="dense",
+    )
+    if response.status_code != HTTPStatus.OK:
+        raise RuntimeError(
+            f"DashScope query embedding failed: status={response.status_code} "
+            f"code={response.code} message={response.message}"
+        )
+    items = sorted(response.output["embeddings"], key=lambda item: item["text_index"])
+    vectors = [item["embedding"] for item in items]
+    if len(vectors) != len(queries) or any(len(vector) != dimension for vector in vectors):
+        raise RuntimeError("DashScope returned an unexpected query embedding count or dimension")
+    return vectors
+
+
 def vector_search(
     query: str,
     *,
@@ -133,6 +162,28 @@ def vector_search(
     if not query:
         raise ValueError("query must not be blank")
     query_vector = query_embedder(query, model=model, dimension=dimension)
+    return vector_search_by_vector(
+        query,
+        query_vector,
+        top_k=top_k,
+        content_type=content_type,
+        model=model,
+        dimension=dimension,
+    )
+
+
+def vector_search_by_vector(
+    query: str,
+    query_vector: list[float],
+    *,
+    top_k: int = 10,
+    content_type: str | None = None,
+    model: str = DEFAULT_MODEL,
+    dimension: int = DEFAULT_DIMENSION,
+) -> dict[str, Any]:
+    query = query.strip()
+    if not query:
+        raise ValueError("query must not be blank")
     if len(query_vector) != dimension:
         raise ValueError("unexpected query vector dimension")
     query_norm = math.sqrt(sum(value * value for value in query_vector))

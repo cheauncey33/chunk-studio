@@ -117,6 +117,9 @@ class VectorSearchRequest(BaseModel):
 class VectorSearchHit(BaseModel):
     chunk_id: str
     score: float
+    rerank_score: float | None = None
+    rrf_score: float | None = None
+    route_ranks: dict[str, int] = Field(default_factory=dict)
     file_id: str
     file_name: str
     page: int
@@ -131,6 +134,11 @@ class VectorSearchResponse(BaseModel):
     model: str
     dimension: int
     total_candidates: int
+    candidate_count: int = 0
+    retrieval_mode: str = "dense"
+    query_routes: dict[str, str] = Field(default_factory=dict)
+    rerank_model: str | None = None
+    degraded: list[str] = Field(default_factory=list)
     hits: list[VectorSearchHit]
 
 
