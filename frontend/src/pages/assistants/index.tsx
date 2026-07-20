@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bot, ChevronDown, ChevronRight, Plus } from 'lucide-react'
 import { toast } from 'sonner'
@@ -480,7 +480,7 @@ function AssistantRetrieval({
       <CardHeader>
         <CardTitle>检索参数</CardTitle>
         <CardDescription>
-          这些参数随助手版本保存。点击右上角“保存为新版本”后生效；当前 v{version.version} 不会被覆盖。
+          仅作用于当前助手：随版本快照保存，不同助手互不影响。点右上角「保存为新版本」后生效，不会覆盖当前 v{version.version}。
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3 sm:grid-cols-2">
@@ -501,7 +501,7 @@ function AssistantRetrieval({
           <Input type="number" step={0.05} value={Number(config.vector_weight || 0.7)} onChange={e => update('vector_weight', Number(e.target.value))} />
         </div>
         <p className="sm:col-span-2 text-sm text-text-secondary">
-          也可在 <Link className="text-accent-primary" to="/settings">全局设置</Link> 中调整默认检索开关。
+          双路 Dense+FTS5 等系统级开关在「设置」里；这里只配本助手的召回数量、阈值与权重。
         </p>
       </CardContent>
     </Card>

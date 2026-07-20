@@ -44,7 +44,7 @@ export default function RunsPage() {
             </p>
           )}
           <div className="run-history-embed overflow-hidden rounded-xl border border-border-button bg-bg-base">
-            <AuditPage />
+            <AuditPage embedded />
           </div>
         </CardContent>
       </Card>
