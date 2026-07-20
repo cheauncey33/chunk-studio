@@ -1,0 +1,206 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-bg-base: var(--bg-base);
+  --color-bg-card: var(--bg-card);
+  --color-bg-component: var(--bg-component);
+  --color-bg-input: var(--bg-input);
+  --color-bg-canvas: rgb(var(--bg-canvas));
+  --color-bg-list: rgb(var(--bg-list));
+  --color-bg-accent: var(--bg-accent);
+  --color-bg-highlight: var(--background-highlight);
+  --color-text-primary: rgb(var(--text-primary));
+  --color-text-secondary: rgb(var(--text-secondary));
+  --color-text-disabled: var(--text-disabled);
+  --color-border-default: var(--border-default);
+  --color-border-button: var(--border-button);
+  --color-accent-primary: rgb(var(--accent-primary));
+  --color-state-success: rgb(var(--state-success));
+  --color-state-warning: rgb(var(--state-warning));
+  --color-state-error: rgb(var(--state-error));
+  --color-background: var(--background);
+  --color-foreground: hsl(var(--foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-popover: var(--popover);
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-card: var(--card);
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: hsl(var(--ring));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  color-scheme: light;
+  --background: #ffffff;
+  --foreground: 222 22 24;
+  --muted: 210 20% 96%;
+  --muted-foreground: 215 12% 47%;
+  --popover: #ffffff;
+  --popover-foreground: 222 22 24;
+  --card: #ffffff;
+  --card-foreground: 222 22 24;
+  --primary: 177 100% 37%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 210 20% 96%;
+  --secondary-foreground: 222 22 24;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --border: rgba(0, 0, 0, 0.1);
+  --input: rgba(0, 0, 0, 0.05);
+  --ring: 177 100% 37%;
+  --accent: 210 20% 96%;
+  --accent-foreground: 222 22 24;
+  --radius: 0.5rem;
+
+  --bg-title: #f6f6f7;
+  --bg-base: #ffffff;
+  --bg-card: rgba(0, 0, 0, 0.05);
+  --bg-component: #ffffff;
+  --bg-input: rgba(0, 0, 0, 0.05);
+  --bg-canvas: 246 246 247;
+  --bg-list: 246 246 247;
+  --text-primary: 22 22 24;
+  --text-secondary: 117 120 122;
+  --text-disabled: #b2b5b7;
+  --border-default: rgba(0, 0, 0, 0.2);
+  --border-button: rgba(0, 0, 0, 0.1);
+  --accent-primary: 0 190 180;
+  --bg-accent: rgba(76, 164, 231, 0.05);
+  --background-highlight: rgba(76, 164, 231, 0.1);
+  --state-success: 59 160 92;
+  --state-warning: 250 173 20;
+  --state-error: 216 73 75;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: #161618;
+  --foreground: 213 31% 91%;
+  --muted: 223 47% 11%;
+  --muted-foreground: 215.4 16.3% 56.9%;
+  --popover: #202025;
+  --popover-foreground: 213 31% 91%;
+  --card: #202025;
+  --card-foreground: 213 31% 91%;
+  --primary: 177 100% 37%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 222.2 47.4% 11.2%;
+  --secondary-foreground: 210 40% 98%;
+  --destructive: 0 63% 31%;
+  --destructive-foreground: 210 40% 98%;
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.05);
+  --ring: 177 100% 37%;
+  --accent: 216 34% 17%;
+  --accent-foreground: 210 40% 98%;
+
+  --bg-title: #38383a;
+  --bg-base: #161618;
+  --bg-card: rgba(255, 255, 255, 0.05);
+  --bg-component: #202025;
+  --bg-input: rgba(255, 255, 255, 0.05);
+  --bg-canvas: 0 0 0;
+  --bg-list: 56 56 58;
+  --text-primary: 246 246 247;
+  --text-secondary: 178 181 183;
+  --text-disabled: #6b6e70;
+  --border-default: rgba(255, 255, 255, 0.2);
+  --border-button: rgba(255, 255, 255, 0.1);
+  --accent-primary: 0 190 180;
+  --bg-accent: rgba(76, 164, 231, 0.1);
+  --background-highlight: rgba(76, 164, 231, 0.1);
+  --state-success: 59 160 92;
+  --state-warning: 250 173 20;
+  --state-error: 216 73 75;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  color: rgb(var(--text-primary));
+  background: rgb(var(--bg-canvas));
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+/* Bridge legacy App.css variables used by PageViewer / ChunkEditor / Audit */
+:root {
+  --bg: rgb(var(--bg-canvas));
+  --panel: var(--bg-base);
+  --panel-2: var(--bg-card);
+  --text: rgb(var(--text-primary));
+  --muted: rgb(var(--text-secondary));
+  --border: var(--border-button);
+  --accent: rgb(var(--accent-primary));
+  --accent-soft: var(--bg-accent);
+}
+
+.chunk-studio-viewer {
+  height: 100%;
+  min-height: 0;
+}
+
+.chunk-studio-viewer .page-viewer {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.chunk-studio-viewer .page-viewer img {
+  height: 100%;
+  max-width: 100%;
+  width: auto;
+  object-fit: contain;
+}
+
+.chunk-studio-list .chunk-list,
+.chunk-studio-editor {
+  color: rgb(var(--text-primary));
+}
+
+.metadata-embed .metadata-page,
+.run-history-embed .audit-page,
+.run-history-embed {
+  min-height: 480px;
+}
+
+/* Soften nested headings inside embeds that already have page titles */
+.run-history-embed .topbar,
+.metadata-embed > .topbar {
+  display: none;
+}
