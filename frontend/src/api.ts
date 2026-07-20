@@ -151,6 +151,11 @@ export interface FieldConfig {
 export interface VectorSearchHit {
   chunk_id: string
   score: number
+  rerank_score?: number | null
+  rrf_score?: number | null
+  route_ranks?: Record<string, number>
+  retrieval_sources?: string[]
+  source_ranks?: Record<string, number>
   file_id: string
   file_name: string
   page: number
@@ -165,7 +170,69 @@ export interface VectorSearchResponse {
   model: string
   dimension: number
   total_candidates: number
+  candidate_count?: number
+  retrieval_mode?: string
+  query_routes?: Record<string, string>
+  rerank_model?: string | null
+  degraded?: string[]
   hits: VectorSearchHit[]
+}
+
+export interface KnowledgeBase {
+  id: string
+  name: string
+  description: string
+  status: 'active' | 'archived'
+  is_default: boolean
+  parser_config: Record<string, unknown>
+  retrieval_config: Record<string, unknown>
+  file_count: number
+  chunk_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface KnowledgeBaseFile extends CSFile {
+  role: 'source' | 'reference'
+  enabled: boolean
+  chunk_count: number
+}
+
+export interface KnowledgeBaseChunk {
+  id: string
+  file_id: string
+  file_name: string
+  page: number
+  text: string
+  status: ChunkStatus
+  business_metadata: Record<string, unknown>
+  source_trace: Record<string, unknown>
+  updated_at: string
+}
+
+export interface AuditAssistant {
+  id: string
+  name: string
+  description: string
+  status: 'draft' | 'active' | 'archived'
+  active_version_id: string | null
+  active_version: number | null
+  knowledge_bases: Array<{ id: string; name: string }>
+  created_at: string
+  updated_at: string
+}
+
+export interface AssistantVersion {
+  id: string
+  assistant_id: string
+  version: number
+  status: 'draft' | 'active' | 'retired'
+  model_config: Record<string, unknown>
+  node_prompts: Record<string, { path?: string; content?: string }>
+  rules: Record<string, unknown>
+  retrieval_config: Record<string, unknown>
+  created_at: string
+  activated_at: string | null
 }
 
 export interface AuditReportListItem {
@@ -198,6 +265,32 @@ export interface ManualKnowledgeRules {
   scope: string
   status: string
   rules: Array<Record<string, unknown>>
+}
+
+export interface AuditWorkflowPrompt {
+  path: string
+  content: string
+  source: 'recorded_report' | 'current_repository'
+}
+
+export interface AuditWorkflowNode {
+  id: string
+  label: string
+  kind: 'llm' | 'retrieval' | 'diagnostic'
+  diagnostic_only: boolean
+  configuration: Record<string, unknown>
+  prompt: AuditWorkflowPrompt | null
+  input: unknown
+  output: unknown
+  note: string
+}
+
+export interface AuditWorkflowTrace {
+  version: number
+  case_id: string
+  trace_source: 'recorded' | 'reconstructed'
+  warnings: string[]
+  nodes: AuditWorkflowNode[]
 }
 
 export interface LexicalIndexStatus {
@@ -256,6 +349,75 @@ async function j<T>(res: Response): Promise<T> {
 }
 
 export const api = {
+  listKnowledgeBases: () =>
+    fetch(`${API}/knowledge-bases`).then(j<KnowledgeBase[]>),
+  createKnowledgeBase: (body: { name: string; description: string }) =>
+    fetch(`${API}/knowledge-bases`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<KnowledgeBase>),
+  updateKnowledgeBase: (
+    id: string,
+    body: Partial<Pick<KnowledgeBase, 'name' | 'description' | 'retrieval_config'>>,
+  ) =>
+    fetch(`${API}/knowledge-bases/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<KnowledgeBase>),
+  listKnowledgeBaseFiles: (id: string) =>
+    fetch(`${API}/knowledge-bases/${id}/files`).then(j<KnowledgeBaseFile[]>),
+  addFileToKnowledgeBase: (knowledgeBaseId: string, fileId: string) =>
+    fetch(`${API}/knowledge-bases/${knowledgeBaseId}/files/${fileId}`, {
+      method: 'PUT',
+    }).then(j<{ ok: boolean }>),
+  listKnowledgeBaseChunks: (id: string, limit = 100, offset = 0) =>
+    fetch(`${API}/knowledge-bases/${id}/chunks?limit=${limit}&offset=${offset}`)
+      .then(j<KnowledgeBaseChunk[]>),
+  testKnowledgeBaseRetrieval: (
+    id: string,
+    body: {
+      query: string
+      top_k: number
+      similarity_threshold: number
+      keyword_weight?: number
+      content_type?: string
+    },
+  ) =>
+    fetch(`${API}/knowledge-bases/${id}/retrieval-test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<VectorSearchResponse & { knowledge_base_id: string; scoped_file_count: number }>),
+
+  listAssistants: () => fetch(`${API}/assistants`).then(j<AuditAssistant[]>),
+  createAssistant: (body: { name: string; description: string }) =>
+    fetch(`${API}/assistants`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<AuditAssistant>),
+  getActiveAssistantVersion: (id: string) =>
+    fetch(`${API}/assistants/${id}/versions/active`).then(j<AssistantVersion>),
+  listAssistantVersions: (id: string) =>
+    fetch(`${API}/assistants/${id}/versions`).then(j<AssistantVersion[]>),
+  createAssistantVersion: (
+    id: string,
+    body: Pick<AssistantVersion, 'model_config' | 'node_prompts' | 'rules' | 'retrieval_config'>,
+  ) =>
+    fetch(`${API}/assistants/${id}/versions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, activate: true }),
+    }).then(j<AssistantVersion>),
+  setAssistantKnowledgeBases: (id: string, knowledgeBaseIds: string[]) =>
+    fetch(`${API}/assistants/${id}/knowledge-bases`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ knowledge_base_ids: knowledgeBaseIds }),
+    }).then(j<AuditAssistant>),
+
   listFiles: () => fetch(`${API}/files`).then(j<CSFile[]>),
   uploadFile: (file: File, metadata: Record<string, unknown> = {}) => {
     const fd = new FormData()
@@ -393,6 +555,9 @@ export const api = {
   listAuditReports: () => fetch(`${API}/audit/reports`).then(j<AuditReportListResponse>),
   getAuditReport: (name: string) =>
     fetch(`${API}/audit/reports/${encodeURIComponent(name)}`).then(j<AuditReportDetail>),
+  getAuditWorkflow: (name: string, caseId: string) =>
+    fetch(`${API}/audit/reports/${encodeURIComponent(name)}/workflow/${encodeURIComponent(caseId)}`)
+      .then(j<AuditWorkflowTrace>),
   getManualKnowledgeRules: () =>
     fetch(`${API}/audit/manual-rules`).then(j<ManualKnowledgeRules>),
   getLexicalIndexStatus: () =>
