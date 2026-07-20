@@ -3,6 +3,8 @@ import {
   api,
   type AuditReportDetail,
   type AuditReportListItem,
+  type AuditWorkflowNode,
+  type AuditWorkflowTrace,
   type LexicalIndexStatus,
   type ManualKnowledgeRules,
   type RetrievalShadowRun,
@@ -32,12 +34,14 @@ export function AuditPage() {
   const [selectedReportName, setSelectedReportName] = useState('')
   const [selectedCaseId, setSelectedCaseId] = useState('')
   const [report, setReport] = useState<AuditReportDetail | null>(null)
+  const [workflow, setWorkflow] = useState<AuditWorkflowTrace | null>(null)
   const [manualRules, setManualRules] = useState<ManualKnowledgeRules | null>(null)
   const [lexicalStatus, setLexicalStatus] = useState<LexicalIndexStatus | null>(null)
   const [shadowRuns, setShadowRuns] = useState<RetrievalShadowRun[]>([])
   const [filter, setFilter] = useState<ReportFilter>('end_to_end_audit')
   const [loadingReports, setLoadingReports] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
+  const [loadingWorkflow, setLoadingWorkflow] = useState(false)
   const [error, setError] = useState('')
 
   const refreshReports = useCallback(async () => {
@@ -117,12 +121,37 @@ export function AuditPage() {
     cases.find(item => caseId(item) === selectedCaseId) || cases[0] || null
   ), [cases, selectedCaseId])
 
+  useEffect(() => {
+    if (!report || !selectedCaseId || report.kind !== 'end_to_end_audit') {
+      setWorkflow(null)
+      return
+    }
+    let active = true
+    setLoadingWorkflow(true)
+    api.getAuditWorkflow(report.name, selectedCaseId)
+      .then(value => {
+        if (active) setWorkflow(value)
+      })
+      .catch(err => {
+        if (active) {
+          setWorkflow(null)
+          setError((err as Error).message)
+        }
+      })
+      .finally(() => {
+        if (active) setLoadingWorkflow(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [report, selectedCaseId])
+
   return (
     <main className="audit-page">
       <div className="audit-shell">
         <header className="audit-heading">
           <div>
-            <h2>评测审查</h2>
+            <h2>运行记录</h2>
             <p>查看本地 workflow 输出、case 判定、证据链和人工知识库规则。</p>
           </div>
           <button type="button" onClick={refreshReports} disabled={loadingReports}>
@@ -138,6 +167,10 @@ export function AuditPage() {
         )}
 
         <ShadowMonitor status={lexicalStatus} runs={shadowRuns} />
+
+        {report?.kind === 'end_to_end_audit' && (
+          <WorkflowTraceView trace={workflow} loading={loadingWorkflow} />
+        )}
 
         <div className="audit-layout">
           <aside className="audit-sidebar">
@@ -216,6 +249,120 @@ export function AuditPage() {
       </div>
     </main>
   )
+}
+
+function WorkflowTraceView({ trace, loading }: {
+  trace: AuditWorkflowTrace | null
+  loading: boolean
+}) {
+  const [selectedNodeId, setSelectedNodeId] = useState('')
+  const selectedNode = trace?.nodes.find(node => node.id === selectedNodeId)
+    || trace?.nodes[0]
+    || null
+
+  useEffect(() => {
+    if (!trace?.nodes.length) {
+      setSelectedNodeId('')
+      return
+    }
+    if (!trace.nodes.some(node => node.id === selectedNodeId)) {
+      setSelectedNodeId(trace.nodes[0].id)
+    }
+  }, [selectedNodeId, trace])
+
+  if (loading) {
+    return <section className="workflow-trace loading"><strong>正在还原流程节点…</strong></section>
+  }
+  if (!trace || !selectedNode) return null
+
+  return (
+    <section className="workflow-trace" aria-label="端到端流程可视化">
+      <header className="workflow-trace-head">
+        <div>
+          <h3>端到端流程</h3>
+          <p>点击节点查看该次运行的配置、提示词、输入和输出。</p>
+        </div>
+        <span className={`workflow-source ${trace.trace_source}`}>
+          {trace.trace_source === 'recorded' ? '运行时 trace' : '旧报告还原'}
+        </span>
+      </header>
+
+      {trace.warnings.length > 0 && (
+        <div className="workflow-warnings">
+          {trace.warnings.map(warning => <span key={warning}>{warning}</span>)}
+        </div>
+      )}
+
+      <div className="workflow-node-track">
+        {trace.nodes.map((node, index) => (
+          <div className="workflow-node-step" key={node.id}>
+            <button
+              type="button"
+              className={`workflow-node ${selectedNode.id === node.id ? 'selected' : ''} ${node.kind}`}
+              onClick={() => setSelectedNodeId(node.id)}
+              aria-pressed={selectedNode.id === node.id}
+            >
+              <small>{String(index + 1).padStart(2, '0')}</small>
+              <strong>{node.label}</strong>
+              <span>{nodeKindLabel(node)}</span>
+            </button>
+            {index < trace.nodes.length - 1 && <i aria-hidden="true">→</i>}
+          </div>
+        ))}
+      </div>
+
+      <NodeInspector node={selectedNode} />
+    </section>
+  )
+}
+
+function NodeInspector({ node }: { node: AuditWorkflowNode }) {
+  return (
+    <div className="workflow-inspector">
+      <header>
+        <div>
+          <strong>{node.label}</strong>
+          <span>{node.note}</span>
+        </div>
+        {node.diagnostic_only && <em>诊断节点 · 不输入模型</em>}
+      </header>
+      <div className="workflow-inspector-grid">
+        <JsonPanel title="配置" value={node.configuration} />
+        <JsonPanel
+          title="提示词"
+          value={node.prompt?.content || '此节点没有 LLM 提示词。'}
+          meta={node.prompt ? `${node.prompt.path} · ${node.prompt.source === 'recorded_report' ? '报告快照' : '当前仓库'}` : ''}
+        />
+        <JsonPanel title="输入" value={node.input} />
+        <JsonPanel title="输出" value={node.output} />
+      </div>
+    </div>
+  )
+}
+
+function JsonPanel({ title, value, meta = '' }: {
+  title: string
+  value: unknown
+  meta?: string
+}) {
+  const content = typeof value === 'string'
+    ? value
+    : JSON.stringify(value ?? null, null, 2)
+  return (
+    <section className="workflow-json-panel">
+      <header>
+        <strong>{title}</strong>
+        {meta && <span>{meta}</span>}
+      </header>
+      <pre>{content}</pre>
+    </section>
+  )
+}
+
+function nodeKindLabel(node: AuditWorkflowNode): string {
+  if (node.diagnostic_only) return 'diagnostic only'
+  if (node.kind === 'retrieval') return 'deterministic retrieval'
+  return 'DeepSeek'
 }
 
 function ShadowMonitor({ status, runs }: {

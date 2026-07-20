@@ -29,21 +29,14 @@ export function SettingsPage() {
   return (
     <div className="settings">
       <h3>设置</h3>
-      <p className="muted">LLM 走 OpenAI 兼容接口。OCR 是通用 HTTP 适配器（MinerU / PaddleOCR 均可配）。
+      <p className="muted">生成式 LLM 使用 DeepSeek。Embedding 与 Reranker 继续使用 Qwen/DashScope，密钥由后端环境变量管理。OCR 是通用 HTTP 适配器（MinerU / PaddleOCR 均可配）。
         注意：MinerU 桌面版大概率只收整篇 PDF，区域 OCR 推荐指向 PaddleOCR/RapidOCR。</p>
 
-      <h4>LLM 抽取</h4>
-      <Field k="llm.base_url" label="Base URL" />
-      <Field k="llm.api_key" label="API Key" type="password" />
-      <Field k="llm.model" label="Model" />
-      <div className="field">
-        <label>响应格式</label>
-        <select value={s['llm.response_format'] || 'json_object'} onChange={e => set('llm.response_format', e.target.value)}>
-          <option value="json_schema">json_schema (优先, enum 约束)</option>
-          <option value="json_object">json_object</option>
-          <option value="plain">plain (解析)</option>
-        </select>
-      </div>
+      <h4>生成式 LLM（DeepSeek）</h4>
+      <Field k="llm.base_url" label="Base URL（默认 https://api.deepseek.com）" />
+      <Field k="llm.api_key" label="DeepSeek API Key" type="password" />
+      <Field k="llm.model" label="模型（默认 deepseek-v4-flash）" />
+      <p className="muted">固定使用 JSON Object 响应，并关闭 thinking；当前不提供其他 Provider 或响应格式切换。</p>
 
       <h4>OCR / MinerU 云端解析</h4>
       <p className="muted">手动框选切片时，若 PDF 内嵌文本不可用，将同步调用 MinerU 云端解析（裁剪图 → 1 页 PDF → 返回 markdown）。
