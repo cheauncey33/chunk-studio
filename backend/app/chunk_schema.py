@@ -34,9 +34,8 @@ BUSINESS_METADATA_KEYS = {
     "section_level",
     "section_path",
     "tags",
-    "summary",
     "keywords",
-    "scope",
+    "questions",
 }
 
 SOURCE_TRACE_KEYS = {

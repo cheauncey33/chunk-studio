@@ -29,7 +29,7 @@ def extract_chunk(chunk_id: str, body: KeywordExtractRequest):
 
 def _extract(**kwargs):
     try:
-        return keyword_extraction.extract_keywords(**kwargs)
+        return keyword_extraction.extract_suggestions(**kwargs)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:

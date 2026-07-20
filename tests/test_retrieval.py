@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from http import HTTPStatus
+from types import SimpleNamespace
 import sys
 
 import pytest
@@ -75,6 +77,7 @@ def test_hybrid_search_uses_typed_rrf_candidates_then_reranker() -> None:
         batch_embedder=batch_embedder,
         vector_searcher=vector_searcher,
         reranker=reranker,
+        lexical_enabled=False,
     )
 
     assert embed_calls == [[query, planned["semantic"], planned["keyword"]]]
@@ -83,7 +86,7 @@ def test_hybrid_search_uses_typed_rrf_candidates_then_reranker() -> None:
     assert result["query_routes"] == {"production": query, **planned}
     assert result["candidate_count"] == 3
     assert result["total_candidates"] == 3
-    assert result["retrieval_mode"] == "hybrid_rerank"
+    assert result["retrieval_mode"] == "dense_rerank"
     assert result["degraded"] == []
     assert [hit["chunk_id"] for hit in result["hits"]] == ["a", "c"]
     assert result["hits"][0]["rerank_score"] == 0.99
@@ -114,11 +117,12 @@ def test_hybrid_search_falls_back_to_original_query_when_rewrite_fails() -> None
         batch_embedder=lambda queries, **kwargs: [[1.0] * embeddings.DEFAULT_DIMENSION],
         vector_searcher=vector_searcher,
         reranker=lambda query, documents, top_n: [(0, 0.9)],
+        lexical_enabled=False,
     )
 
     assert result["query_routes"] == {"production": query}
     assert result["degraded"] == ["query_rewrite_failed"]
-    assert result["retrieval_mode"] == "hybrid_rerank"
+    assert result["retrieval_mode"] == "dense_rerank"
     assert [hit["chunk_id"] for hit in result["hits"]] == ["a"]
 
 
@@ -149,14 +153,103 @@ def test_hybrid_search_falls_back_to_rrf_when_reranker_fails() -> None:
         ],
         vector_searcher=vector_searcher,
         reranker=fail_reranker,
+        lexical_enabled=False,
     )
 
-    assert result["retrieval_mode"] == "rrf_fallback"
+    assert result["retrieval_mode"] == "dense_rrf_fallback"
     assert result["rerank_model"] is None
     assert result["degraded"] == ["rerank_failed"]
     assert [hit["chunk_id"] for hit in result["hits"]] == ["b"]
     assert result["hits"][0]["rerank_score"] is None
     assert result["hits"][0]["route_ranks"] == {"semantic": 1, "keyword": 1}
+
+
+def test_hybrid_search_merges_dense_and_lexical_candidates_before_rerank() -> None:
+    query = "200 kVA 空载损耗"
+    planned = {"semantic": "200 kVA变压器空载损耗标准证据", "keyword": "200 kVA 空载损耗 kW"}
+    lexical_calls: list[tuple[str, str, int, bool]] = []
+
+    def vector_searcher(route_query: str, vector: list[float], **kwargs):
+        content_type = kwargs["content_type"]
+        if content_type == "section":
+            return {"total_candidates": 1, "hits": []}
+        return {
+            "total_candidates": 3,
+            "hits": [
+                _hit("shared", 0.9, content_type="table", text="shared document"),
+                _hit("dense-only", 0.8, content_type="table", text="dense document"),
+            ],
+        }
+
+    def lexical_searcher(route_query: str, **kwargs):
+        lexical_calls.append((route_query, kwargs["content_type"], kwargs["top_k"], kwargs["sync"]))
+        if kwargs["content_type"] == "section":
+            return {"hits": []}
+        return {
+            "hits": [
+                _hit("shared", 12.0, content_type="table", text="shared document"),
+                _hit("lexical-only", 10.0, content_type="table", text="lexical document"),
+            ]
+        }
+
+    rerank_documents_seen: list[str] = []
+
+    def reranker(original_query: str, documents: list[str], top_n: int):
+        rerank_documents_seen.extend(documents)
+        return [(index, 1.0 - index / 10) for index in range(top_n)]
+
+    result = retrieval.hybrid_search(
+        query,
+        top_k=3,
+        planner=lambda value: planned,
+        batch_embedder=lambda queries, **kwargs: [
+            [float(index)] * embeddings.DEFAULT_DIMENSION for index, _ in enumerate(queries, 1)
+        ],
+        vector_searcher=vector_searcher,
+        lexical_searcher=lexical_searcher,
+        lexical_enabled=True,
+        reranker=reranker,
+    )
+
+    assert len(lexical_calls) == 4
+    assert {call[0] for call in lexical_calls} == {query, planned["keyword"]}
+    assert all(call[2] == retrieval.ROUTE_TOP_K for call in lexical_calls)
+    assert [call[3] for call in lexical_calls] == [True, False, False, False]
+    assert result["retrieval_mode"] == "dual_rerank"
+    assert result["candidate_count"] == 3
+    assert len(rerank_documents_seen) == 3
+    shared = next(hit for hit in result["hits"] if hit["chunk_id"] == "shared")
+    assert shared["retrieval_sources"] == ["dense", "lexical"]
+    assert set(shared["source_ranks"]) == {
+        "dense:production", "dense:semantic", "dense:keyword",
+        "lexical:production", "lexical:keyword",
+    }
+
+
+def test_hybrid_search_falls_back_to_dense_when_lexical_fails() -> None:
+    query = "原始查询"
+    result = retrieval.hybrid_search(
+        query,
+        planner=lambda value: {"semantic": "语义查询", "keyword": "关键词查询"},
+        batch_embedder=lambda queries, **kwargs: [
+            [float(index)] * embeddings.DEFAULT_DIMENSION for index, _ in enumerate(queries, 1)
+        ],
+        vector_searcher=lambda route_query, vector, **kwargs: {
+            "total_candidates": 1,
+            "hits": [
+                _hit("dense", 0.8, content_type=kwargs["content_type"], text="dense document")
+            ],
+        },
+        lexical_searcher=lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("fts unavailable")
+        ),
+        lexical_enabled=True,
+        reranker=lambda query, documents, top_n: [(0, 0.9)],
+    )
+
+    assert result["retrieval_mode"] == "dense_rerank"
+    assert result["degraded"] == ["lexical_retrieval_failed"]
+    assert result["hits"][0]["retrieval_sources"] == ["dense"]
 
 
 def test_query_rewrite_validation_blocks_new_facts() -> None:
@@ -175,6 +268,47 @@ def test_query_rewrite_validation_blocks_new_facts() -> None:
             "Q/GDW 12126.4中S20 200 kVA负载损耗2.40 kW",
             route="semantic",
         )
+
+
+def test_query_rewrite_normalizes_split_ocr_equation_before_validation(monkeypatch) -> None:
+    query = (
+        "S20-M.RL-200/10-NX2 200 kVA 10/0.4 kV 配电变压器 "
+        "感应耐压试验(IVW) 持续时间(s): <eq>15 \\leq t \\leq 6</eq>0"
+    )
+    captured: dict = {}
+
+    def generation_call(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            status_code=HTTPStatus.OK,
+            output={
+                "choices": [{
+                    "message": {
+                        "content": {
+                            "semantic": "感应耐压试验持续时间 15 ≤ t ≤ 60 s 的标准证据",
+                            "keyword": "IVW 感应耐压 持续时间 15 ≤ t ≤ 60 s",
+                        }
+                    }
+                }]
+            },
+        )
+
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    monkeypatch.setattr("dashscope.Generation.call", generation_call)
+
+    rewrites = retrieval.plan_query_rewrites(query)
+
+    planner_query = captured["messages"][1]["content"]
+    assert planner_query.endswith("持续时间(s): 15 ≤ t ≤ 60")
+    assert "<eq>" not in planner_query
+    assert "\\leq" not in planner_query
+    assert rewrites["semantic"] == "感应耐压试验持续时间 15 ≤ t ≤ 60 s 的标准证据"
+
+
+def test_query_rewrite_normalization_preserves_normal_text() -> None:
+    query = "S20 200 kVA 负载损耗 2.185 kW，允许偏差±10%"
+
+    assert retrieval._normalize_query_for_rewrite(query) == query
 
 
 def test_rerank_document_strips_table_markup_before_truncation() -> None:

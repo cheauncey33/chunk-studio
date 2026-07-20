@@ -19,6 +19,7 @@ KNOWN_KEYS = [
     "ocr.auto_on_create", "ocr.max_concurrency",
     "ocr.request_template", "ocr.response_text_path",
     "ocr.async_mode", "ocr.submit_url", "ocr.poll_url", "ocr.result_url",
+    "retrieval.lexical_production_enabled", "retrieval.lexical_shadow_enabled",
 ]
 
 
@@ -27,6 +28,8 @@ def get_settings():
     s = db.get_all_settings()
     # mask api_key / token for display
     masked = dict(s)
+    masked.setdefault("retrieval.lexical_production_enabled", "true")
+    masked.setdefault("retrieval.lexical_shadow_enabled", "true")
     for k in ("llm.api_key", "ocr.token"):
         if k in masked and masked[k]:
             v = masked[k]

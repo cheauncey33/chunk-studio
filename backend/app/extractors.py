@@ -5,7 +5,7 @@ table_no, table_title, table_columns — that are written into the
 stable business metadata layer. The caller merges them *only into empty fields*,
 never overwriting user edits.
 
-LLM-derived fields (summary/keywords/scope) live elsewhere and are not touched
+LLM-derived fields (keywords/questions) live elsewhere and are not touched
 here; this module is the cheap, deterministic layer that can run synchronously
 on every chunk create / OCR completion.
 """

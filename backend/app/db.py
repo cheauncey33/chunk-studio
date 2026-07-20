@@ -37,14 +37,12 @@ SEED_FIELDS = [
      "表格标题：正则抽取“表 N”后、表格主体前的标题文本。", 5),
     ("table_columns", "表列名", "auto", "free", "[]", "list",
      "<table> 首行单元格文本。", 6),
-    ("summary", "摘要", "llm", "free", "[]", "text",
-     "一句话概括这段内容。", 7),
     ("keywords", "关键词", "llm", "free", "[]", "list",
-     "提炼3-8个关键词。", 8),
-    ("scope", "适用范围/对象", "llm", "free", "[]", "text",
-     "片段描述的对象/适用范围。", 9),
+     "提炼3-8个可用于电力标准检索的关键词。", 7),
+    ("questions", "相关问题", "llm", "free", "[]", "list",
+     "生成2-4个可由当前片段直接回答的检索问题。", 8),
     ("tags", "用户标签", "manual", "enum", "[]", "list",
-     "用户自定义标签(可多选)。", 10),
+     "用户自定义标签(可多选)。", 9),
 ]
 
 _SCHEMA = """
@@ -405,7 +403,11 @@ def _normalize_field_config_paths() -> None:
 
 def _retire_deprecated_field_configs() -> None:
     _conn.execute(
-        "DELETE FROM field_config WHERE field_key IN ('table_header', 'table_ref', 'figure_header', 'figure_ref')"
+        """DELETE FROM field_config
+           WHERE field_key IN (
+             'table_header', 'table_ref', 'figure_header', 'figure_ref',
+             'summary', 'scope'
+           )"""
     )
 
 

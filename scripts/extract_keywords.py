@@ -1,4 +1,4 @@
-"""Generate incremental LLM keyword suggestions for approved chunks."""
+"""Generate versioned keyword and question suggestions for approved chunks."""
 from __future__ import annotations
 
 import argparse
@@ -18,6 +18,11 @@ def main() -> None:
     parser.add_argument("--model", default=keyword_extraction.DEFAULT_MODEL)
     parser.add_argument("--batch-size", type=int, default=keyword_extraction.DEFAULT_BATCH_SIZE)
     parser.add_argument("--limit", type=int)
+    parser.add_argument(
+        "--sample-per-type",
+        type=int,
+        help="Select this many table chunks and this many section chunks across files.",
+    )
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
     db.init_db()
@@ -25,10 +30,11 @@ def main() -> None:
     def progress(done: int, total: int) -> None:
         print(json.dumps({"extracted": done, "total": total}), flush=True)
 
-    result = keyword_extraction.extract_keywords(
+    result = keyword_extraction.extract_suggestions(
         model=args.model,
         batch_size=args.batch_size,
         limit=args.limit,
+        sample_per_type=args.sample_per_type,
         force=args.force,
         on_batch=progress,
     )

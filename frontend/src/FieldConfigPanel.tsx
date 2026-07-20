@@ -168,14 +168,14 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
             <input
               value={draft.storage_path}
               onChange={e => setDraft({ ...draft, storage_path: e.target.value })}
-              placeholder={draft.extract_source === 'llm' ? `metadata_llm.${draft.field_key || 'summary'}` : `business_metadata.${draft.field_key || 'standard_no'}`}
+              placeholder={draft.extract_source === 'llm' ? `metadata_llm.${draft.field_key || 'keywords'}` : `business_metadata.${draft.field_key || 'standard_no'}`}
             />
 
             <label>采纳后存储路径</label>
             <input
               value={draft.accepted_storage_path}
               onChange={e => setDraft({ ...draft, accepted_storage_path: e.target.value })}
-              placeholder={draft.extract_source === 'llm' ? `business_metadata.${draft.field_key || 'summary'}` : 'LLM 字段使用，可留空'}
+              placeholder={draft.extract_source === 'llm' ? `business_metadata.${draft.field_key || 'keywords'}` : 'LLM 字段使用，可留空'}
             />
 
             <div className="field-properties">

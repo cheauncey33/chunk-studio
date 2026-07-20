@@ -24,6 +24,7 @@ export function SettingsPage() {
       <input type={type} value={s[k] || ''} onChange={e => set(k, e.target.value)} />
     </div>
   )
+  const dualRetrievalEnabled = (s['retrieval.lexical_production_enabled'] || 'true') === 'true'
 
   return (
     <div className="settings">
@@ -50,6 +51,25 @@ export function SettingsPage() {
       <Field k="mineru.token" label="MinerU Token" type="password" />
       <Field k="mineru.base_url" label="Base URL (默认 https://mineru.net)" />
       <Field k="mineru.model_version" label="模型 (vlm / txt)" />
+
+      <h4>检索</h4>
+      <label className="setting-toggle">
+        <input
+          type="checkbox"
+          checked={dualRetrievalEnabled}
+          onChange={e => set('retrieval.lexical_production_enabled', e.target.checked ? 'true' : 'false')}
+        />
+        <span>启用 Dense + FTS5 双路生产检索</span>
+      </label>
+      <label className="setting-toggle">
+        <input
+          type="checkbox"
+          disabled={dualRetrievalEnabled}
+          checked={(s['retrieval.lexical_shadow_enabled'] || 'true') === 'true'}
+          onChange={e => set('retrieval.lexical_shadow_enabled', e.target.checked ? 'true' : 'false')}
+        />
+        <span>启用 FTS5 Shadow（纯 Dense 模式）</span>
+      </label>
 
       <button onClick={save}>保存设置</button>
       {saved && <span className="ok">已保存</span>}

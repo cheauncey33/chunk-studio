@@ -1,0 +1,4748 @@
+{
+  "version": 2,
+  "status": "draft_pending_domain_review",
+  "unit_of_evaluation": "one reported detection requirement",
+  "evidence_semantics": "Every required group must be recalled (AND across groups); one exact chunk locator inside a group is sufficient (OR within a group). Supporting evidence and deterministic_context_evidence are excluded from retrieval gold; deterministic context is attached after the primary evidence is selected.",
+  "evaluation_profiles": {
+    "lenient_relevance": {
+      "metric": "any_relevant_chunk_recall_at_k",
+      "evidence_field": "relevant_evidence",
+      "primary": false,
+      "description": "Any direct or supporting chunk is a hit; use for candidate-generation diagnosis only."
+    },
+    "strict_answer": {
+      "metric": "all_required_evidence_groups_recall_at_k",
+      "evidence_field": "required_evidence_groups",
+      "primary": true,
+      "description": "All AND-required groups must be recalled; OR alternatives inside each group are equivalent."
+    }
+  },
+  "source_artifacts": {
+    "case_pool": "evaluation/retrieval_case_pool_v1.json",
+    "legacy_candidate_review": "evaluation/retrieval_gold_candidates_v1.json",
+    "legacy_evidence_groups": "evaluation/retrieval_evidence_groups_hbjc_v1.json"
+  },
+  "summary": {
+    "case_count": 40,
+    "retrieval_answerable_candidates": 33,
+    "context_required_cases": 3,
+    "deterministic_prefilter_cases": 4,
+    "required_evidence_groups": 36,
+    "deterministic_context_groups": 4,
+    "evidence_locator_assignments": 51,
+    "unique_evidence_chunks": 14,
+    "deterministic_context_locator_assignments": 4,
+    "unique_deterministic_context_chunks": 2,
+    "relevant_locator_assignments": 115,
+    "unique_relevant_chunks": 38,
+    "pending_domain_review_cases": 40,
+    "scoreable_case_count": 0,
+    "legacy_direct_missing_conflicts": 0,
+    "resolved_legacy_direct_missing_conflicts": 15
+  },
+  "cases": [
+    {
+      "case_id": "hbjc-4-r1",
+      "dataset_split": "development",
+      "retrieval_class": "numeric_parameter_table",
+      "detection_project": {
+        "project_name": "空载损耗和空载电流测量",
+        "reported_requirement": {
+          "text": "空载损耗P0(kW):≤0.370",
+          "unit": "kW"
+        },
+        "sample_context": {
+          "sample_name": "油浸式变压器",
+          "model": "S20-M.RL-400/10-NX2",
+          "rated_capacity": "400 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 3,
+            "page_end": 3,
+            "text_sha256": "94dece7e1eadd4d46b37c4bee015f07b8f70dd3cc18725be8b67addc285b7d24",
+            "section": "1",
+            "section_title": "范围"
+          },
+          "evidence_quote": "本文件适用于三相 10 kV 电压等级、无励磁调压、额定频率为 50 Hz、额定容量为 30 kVA～2 500 kVA 的油浸式配电变压器和干式配电变压器",
+          "quote_verified": true,
+          "reason": "该条款明确界定了标准适用范围，确认样品（10kV, 400kVA, 油浸式）属于GB 20052-2024管辖对象，是判定后续限值有效性的必要前提。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 4,
+            "text_sha256": "09dc63bef8ea33caad37ed0129c552bad8148ab1506c8065313160c4feed748f",
+            "section": "5.2",
+            "section_title": "变压器能效限定值"
+          },
+          "evidence_quote": "a) 10 kV 配电变压器空载损耗和负载损耗限值均应不高于表 1 和表 2 的规定",
+          "quote_verified": true,
+          "reason": "该条款建立了从通用要求到具体数据表（表1和表2）的引用关系，指明10kV配电变压器的空载损耗限值应参照表1，逻辑链条完整且必要。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "table",
+            "page_start": 5,
+            "page_end": 5,
+            "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+            "table_no": "1",
+            "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 4,
+            "text_sha256": "62c6c96ebc96f3494f7a3074d4ce09a0a8ac9e0bf4169873567be39fbceb0129",
+            "section": "5.1",
+            "section_title": "基本要求"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该条款仅说明技术参数应符合其他基础标准（如GB/T 1094.1等），并未提供具体的空载损耗数值或能效等级判定规则。虽然它提到了立体卷铁心变压器符合GB/T 25438，但这只是指向性引用，不能直接证明0.370kW这一具体数值的合规性，因此降级为supporting。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 10,
+            "page_end": 10,
+            "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+            "table_no": "6",
+            "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 10,
+                "page_end": 10,
+                "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+                "table_no": "6",
+                "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            },
+            {
+              "locator": {
+                "standard_no": "GB 20052-2024",
+                "content_type": "table",
+                "page_start": 5,
+                "page_end": 5,
+                "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+                "table_no": "1",
+                "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "candidate_recovered_by_diagnostic_search",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 3,
+        "uncertain_count": 0,
+        "missing_evidence": "缺少对型号中'RL'（立体卷铁心）是否适用GB 20052-2024表1（常规叠片铁心）的明确排除或包含说明；若RL代表非晶合金，则应参考表2或其他标准，但数值0.370kW与非晶合金典型值（通常更低，如<0.2kW）不符，故推断按常规电工钢考核。",
+        "review_note": "主要风险在于产品结构的精确匹配。型号S20-M.RL中的'RL'暗示立体卷铁心结构，而引用的表1针对的是常规油浸式配电变压器。虽然数值巧合地一致，但在严格审核下，需确认立体卷铁心变压器是否直接套用表1的硅钢片限值，还是另有专门规定或更严格的内部标准。因此将direct降级为uncertain，提示需进一步核实结构适用性。",
+        "recovery_note": "核心证据c18正确提供了GB 20052-2024表1中400kVA、2级能效、电工钢带（对应S20系列常见材质）的空载损耗限值370W，与报告要求≤0.370kW严格匹配。其他候选项均为必要的适用范围和引用关系支持。"
+      }
+    },
+    {
+      "case_id": "hbjc-4-r2",
+      "dataset_split": "development",
+      "retrieval_class": "numeric_parameter_table",
+      "detection_project": {
+        "project_name": "空载损耗和空载电流测量",
+        "reported_requirement": {
+          "text": "空载电流I0(%):≤0.16(1+30%)",
+          "unit": "%"
+        },
+        "sample_context": {
+          "sample_name": "油浸式变压器",
+          "model": "S20-M.RL-400/10-NX2",
+          "rated_capacity": "400 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 10,
+            "page_end": 10,
+            "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+            "table_no": "6",
+            "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 3,
+            "page_end": 3,
+            "text_sha256": "94dece7e1eadd4d46b37c4bee015f07b8f70dd3cc18725be8b67addc285b7d24",
+            "section": "1",
+            "section_title": "范围"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该段落仅规定能效限定值和等级，不直接提供空载电流的具体限值数值。作为适用范围背景支持保留，但不能作为数值判定的直接依据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "no_load_current_limit",
+          "requirement": "给出样品对应的空载电流基准限值。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 10,
+                "page_end": 10,
+                "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+                "table_no": "6",
+                "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [
+        {
+          "context_id": "no_load_current_tolerance",
+          "application_rule": "空载电流基准值命中后，附加设计值+30%的通用允许偏差。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.1-2013",
+                "content_type": "table",
+                "page_start": 35,
+                "page_end": 35,
+                "text_sha256": "6017f91d07380fef32e26d5c571727651c38a9a73919659fd3a1c119c24268cc",
+                "table_no": "1",
+                "table_title": "偏差"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB/T 1094.1-2013 表1（续）明确列出“空载电流”的偏差为“设计值的+30%”，直接支持报告要求中的允差部分。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "required_group_relation_verified_from_exact_corpus_evidence",
+          "deterministic_context_excluded_from_retrieval_gold"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 1,
+        "uncertain_count": 0,
+        "missing_evidence": "缺少对型号中'RL'确切含义的澄清证据，以确认是应用无励磁调压表（c09）还是有载调容调压表。此外，报告中要求的'(1+30%)'允差部分未在提供的Chunk中找到明确的通用允差条款（通常允差在试验方法章节或总则中规定，如GB/T 1094.1或具体产品标准的试验章节）。",
+        "review_note": "核心证据c09准确匹配了样品的电压、容量、系列（S20-NX2）及调压方式（无励磁），提供了直接的0.16%限值。c08为能效标准范围，仅作背景。c05涉及有载调容，与样品特征不符，予以拒绝。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "hbjc-5-r1",
+      "dataset_split": "development",
+      "retrieval_class": "numeric_parameter_table",
+      "detection_project": {
+        "project_name": "短路阻抗和负载损耗测量",
+        "reported_requirement": {
+          "text": "负载损耗Pk(kW):≤3.615",
+          "unit": "kW"
+        },
+        "sample_context": {
+          "sample_name": "油浸式变压器",
+          "model": "S20-M.RL-400/10-NX2",
+          "rated_capacity": "400 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "JB/T 501-2021",
+            "content_type": "table",
+            "page_start": 20,
+            "page_end": 20,
+            "text_sha256": "c0f249470732d606a0a47d14f9b9a1064db5f24adc8bb081502e0fd73227aa1d",
+            "table_no": "7",
+            "table_title": "油浸式电力变压器负载损耗和短路阻抗的允许偏差"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "提供了负载损耗测量的允许偏差规则（+15%且总损耗不超过+10%），这是判断实测值是否合格的必要规范支持，符合supporting定义。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 6451-2023",
+            "content_type": "section",
+            "page_start": 65,
+            "page_end": 66,
+            "text_sha256": "b31cb73b97281c2b850cbabcdba8b5ed311c6141039e5ad82cccdf4ccae92d50",
+            "section": "12.1",
+            "section_title": "性能参数"
+          },
+          "evidence_quote": "12.1.1.1 额定容量、电压组合、联结组标号、空载损耗、负载损耗、空载电流及短路阻抗应符合表37～表39的规定。",
+          "quote_verified": true,
+          "reason": "确立了性能参数应符合标准中特定表格（表37-39）规定的引用关系，属于适用性背景支持，符合supporting定义。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 3,
+            "page_end": 3,
+            "text_sha256": "94dece7e1eadd4d46b37c4bee015f07b8f70dd3cc18725be8b67addc285b7d24",
+            "section": "1",
+            "section_title": "范围"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该候选明确了GB 20052-2024的适用范围，确认了样品（10kV, 400kVA, 油浸式配电变压器）受该标准约束，是确定适用标准的必要背景证据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 4,
+            "text_sha256": "09dc63bef8ea33caad37ed0129c552bad8148ab1506c8065313160c4feed748f",
+            "section": "5.2",
+            "section_title": "变压器能效限定值"
+          },
+          "evidence_quote": "a) 10 kV 配电变压器空载损耗和负载损耗限值均应不高于表 1 和表 2 的规定；",
+          "quote_verified": true,
+          "reason": "该候选明确指引10kV配电变压器的负载损耗限值应参照表1和表2，建立了标准要求与具体数值表格的逻辑关联，是查找具体限值的必要路径证据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 10,
+            "page_end": 10,
+            "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+            "table_no": "6",
+            "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "manual_corpus_recovery"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "table",
+            "page_start": 5,
+            "page_end": 5,
+            "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+            "table_no": "1",
+            "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 10,
+                "page_end": 10,
+                "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+                "table_no": "6",
+                "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            },
+            {
+              "locator": {
+                "standard_no": "GB 20052-2024",
+                "content_type": "table",
+                "page_start": 5,
+                "page_end": 5,
+                "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+                "table_no": "1",
+                "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "candidate_recovered_by_diagnostic_search",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 4,
+        "uncertain_count": 0,
+        "missing_evidence": "缺少针对S20能效等级（或NX2系列）的具体负载损耗限值表格。召回的c18是S13/S14的数据，c09是500kV高压大容量数据，均不直接匹配S20-400kVA-10kV的具体标准限值。需要确认报告中的3.615 kW是依据哪个标准（如GB 20052-2024中的S20限值，或企业标准）得出的。若依据GB 20052-2024，S20的400kVA负载损耗限值通常远低于3.615（可能在2.5-3.0左右），因此3.615可能是不正确的或者引用了错误的能效等级（如S14）。",
+        "review_note": "c18因能效等级（S13/S14 vs S20）不匹配被拒绝，不能作为S20变压器的直接证据。c01和c05作为偏差规则和引用框架保留为支持性证据。",
+        "recovery_note": "前两个候选（c01, c32）来自试验方法标准GB/T 1094.1，仅规定如何测量和计算，不提供限值，故拒绝。后两个候选（c08, c16）来自能效标准GB 20052-2024，分别确立了标准的适用性和限值所在的表格索引，作为supporting_candidate保留是正确的，因为它们为后续查找具体数值（虽未在当前chunk中显示，但逻辑上指向正确）提供了依据。注意：若需direct evidence，必须包含包含3.615数值的表格行，当前输入中无此类direct candidate，故仅保留supporting。"
+      }
+    },
+    {
+      "case_id": "hbjc-7-r1",
+      "dataset_split": "development",
+      "retrieval_class": "insulation_voltage",
+      "detection_project": {
+        "project_name": "外施耐压试验",
+        "reported_requirement": {
+          "text": "高压对低压及地试验电压(kV):35",
+          "unit": "kV"
+        },
+        "sample_context": {
+          "sample_name": "油浸式变压器",
+          "model": "S20-M.RL-400/10-NX2",
+          "rated_capacity": "400 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 16,
+            "page_end": 19,
+            "text_sha256": "6628cdb9f6bf3929aa0ed6b3c376de446638849cd7ebe56c58e1e971b7b94966",
+            "section": "7.3",
+            "section_title": "不同 U_ m 变压器的试验要求"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该条款仅指出试验电压‘见表2’，并未在Chunk中直接包含表2的具体数值（35kV）。根据规则4，只指向另一张未召回表格的章节最多是supporting。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 19,
+            "page_end": 20,
+            "text_sha256": "948260756186d5b8e2eea4cfba0210fcc1f8e1f4b5895de8ecc31aa07132cbb8",
+            "section": "10",
+            "section_title": "外施耐压试验(AV)"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该条款定义了外施耐压试验的执行方法（高压对低压及地），与报告中的试验项目描述一致，作为背景支持成立。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "table",
+            "page_start": 15,
+            "page_end": 15,
+            "text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+            "table_no": "2",
+            "table_title": "绕组的试验电压水平"
+          },
+          "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施耐压或线端交流耐压35 kV。",
+          "quote_verified": true,
+          "reason": "GB/T 1094.3-2017表2直接列出10 kV系统（Um=12 kV）的外施耐压或线端交流耐压(AV/LTAC)为35 kV；75 kV是LI列，不能写成AV值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.3-2017",
+                "content_type": "table",
+                "page_start": 15,
+                "page_end": 15,
+                "text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+                "table_no": "2",
+                "table_title": "绕组的试验电压水平"
+              },
+              "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施耐压或线端交流耐压35 kV。",
+              "quote_verified": true,
+              "reason": "GB/T 1094.3-2017表2直接列出10 kV系统（Um=12 kV）的外施耐压或线端交流耐压(AV/LTAC)为35 kV；75 kV是LI列，不能写成AV值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "candidate_recovered_by_diagnostic_search",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 2,
+        "uncertain_count": 0,
+        "missing_evidence": "缺少GB/T 1094.3-2017 表2（不同类别变压器的绝缘水平）。虽然c20引用了表2，但提供的候选列表中未包含表2的具体内容（通常10kV系统对应Um=12kV，AV值为28kV或35kV取决于绝缘水平等级，需查表确认35kV是否合规）。",
+        "review_note": "当前候选证据中缺乏直接包含‘35kV’这一目标数值的表2内容。c20虽指明了查表路径，但因缺少具体数值不能保留为direct；c01提供了试验方法的定义支持。建议后续检索包含表2具体数据的Chunk以补充direct证据。",
+        "recovery_note": "两个候选证据均有效。c10提供了具体的测试电压数值，且电压等级匹配；c15提供了引用该数值的规范依据，逻辑链条完整。"
+      }
+    },
+    {
+      "case_id": "hbjc-14-r1",
+      "dataset_split": "development",
+      "retrieval_class": "insulation_voltage",
+      "detection_project": {
+        "project_name": "雷电冲击试验",
+        "reported_requirement": {
+          "text": "高压线端全波电压(kV): -75(1±3%)波前时间: T1: 1.2μs±30%半峰值时间: T2: 50μs±20%",
+          "unit": "kV"
+        },
+        "sample_context": {
+          "sample_name": "油浸式变压器",
+          "model": "S20-M.RL-400/10-NX2",
+          "rated_capacity": "400 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 24,
+            "page_end": 26,
+            "text_sha256": "c383f3f76a093d1fa601d48c3979faa59ce0733868316988ea9b04df46f4e43e",
+            "section": "13.2",
+            "section_title": "雷电全波冲击试验(LI)"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Chunk直接规定了标准雷电冲击全波的波形参数（1.2μs±30% / 50μs±20%）及试验电压偏差（±3%），与报告要求中的波形和偏差描述完全一致，是判断报告合规性的核心依据。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "table",
+            "page_start": 14,
+            "page_end": 14,
+            "text_sha256": "0710506d0fd7d07ad953f188044653eee465945a44268ea54b467f4e067437a3",
+            "table_no": "1",
+            "table_title": "不同类别变压器的要求与试验"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "表格确认了Um≤72.5kV变压器需进行线端雷电全波冲击试验(LI)，支持了该试验项目的适用性背景，作为supporting_candidate合理。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 39,
+            "page_end": 39,
+            "text_sha256": "75d7ac3215cbc0543c012c68a598a4af9fd55d5d1f69ea5f0f4113fb90880a9f",
+            "section": "D.2",
+            "section_title": "对于 U_m ≤ 72.5 \\, kV 的变压器和绕组"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "章节指明了Um≤72.5kV变压器的LI数值应从表2选取，提供了确定具体电压值（-75kV）的规则路径，支持了报告数值的来源逻辑，作为supporting_candidate合理。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "table",
+            "page_start": 15,
+            "page_end": 15,
+            "text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+            "table_no": "2",
+            "table_title": "绕组的试验电压水平"
+          },
+          "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施耐压或线端交流耐压35 kV。",
+          "quote_verified": true,
+          "reason": "GB/T 1094.3-2017表2直接列出10 kV系统（Um=12 kV）的雷电全波冲击(LI)试验电压为75 kV；35 kV是AV/LTAC列，不能写成LI值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "JB/T 501-2021",
+            "content_type": "table",
+            "page_start": 25,
+            "page_end": 25,
+            "text_sha256": "76c4e8530c5f6ad181e3256760859a44b10f566e2e8975e6c515fa5dcd048d0f",
+            "table_no": "11",
+            "table_title": "绕组的试验电压水平"
+          },
+          "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施电压或线端交流电压35 kV。",
+          "quote_verified": true,
+          "reason": "JB/T 501-2021表11直接给出10 kV系统（Um=12 kV）的LI试验电压为75 kV，可作为同一数值关系的替代real chunk；产品适用性仍待领域审核。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "curated_exact_corpus_evidence"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "lightning_impulse_voltage",
+          "requirement": "给出样品电压等级对应的雷电冲击耐受电压。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.3-2017",
+                "content_type": "table",
+                "page_start": 15,
+                "page_end": 15,
+                "text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+                "table_no": "2",
+                "table_title": "绕组的试验电压水平"
+              },
+              "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施耐压或线端交流耐压35 kV。",
+              "quote_verified": true,
+              "reason": "GB/T 1094.3-2017表2直接列出10 kV系统（Um=12 kV）的雷电全波冲击(LI)试验电压为75 kV；35 kV是AV/LTAC列，不能写成LI值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            },
+            {
+              "locator": {
+                "standard_no": "JB/T 501-2021",
+                "content_type": "table",
+                "page_start": 25,
+                "page_end": 25,
+                "text_sha256": "76c4e8530c5f6ad181e3256760859a44b10f566e2e8975e6c515fa5dcd048d0f",
+                "table_no": "11",
+                "table_title": "绕组的试验电压水平"
+              },
+              "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施电压或线端交流电压35 kV。",
+              "quote_verified": true,
+              "reason": "JB/T 501-2021表11直接给出10 kV系统（Um=12 kV）的LI试验电压为75 kV，可作为同一数值关系的替代real chunk；产品适用性仍待领域审核。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "curated_exact_corpus_evidence"
+            }
+          ]
+        },
+        {
+          "group_id": "lightning_impulse_waveform",
+          "requirement": "给出雷电全波的波形参数和试验电压偏差。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.3-2017",
+                "content_type": "section",
+                "page_start": 24,
+                "page_end": 26,
+                "text_sha256": "c383f3f76a093d1fa601d48c3979faa59ce0733868316988ea9b04df46f4e43e",
+                "section": "13.2",
+                "section_title": "雷电全波冲击试验(LI)"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Chunk直接规定了标准雷电冲击全波的波形参数（1.2μs±30% / 50μs±20%）及试验电压偏差（±3%），与报告要求中的波形和偏差描述完全一致，是判断报告合规性的核心依据。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 2,
+        "uncertain_count": 0,
+        "missing_evidence": "缺少GB/T 1094.3-2017中的“表2 绝缘水平”或其对应部分，用于核实10kV等级变压器对应的标准雷电冲击耐受电压是否为75kV。报告中的“-75kV”具体数值无法仅凭现有Chunk直接验证，需依赖表2数据。",
+        "review_note": "所有候选证据均有效。c02直接支持波形和偏差要求；c03和c05分别支持试验必要性和电压取值规则。虽然缺少包含具体-75kV数值的表2，但现有证据已能充分支持报告要求的格式、波形、偏差及取值逻辑的正确性。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "hbjc-5-r3",
+      "dataset_split": "development",
+      "retrieval_class": "rule_formula",
+      "detection_project": {
+        "project_name": "短路阻抗和负载损耗测量",
+        "reported_requirement": {
+          "text": "总损耗P总(kW):≤3.985",
+          "unit": "kW"
+        },
+        "sample_context": {
+          "sample_name": "油浸式变压器",
+          "model": "S20-M.RL-400/10-NX2",
+          "rated_capacity": "400 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "deterministic_prefilter",
+      "answerability_status": "not_applicable_to_retrieval",
+      "missing_context_fields": [],
+      "relevant_evidence": [],
+      "required_evidence_groups": [],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_irrelevant_to_retrieval_prefilter",
+          "candidate_recovered_by_diagnostic_search",
+          "excluded_from_retrieval_denominator"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 2,
+        "supporting_candidate_count": 2,
+        "uncertain_count": 0,
+        "missing_evidence": "缺少该型号S20-M.RL-400/10-NX2对应的具体额定负载损耗值（例如3.62 kW），以便验证3.985 kW是否恰好等于额定值的110%。虽然标准给出了百分比限值，但确认报告数值正确性通常需要结合产品技术条件中的额定值进行计算核对。不过仅就‘标准要求’而言，上述候选已足够。",
+        "review_note": "两个候选证据均只提供了‘总损耗不得超过+10%’的通用偏差规则，而缺乏将百分比转化为具体数值（3.985 kW）所必需的‘额定负载损耗’基准值。根据硬性规则1和3，仅有公式或允差而无必要规范规则（此处指具体的额定值来源）不能构成direct_candidate。由于缺少额定值表格，这两个证据只能降级为supporting，用于说明偏差计算的逻辑依据。",
+        "recovery_note": "关键问题在于样品型号S20-M.RL与证据c33中的SZ20-NX2（有载调压）不符。S20系列通常为无载调压配电变压器，应查找对应无载调压的性能参数表。因此c33被拒绝。c01作为偏差规则的支持性证据保留。"
+      }
+    },
+    {
+      "case_id": "hbjc-6-r4",
+      "dataset_split": "development",
+      "retrieval_class": "rule_formula",
+      "detection_project": {
+        "project_name": "感应耐压试验",
+        "reported_requirement": {
+          "text": "持续时间(s):15≤t≤60",
+          "unit": "s"
+        },
+        "sample_context": {
+          "sample_name": "油浸式变压器",
+          "model": "S20-M.RL-400/10-NX2",
+          "rated_capacity": "400 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 20,
+            "page_end": 20,
+            "text_sha256": "29262350048235c71caa429a2970919a18a62070c0a41a48b4c4daea66068019",
+            "section": "11.2",
+            "section_title": "感应耐压试验(IVW)"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Chunk直接规定了感应耐压试验的持续时间：常规频率下为60s，高频下计算公式结果且不少于15s。这直接构成了报告要求“15≤t≤60”的规范依据（即时间要么固定为60，要么在≥15的范围内，故整体范围符合15-60s的要求）。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "table",
+            "page_start": 14,
+            "page_end": 14,
+            "text_sha256": "0710506d0fd7d07ad953f188044653eee465945a44268ea54b467f4e067437a3",
+            "table_no": "1",
+            "table_title": "不同类别变压器的要求与试验"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "表格确认了Um≤72.5kV变压器需进行例行感应耐压试验(IVW)，确立了标准第11章（含c13的时间规定）对该样品的适用性，作为背景支持是必要的。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.3-2017",
+                "content_type": "section",
+                "page_start": 20,
+                "page_end": 20,
+                "text_sha256": "29262350048235c71caa429a2970919a18a62070c0a41a48b4c4daea66068019",
+                "section": "11.2",
+                "section_title": "感应耐压试验(IVW)"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Chunk直接规定了感应耐压试验的持续时间：常规频率下为60s，高频下计算公式结果且不少于15s。这直接构成了报告要求“15≤t≤60”的规范依据（即时间要么固定为60，要么在≥15的范围内，故整体范围符合15-60s的要求）。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 1,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "c13提供了具体的数值和公式，直接支持时间范围的判断；c04确认了试验项目的适用性。两者结合完整支持了报告要求的合规性判断。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "hbjc-15-5-r1",
+      "dataset_split": "development",
+      "retrieval_class": "repeat_routine",
+      "detection_project": {
+        "project_name": "短路阻抗和负载损耗测量",
+        "reported_requirement": {
+          "text": "负载损耗Pk(kW): ≤3.615",
+          "unit": "kW"
+        },
+        "sample_context": {
+          "sample_name": "油浸式变压器",
+          "model": "S20-M.RL-400/10-NX2",
+          "rated_capacity": "400 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "JB/T 501-2021",
+            "content_type": "table",
+            "page_start": 20,
+            "page_end": 20,
+            "text_sha256": "c0f249470732d606a0a47d14f9b9a1064db5f24adc8bb081502e0fd73227aa1d",
+            "table_no": "7",
+            "table_title": "油浸式电力变压器负载损耗和短路阻抗的允许偏差"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该表只规定负载损耗允许偏差，不能单独证明报告中的绝对限值3.615 kW。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.1-2013",
+            "content_type": "table",
+            "page_start": 34,
+            "page_end": 34,
+            "text_sha256": "5d634879be135111a1f8c80772ed71e4a5c5db580a651c47130764f8ccf15b4c",
+            "table_no": "1",
+            "table_title": "偏差"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "虽然提供了通用的负载损耗偏差规则，但与c01内容高度重合。在已有专门针对电力变压器试验标准（JB/T 501）的情况下，GB/T 1094.1作为通用基础标准，主要起背景支持或印证作用，非唯一或直接判定依据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "section",
+            "page_start": 9,
+            "page_end": 9,
+            "text_sha256": "7ff944088c09e51fbcc918a962880217eaea177f7b9cf08fe14198b4f22a61bd",
+            "section": "6",
+            "section_title": "性能参数"
+          },
+          "evidence_quote": "6 性能参数\n\n6.1 配电变压器的额定容量、电压组合、分接范围、联结组标号、空载损耗、负载损耗、空载电流及短路阻抗应符合表 5~表 16 的规定。",
+          "quote_verified": true,
+          "reason": "该条款规定了性能参数应符合表5~表16，是引用具体数据表的规范性依据，作为supporting_candidate成立。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 10,
+            "page_end": 10,
+            "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+            "table_no": "6",
+            "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "manual_corpus_recovery"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "table",
+            "page_start": 5,
+            "page_end": 5,
+            "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+            "table_no": "1",
+            "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 10,
+                "page_end": 10,
+                "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+                "table_no": "6",
+                "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            },
+            {
+              "locator": {
+                "standard_no": "GB 20052-2024",
+                "content_type": "table",
+                "page_start": 5,
+                "page_end": 5,
+                "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+                "table_no": "1",
+                "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "candidate_recovered_by_diagnostic_search",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 3,
+        "uncertain_count": 0,
+        "missing_evidence": "缺少明确标识为'S20'能效等级的变压器性能参数表（如GB 20052-2024中对应的具体表格或Q/GDW中S20系列的表格）。当前仅找到S13/S14的数据，S20的损耗限值应低于或等于S14，需确认S20的具体标准值以精确验证3.615这一数值的来源（可能是S14的3.61加上某种修正或即为S14限值附近的约定值）。此外，需确认样品是否完全符合Q/GDW 12126.4的适用范围（如非晶合金vs硅钢片，型号中未明确铁芯材质，但S20通常为硅钢片高效变压器）。",
+        "review_note": "关键缺失：缺少S20能效等级对应的具体负载损耗限值表。c18因能效等级不匹配被拒绝。c01保留了偏差规则。建议后续检索S20系列的具体性能参数表以获取目标数值。",
+        "recovery_note": "关键问题在于样品型号S20-M.RL-400/10-NX2的调压方式与证据表9（有载调压）是否匹配。通常S20-M系列为无励磁调压变压器，而有载调压变压器型号通常包含Z（如SZ20）。如果样品是无励磁调压，则不能使用有载调压的性能参数表（表9），应查找无励磁调压对应的表格（如表5-8等）。由于c28被拒绝，当前缺乏direct evidence。建议复核样品确切调压方式及对应标准表格。"
+      }
+    },
+    {
+      "case_id": "hbjc-13-r4",
+      "dataset_split": "development",
+      "retrieval_class": "report_specific",
+      "detection_project": {
+        "project_name": "短路承受能力试验",
+        "reported_requirement": {
+          "text": "试验后相电抗差(%):≤2%",
+          "unit": "%"
+        },
+        "sample_context": {
+          "sample_name": "油浸式变压器",
+          "model": "S20-M.RL-400/10-NX2",
+          "rated_capacity": "400 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "context_required",
+      "missing_context_fields": [
+        "reactance_metric_definition"
+      ],
+      "relevant_evidence": [],
+      "required_evidence_groups": [],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "not_scoreable_without_report_context",
+          "evidence_metric_conflict_pending_domain_review"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 2,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "c04是直接依据，因为Q/GDW 12126.4-2024是针对该类产品的具体执行标准，其表29明确规定了7.5%的限值。报告中的≤2%与该标准不符。c10提供了国标背景，说明2%在特定条件下（圆形同心式）是国标允许值，但这属于支持性信息，用于解释差异来源，而非直接判定本报告所依据标准的对错（除非有证据表明本报告应优先引用国标且样品符合圆形同心式条件，但在缺乏此上下文时，Q/GDW的规定更为直接）。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "hbjc-9-r3",
+      "dataset_split": "development",
+      "retrieval_class": "report_specific",
+      "detection_project": {
+        "project_name": "压力密封试验",
+        "reported_requirement": {
+          "text": "残余压力:不低于施压的70%",
+          "unit": "kPa"
+        },
+        "sample_context": {
+          "sample_name": "油浸式变压器",
+          "model": "S20-M.RL-400/10-NX2",
+          "rated_capacity": "400 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "context_required",
+      "missing_context_fields": [
+        "tank_structure_type"
+      ],
+      "relevant_evidence": [],
+      "required_evidence_groups": [],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "not_scoreable_without_report_context"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_missing_direct_evidence",
+        "direct_candidate_count": 0,
+        "supporting_candidate_count": 3,
+        "uncertain_count": 4,
+        "missing_evidence": "缺少确认样品具体油箱结构（是否为充气密封式）的证据。若样品确认为普通波纹式全密封变压器，则报告要求‘残余压力不低于70%’缺乏直接标准支持，因为相关标准（如GB/T 6451）对此类结构仅要求无泄漏。",
+        "review_note": "报告要求‘残余压力不低于70%’仅出现在针对‘非波纹式、充气密封’变压器的标准条款中（c06, c09）。而样品S20-M.RL通常为波纹式变压器，其对应的标准条款（c11, c12）仅要求无泄漏，无残余压力指标。因此，c06和c09因产品适用性不匹配降级为uncertain；c11和c12作为证明常规波纹式变压器无此要求的背景支持保留。",
+        "recovery_note": "所有标记为direct_candidate的证据均指向“油箱内部充有气体的密封式变压器”的特定要求（剩余压力>=70%）。然而，样品型号S20-M.RL-400/10-NX2通常为波纹式或带隔膜的密封式变压器，而非充气式。相关标准（如GB/T 25446, GB/T 25438）在列出充气式要求时，通常明确排除波纹式油箱。因此，这些direct证据与样品的典型结构不匹配，降级为uncertain。supporting证据正确指出了非充气式变压器通常只要求无泄漏，不支持70%的数值要求，故保留以辅助判断报告要求的合理性或样品描述的准确性。"
+      }
+    },
+    {
+      "case_id": "ezc-4-r1",
+      "dataset_split": "validation",
+      "retrieval_class": "numeric_parameter_table",
+      "detection_project": {
+        "project_name": "空载损耗和空载电流测量(例行试验)",
+        "reported_requirement": {
+          "text": "空载损耗Po(kW): ≤0.215",
+          "unit": "kW"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200kVA",
+          "rated_voltage": "10/0.4kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 10228-2023",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 7,
+            "text_sha256": "7073e4d2d1651f46410f728ccca32ba345ad6399b05b767cc5c3f9781e20aa19",
+            "section": "4",
+            "section_title": "性能参数"
+          },
+          "evidence_quote": "4.1 6 kV、10 kV 级自冷变压器的额定容量、电压组合、联结组标号、空载损耗、负载损耗、空载电流及短路阻抗应符合表 1～表 3 的规定。",
+          "quote_verified": true,
+          "reason": "该条款明确规定10kV级变压器性能参数应符合表1规定，确立了标准引用的适用性，作为supporting_candidate成立。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 3,
+            "page_end": 3,
+            "text_sha256": "94dece7e1eadd4d46b37c4bee015f07b8f70dd3cc18725be8b67addc285b7d24",
+            "section": "1",
+            "section_title": "范围"
+          },
+          "evidence_quote": "本文件适用于三相 10 kV 电压等级、无励磁调压、额定频率为 50 Hz、额定容量为 30 kVA～2 500 kVA 的油浸式配电变压器和干式配电变压器",
+          "quote_verified": true,
+          "reason": "该条款明确了标准适用范围包含10kV、200kVA油浸式配电变压器，确认了样品符合标准适用条件，是引用后续限值的前提支持证据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 4,
+            "text_sha256": "09dc63bef8ea33caad37ed0129c552bad8148ab1506c8065313160c4feed748f",
+            "section": "5.2",
+            "section_title": "变压器能效限定值"
+          },
+          "evidence_quote": "a) 10 kV 配电变压器空载损耗和负载损耗限值均应不高于表 1 和表 2 的规定",
+          "quote_verified": true,
+          "reason": "该条款明确指引10kV配电变压器的空载损耗限值应查阅表1和表2，建立了从通用要求到具体数据表的索引关系，属于必要的适用性支持证据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "table",
+            "page_start": 5,
+            "page_end": 5,
+            "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+            "table_no": "1",
+            "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 10,
+            "page_end": 10,
+            "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+            "table_no": "6",
+            "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 10,
+                "page_end": 10,
+                "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+                "table_no": "6",
+                "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            },
+            {
+              "locator": {
+                "standard_no": "GB 20052-2024",
+                "content_type": "table",
+                "page_start": 5,
+                "page_end": 5,
+                "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+                "table_no": "1",
+                "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "candidate_recovered_by_diagnostic_search",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 3,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "报告要求0.215kW与GB/T 10228-2023中50kVA变压器的限值一致，但与样品实际容量200kVA对应的限值0.495kW严重不符。现有候选证据中，c19因容量行不匹配被拒绝；其他证据均为背景或无关标准。结论：现有证据无法支持报告要求的正确性，反而暗示报告可能引用了错误的容量行或存在笔误。",
+        "recovery_note": "所有候选证据均有效。c05和c03作为支持性证据确立了标准的适用性和查表路径；c08作为直接证据提供了精确匹配的限值数据（200kVA, 2级, 215W）。无需降级或拒绝。"
+      }
+    },
+    {
+      "case_id": "ezc-4-r2",
+      "dataset_split": "validation",
+      "retrieval_class": "numeric_parameter_table",
+      "detection_project": {
+        "project_name": "空载损耗和空载电流测量(例行试验)",
+        "reported_requirement": {
+          "text": "空载电流I0(%): ≤0.18(允许偏差+30%)",
+          "unit": "%"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200kVA",
+          "rated_voltage": "10/0.4kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 10,
+            "page_end": 10,
+            "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+            "table_no": "6",
+            "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "no_load_current_limit",
+          "requirement": "给出样品对应的空载电流基准限值。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 10,
+                "page_end": 10,
+                "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+                "table_no": "6",
+                "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [
+        {
+          "context_id": "no_load_current_tolerance",
+          "application_rule": "空载电流基准值命中后，附加设计值+30%的通用允许偏差。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.1-2013",
+                "content_type": "table",
+                "page_start": 35,
+                "page_end": 35,
+                "text_sha256": "6017f91d07380fef32e26d5c571727651c38a9a73919659fd3a1c119c24268cc",
+                "table_no": "1",
+                "table_title": "偏差"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB/T 1094.1-2013 表1（续）明确列出“空载电流”的偏差为“设计值的+30%”，直接支持报告要求中的允差部分。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "required_group_relation_verified_from_exact_corpus_evidence",
+          "deterministic_context_excluded_from_retrieval_gold"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 0,
+        "uncertain_count": 1,
+        "missing_evidence": "缺少明确给出‘0.18%’这一具体目标数值的标准条款或表格。报告中的0.18%极可能来源于特定的能效等级标准（如GB 20052-2024中的1级或2级能效限值）或制造厂的技术协议/型式试验报告，而提供的候选Chunk中未包含GB 20052的具体能效限值表或S20系列的具体技术参数定义。仅凭c03（GB/T 6451）无法解释为何限值是0.18%而非1.0%。",
+        "review_note": "c14直接提供了允差规则，保留为direct。c03提供的基准值与样品实际保证值不符，且不能解释0.18%的来源，降级为uncertain。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "ezc-5-r2",
+      "dataset_split": "validation",
+      "retrieval_class": "numeric_parameter_table",
+      "detection_project": {
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "reported_requirement": {
+          "text": "负载损耗P☐(kW): ≤2.185",
+          "unit": "kW"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200kVA",
+          "rated_voltage": "10/0.4kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 10228-2023",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 7,
+            "text_sha256": "7073e4d2d1651f46410f728ccca32ba345ad6399b05b767cc5c3f9781e20aa19",
+            "section": "4",
+            "section_title": "性能参数"
+          },
+          "evidence_quote": "4.1 6 kV、10 kV 级自冷变压器的额定容量、电压组合、联结组标号、空载损耗、负载损耗、空载电流及短路阻抗应符合表 1～表 3 的规定。",
+          "quote_verified": true,
+          "reason": "作为适用性指引保留。该条款指出10kV级变压器应符合表1~3的规定，虽然未直接提供数值，但确立了查找正确数据表的逻辑路径（即应查看10kV专用表而非20kV表），属于必要的背景支持。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "table",
+            "page_start": 5,
+            "page_end": 5,
+            "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+            "table_no": "1",
+            "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 4,
+            "text_sha256": "09dc63bef8ea33caad37ed0129c552bad8148ab1506c8065313160c4feed748f",
+            "section": "5.2",
+            "section_title": "变压器能效限定值"
+          },
+          "evidence_quote": "a) 10 kV 配电变压器空载损耗和负载损耗限值均应不高于表 1 和表 2 的规定；",
+          "quote_verified": true,
+          "reason": "该条款明确规定10kV配电变压器的负载损耗限值应不高于表1的规定，确立了c19表格的法律效力和适用性。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 3,
+            "page_end": 3,
+            "text_sha256": "94dece7e1eadd4d46b37c4bee015f07b8f70dd3cc18725be8b67addc285b7d24",
+            "section": "1",
+            "section_title": "范围"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "标准范围章节确认了10kV、无励磁调压、30-2500kVA油浸式配电变压器在本标准适用范围内，支持样品符合标准前提。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 10,
+            "page_end": 10,
+            "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+            "table_no": "6",
+            "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 10,
+                "page_end": 10,
+                "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+                "table_no": "6",
+                "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            },
+            {
+              "locator": {
+                "standard_no": "GB 20052-2024",
+                "content_type": "table",
+                "page_start": 5,
+                "page_end": 5,
+                "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+                "table_no": "1",
+                "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "candidate_recovered_by_diagnostic_search",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 3,
+        "uncertain_count": 0,
+        "missing_evidence": "缺少GB 20052-2020《电力变压器电能效率限值》或类似强制性能效标准中关于10kV、200kVA、S20系列（通常指一级能效）配电变压器的具体负载损耗限值表。报告中的2.185kW极有可能是GB 20052-2020中一级能效的限值，或者是基于该标准的设计保证值。当前候选列表主要包含GB/T 6451（推荐性，能效较低）和GB/T 10228（部分表格缺失或不匹配电压等级），无法直接找到2.185这一精确数值的来源。",
+        "review_note": "所有候选均被降级或拒绝。c04和c03因数值远高于报告要求且能效等级可能不对应而被拒绝；c12仅作为指向正确表格章节的支持性证据保留。当前缺乏包含2.185kW这一具体数值的直接证据（如GB 20052-2020一级能效表或特定合同技术协议）。",
+        "recovery_note": "所有候选证据均有效。c19提供了直接数值依据，c16提供了引用依据，c24提供了适用范围依据，共同构成了完整的证据链。"
+      }
+    },
+    {
+      "case_id": "ezc-10-r1",
+      "dataset_split": "validation",
+      "retrieval_class": "insulation_voltage",
+      "detection_project": {
+        "project_name": "线端雷电全波冲击试验(LI)(型式试验)",
+        "reported_requirement": {
+          "text": "高压线端全波电压(kV): 75kV",
+          "unit": "kV"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200kVA",
+          "rated_voltage": "10/0.4kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 16,
+            "page_end": 19,
+            "text_sha256": "6628cdb9f6bf3929aa0ed6b3c376de446638849cd7ebe56c58e1e971b7b94966",
+            "section": "7.3",
+            "section_title": "不同 U_ m 变压器的试验要求"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该条款仅规定试验电压“见表2”，并未在Chunk中直接包含75kV这一具体数值。根据规则4，只指向另一张未召回表格的章节最多是supporting。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 39,
+            "page_end": 39,
+            "text_sha256": "75d7ac3215cbc0543c012c68a598a4af9fd55d5d1f69ea5f0f4113fb90880a9f",
+            "section": "D.2",
+            "section_title": "对于 U_m ≤ 72.5 \\, kV 的变压器和绕组"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该条款确认了Um≤72.5kV变压器LI数值应从表2选取的规则，作为适用性背景支持成立。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "table",
+            "page_start": 15,
+            "page_end": 15,
+            "text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+            "table_no": "2",
+            "table_title": "绕组的试验电压水平"
+          },
+          "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施耐压或线端交流耐压35 kV。",
+          "quote_verified": true,
+          "reason": "GB/T 1094.3-2017表2直接列出10 kV系统（Um=12 kV）的雷电全波冲击(LI)试验电压为75 kV；35 kV是AV/LTAC列，不能写成LI值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 13,
+            "page_end": 16,
+            "text_sha256": "c1f2c7353cd8155ac134f472b864a7d0f8b764765b629fe67a35a2659318fe5d",
+            "section": "7.2",
+            "section_title": "试验要求"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "条款7.2.2规定由绕组设备最高电压Um确定的标准试验电压水平见表2，且无另行规定时取表中对应最低值。这确立了使用表2作为依据的通用规则，支持判定逻辑。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "JB/T 501-2021",
+            "content_type": "table",
+            "page_start": 25,
+            "page_end": 25,
+            "text_sha256": "76c4e8530c5f6ad181e3256760859a44b10f566e2e8975e6c515fa5dcd048d0f",
+            "table_no": "11",
+            "table_title": "绕组的试验电压水平"
+          },
+          "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施电压或线端交流电压35 kV。",
+          "quote_verified": true,
+          "reason": "JB/T 501-2021表11直接给出10 kV系统（Um=12 kV）的LI试验电压为75 kV，可作为同一数值关系的替代real chunk；产品适用性仍待领域审核。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "curated_exact_corpus_evidence"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.3-2017",
+                "content_type": "table",
+                "page_start": 15,
+                "page_end": 15,
+                "text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+                "table_no": "2",
+                "table_title": "绕组的试验电压水平"
+              },
+              "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施耐压或线端交流耐压35 kV。",
+              "quote_verified": true,
+              "reason": "GB/T 1094.3-2017表2直接列出10 kV系统（Um=12 kV）的雷电全波冲击(LI)试验电压为75 kV；35 kV是AV/LTAC列，不能写成LI值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            },
+            {
+              "locator": {
+                "standard_no": "JB/T 501-2021",
+                "content_type": "table",
+                "page_start": 25,
+                "page_end": 25,
+                "text_sha256": "76c4e8530c5f6ad181e3256760859a44b10f566e2e8975e6c515fa5dcd048d0f",
+                "table_no": "11",
+                "table_title": "绕组的试验电压水平"
+              },
+              "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施电压或线端交流电压35 kV。",
+              "quote_verified": true,
+              "reason": "JB/T 501-2021表11直接给出10 kV系统（Um=12 kV）的LI试验电压为75 kV，可作为同一数值关系的替代real chunk；产品适用性仍待领域审核。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "curated_exact_corpus_evidence"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "candidate_recovered_by_diagnostic_search",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 3,
+        "uncertain_count": 0,
+        "missing_evidence": "缺少GB/T 1094.3-2017标准中的“表2：不同类别变压器的绝缘水平”的具体内容。报告要求验证高压线端全波电压是否为75kV，这需要查阅表2中对应系统标称电压10kV（或设备最高电压12kV）行的LI值。当前候选列表中仅包含表1、表3及附录E的表格，未提供表2的数据，因此无法直接核对75kV这一具体数值的正确性。",
+        "review_note": "两个候选均未直接提供75kV的具体数值，均依赖于未召回的表2。c10降级为supporting，c02保持supporting。",
+        "recovery_note": "所有候选证据均有效。c13提供了直接的数值依据，c18和c20提供了引用该数值的规范依据和适用性说明，共同构成了完整的证据链。"
+      }
+    },
+    {
+      "case_id": "ezc-8-r1",
+      "dataset_split": "validation",
+      "retrieval_class": "insulation_voltage",
+      "detection_project": {
+        "project_name": "绝缘液试验(例行试验)",
+        "reported_requirement": {
+          "text": "击穿电压(kV): ≥40",
+          "unit": "kV"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200kVA",
+          "rated_voltage": "10/0.4kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 34,
+            "page_end": 34,
+            "text_sha256": "3ce4f9205cf18817a3ea896b1bec134af2345da0538eea24da00e58fd88fee7d",
+            "table_no": "30",
+            "table_title": "油浸式配电变压器例行试验项目、试验方法和判定标准"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Chunk直接包含表30中‘绝缘油试验’的判定标准‘击穿电压≥40 kV’，与报告要求完全一致，且适用于油浸式配电变压器例行试验。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "JB/T 501-2021",
+            "content_type": "table",
+            "page_start": 9,
+            "page_end": 9,
+            "text_sha256": "4eaf821782754592b95083429e1781d50229c43cda04c3d255e0820827dae534",
+            "table_no": "2",
+            "table_title": "绝缘油耐压规定值"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "虽然JB/T 501-2021表2规定了≤35kV电压等级击穿电压≥40kV，但当前测试项目为‘绝缘液试验(例行试验)’，通常依据产品专用标准（如Q/GDW 12126.4）或引用标准的具体条款。JB/T 501作为基础参数标准，在此处更多提供背景支持或适用性验证，而非该特定例行试验项目的直接判定依据（尤其是当存在更具体的Q/GDW标准时）。此外，需确认S20-M.RL系列是否明确引用JB/T 501作为绝缘油耐压的直接判定源，若无明确引用链，其direct地位弱于c02。鉴于c02已提供直接证据，c11降级为supporting以体现层级关系。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 34,
+                "page_end": 34,
+                "text_sha256": "3ce4f9205cf18817a3ea896b1bec134af2345da0538eea24da00e58fd88fee7d",
+                "table_no": "30",
+                "table_title": "油浸式配电变压器例行试验项目、试验方法和判定标准"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Chunk直接包含表30中‘绝缘油试验’的判定标准‘击穿电压≥40 kV’，与报告要求完全一致，且适用于油浸式配电变压器例行试验。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 1,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "c02是直接来自相关行业标准（Q/GDW 12126.4）的表格证据，明确列出了例行试验中绝缘油击穿电压的要求，完全匹配。c11来自JB/T 501，虽然数值一致且电压等级覆盖，但在有专门针对‘例行试验’的标准（c02）存在时，JB/T 501通常作为基础技术规范提供支持，或者需要确认产品技术条件是否直接引用该表作为验收依据。为了严谨性，将c11降级为supporting，因为c02已经构成了充分的direct证据，且c02的来源更贴合‘例行试验’这一具体场景。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "ezc-5-r4",
+      "dataset_split": "validation",
+      "retrieval_class": "rule_formula",
+      "detection_project": {
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "reported_requirement": {
+          "text": "总损耗P总(kW): ≤2.40",
+          "unit": "kW"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200kVA",
+          "rated_voltage": "10/0.4kV"
+        }
+      },
+      "evaluation_scope": "deterministic_prefilter",
+      "answerability_status": "not_applicable_to_retrieval",
+      "missing_context_fields": [],
+      "relevant_evidence": [],
+      "required_evidence_groups": [],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_irrelevant_to_retrieval_prefilter",
+          "candidate_recovered_by_diagnostic_search",
+          "excluded_from_retrieval_denominator"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 2,
+        "supporting_candidate_count": 5,
+        "uncertain_count": 0,
+        "missing_evidence": "缺少明确指向S20能效等级（一级能效）的具体标准条款或表格。GB/T 6451-2023表5给出的2.85/2.72kW远高于报告的2.40kW，说明样品可能执行的是更严格的能效标准（如GB 20052-2020或GB/T 6451中的更高能效等级表，若存在）。当前候选仅包含GB/T 6451的基本型数据，无法直接解释为何要求是2.40kW，除非确认样品执行的是特定高能效标准或合同特殊约定。此外，未提供GB 20052-2020《电力变压器能效限定值及能效等级》的相关Chunk，该标准通常规定S20系列的损耗限值。",
+        "review_note": "关键问题在于缺少S20系列变压器对应的具体能效标准（如GB 20052-2020中关于S20的具体限值表，或合同技术协议）。GB/T 6451-2023表5的限值远高于报告要求，不能作为S20产品的直接合规依据（即：满足GB/T 6451不代表满足S20要求，反之亦然，需明确S20的标准限值）。当前候选中无直接给出S20-200kVA ≤2.40kW依据的证据，故c04被拒绝，c19降级。",
+        "recovery_note": "核心问题在于报告要求≤2.40kW显著低于GB/T 6451-2023中10kV/200kVA变压器的基础负载损耗限值（约2.60-2.73 kW）。这表明样品必须符合更严格的能效标准GB 20052-2024。因此，GB/T 6451的表格（c09, c38）不能保留为direct_candidate，因为它们提供的数值不匹配报告要求；其中c38因电压匹配可作为基础背景降级为supporting，c09因电压层级次要且数值更不匹配被拒绝。GB 20052的引用条款（c14）和GB/T 6451的章节指引（c24）作为确定标准适用性的背景证据予以保留。当前候选集中缺乏GB 20052的具体能效限值表（表1/表2），故无法提供direct证据，但现有决策已正确反映了各候选的作用层级。"
+      }
+    },
+    {
+      "case_id": "ezc-7-r4",
+      "dataset_split": "validation",
+      "retrieval_class": "rule_formula",
+      "detection_project": {
+        "project_name": "感应耐压试验(IVW)(例行试验)",
+        "reported_requirement": {
+          "text": "持续时间(s): 120*(额定频率/试验频率),但不少于15s",
+          "unit": "s"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200kVA",
+          "rated_voltage": "10/0.4kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 20,
+            "page_end": 20,
+            "text_sha256": "29262350048235c71caa429a2970919a18a62070c0a41a48b4c4daea66068019",
+            "section": "11.2",
+            "section_title": "感应耐压试验(IVW)"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Chunk文本直接包含报告要求中的完整公式'120*(额定频率/试验频率)'及最小值'不少于15s'，且明确针对感应耐压试验(IVW)，与样品测试项目完全匹配。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 16,
+            "page_end": 19,
+            "text_sha256": "6628cdb9f6bf3929aa0ed6b3c376de446638849cd7ebe56c58e1e971b7b94966",
+            "section": "7.3",
+            "section_title": "不同 U_ m 变压器的试验要求"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该候选确认了10kV变压器（Um≤72.5kV）的例行感应耐压试验应遵循第11.2节方法，建立了标准条款与样品的适用性联系，作为supporting_candidate标签正确。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.3-2017",
+                "content_type": "section",
+                "page_start": 20,
+                "page_end": 20,
+                "text_sha256": "29262350048235c71caa429a2970919a18a62070c0a41a48b4c4daea66068019",
+                "section": "11.2",
+                "section_title": "感应耐压试验(IVW)"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Chunk文本直接包含报告要求中的完整公式'120*(额定频率/试验频率)'及最小值'不少于15s'，且明确针对感应耐压试验(IVW)，与样品测试项目完全匹配。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 1,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "c01提供了具体的数值和计算公式，是直接证据；c08提供了适用范围和引用关系，是有效的支持证据。两者均符合其当前标签定义。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "ezc-1-r1",
+      "dataset_split": "validation",
+      "retrieval_class": "report_specific",
+      "detection_project": {
+        "project_name": "绕组对地及绕组间直流绝缘电阻测量(例行试验)",
+        "reported_requirement": {
+          "text": "高压对低压及地绝缘电阻(MΩ): ≥1000MΩ",
+          "unit": "MΩ"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200kVA",
+          "rated_voltage": "10/0.4kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 33,
+            "page_end": 33,
+            "text_sha256": "f6494f72b789907a7b6899cc56f15a3419a1298baa1d55cc88d8ba8a87e96a91",
+            "table_no": "30",
+            "table_title": "油浸式配电变压器例行试验项目、试验方法和判定标准"
+          },
+          "evidence_quote": "高压绕组大于或等于1000 MΩ, 其他绕组大于或等于500 MΩ。",
+          "quote_verified": true,
+          "reason": "Chunk包含表30（续）中序号3“绕组对地及绕组间直流绝缘电阻测量”的判定标准，明确给出“高压绕组大于或等于1000 MΩ”。样品为10kV配电变压器，属于高压侧，该数值直接支持报告要求中的≥1000MΩ。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 32,
+            "page_end": 32,
+            "text_sha256": "28f49aba4bc35168aab2c7a1b63358abca7988665ad3c0bb27ec2505e8aa4743",
+            "table_no": "30",
+            "table_title": "油浸式配电变压器例行试验项目、试验方法和判定标准"
+          },
+          "evidence_quote": "表 30 油浸式配电变压器例行试验项目、试验方法和判定标准",
+          "quote_verified": true,
+          "reason": "作为表30的前半部分，确认了表格标题为“油浸式配电变压器例行试验项目、试验方法和判定标准”，确立了c02中数据的适用对象范围，起到必要的背景支持作用。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 33,
+                "page_end": 33,
+                "text_sha256": "f6494f72b789907a7b6899cc56f15a3419a1298baa1d55cc88d8ba8a87e96a91",
+                "table_no": "30",
+                "table_title": "油浸式配电变压器例行试验项目、试验方法和判定标准"
+              },
+              "evidence_quote": "高压绕组大于或等于1000 MΩ, 其他绕组大于或等于500 MΩ。",
+              "quote_verified": true,
+              "reason": "Chunk包含表30（续）中序号3“绕组对地及绕组间直流绝缘电阻测量”的判定标准，明确给出“高压绕组大于或等于1000 MΩ”。样品为10kV配电变压器，属于高压侧，该数值直接支持报告要求中的≥1000MΩ。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 1,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "c02提供了直接的数值依据，且与样品电压等级匹配；c01提供了表格适用范围的支持。两者结合完整支撑了报告要求。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "ezc-11-r2",
+      "dataset_split": "validation",
+      "retrieval_class": "report_specific",
+      "detection_project": {
+        "project_name": "温升试验(型式试验)",
+        "reported_requirement": {
+          "text": "高压绕组平均温升(K): ≤65",
+          "unit": "K"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200kVA",
+          "rated_voltage": "10/0.4kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 6451-2023",
+            "content_type": "section",
+            "page_start": 65,
+            "page_end": 66,
+            "text_sha256": "b31cb73b97281c2b850cbabcdba8b5ed311c6141039e5ad82cccdf4ccae92d50",
+            "section": "12.1",
+            "section_title": "性能参数"
+          },
+          "evidence_quote": "绕组平均温升(用电阻法测量): 65 K。",
+          "quote_verified": true,
+          "reason": "GB/T 6451-2023 是配电变压器的专用产品标准，第12.1.2节明确规定绕组平均温升限值为65K，直接对应报告要求。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.2-2013",
+            "content_type": "table",
+            "page_start": 9,
+            "page_end": 9,
+            "text_sha256": "f0f3af33e74d2ee610680f7a6a06f7522e1ebd69265a2e1359fd15bcc1dd533f",
+            "table_no": "1",
+            "table_title": "温升限值"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "GB/T 1094.2 为基础通用标准，虽数值一致，但针对配电变压器应优先适用专用标准 GB/T 6451，故降级为支持性证据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.2-2013",
+            "content_type": "section",
+            "page_start": 9,
+            "page_end": 10,
+            "text_sha256": "bb95d46e0fd03dbfa671aa88fb580e7c04c2f2436a91916106b1153f702f5d06",
+            "section": "6.2",
+            "section_title": "额定容量下的温升限值"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该段落说明表1的适用范围（矿物油、105级绝缘），用于佐证基础标准的适用条件，属于背景支持，非直接限值规定。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 6451-2023",
+                "content_type": "section",
+                "page_start": 65,
+                "page_end": 66,
+                "text_sha256": "b31cb73b97281c2b850cbabcdba8b5ed311c6141039e5ad82cccdf4ccae92d50",
+                "section": "12.1",
+                "section_title": "性能参数"
+              },
+              "evidence_quote": "绕组平均温升(用电阻法测量): 65 K。",
+              "quote_verified": true,
+              "reason": "GB/T 6451-2023 是配电变压器的专用产品标准，第12.1.2节明确规定绕组平均温升限值为65K，直接对应报告要求。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 2,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "c09 作为专用产品标准直接规定了限值，保留为 direct；c02 和 c10 来自基础标准，仅起支撑或解释作用，降级为 supporting。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "ezc-12-r4",
+      "dataset_split": "validation",
+      "retrieval_class": "report_specific",
+      "detection_project": {
+        "project_name": "短时过负载能力试验(型式试验)",
+        "reported_requirement": {
+          "text": "油箱外壳最高温升(K): ≤85",
+          "unit": "K"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200kVA",
+          "rated_voltage": "10/0.4kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 32,
+            "page_end": 32,
+            "text_sha256": "de621387ffa7f763a2cc2a64681233108d5d39a0eb4e56b80676aaeaa37b5424",
+            "table_no": "29",
+            "table_title": "油浸式配电变压器型式试验项目、试验方法和判定标准"
+          },
+          "evidence_quote": "d)油箱外壳及套管的温升不大于85K。",
+          "quote_verified": true,
+          "reason": "Chunk中表29第6项明确列出“短时过负载能力试验”的判定标准d)为“油箱外壳及套管的温升不大于85K”，与报告要求完全一致，且该表适用于油浸式配电变压器。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "section",
+            "page_start": 31,
+            "page_end": 31,
+            "text_sha256": "e541f3839e287477b4024a1ff5310738496b52c69421419200d459a846f5880d",
+            "section": "8.1",
+            "section_title": "无励磁、有载调压油浸式配电变压器的型式、例行和特殊试验"
+          },
+          "evidence_quote": "无励磁和有载调压油浸式配电变压器的型式、例行和特殊试验项目、试验方法和判定标准见表 29~表 31。",
+          "quote_verified": true,
+          "reason": "该条款确立了表29对无励磁和有载调压油浸式配电变压器的适用范围，支持将表29中的要求应用于样品S20-M.RL-200/10-NX2（属于此类变压器）。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 32,
+                "page_end": 32,
+                "text_sha256": "de621387ffa7f763a2cc2a64681233108d5d39a0eb4e56b80676aaeaa37b5424",
+                "table_no": "29",
+                "table_title": "油浸式配电变压器型式试验项目、试验方法和判定标准"
+              },
+              "evidence_quote": "d)油箱外壳及套管的温升不大于85K。",
+              "quote_verified": true,
+              "reason": "Chunk中表29第6项明确列出“短时过负载能力试验”的判定标准d)为“油箱外壳及套管的温升不大于85K”，与报告要求完全一致，且该表适用于油浸式配电变压器。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 1,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "候选c04直接提供了目标数值和测试项目匹配；候选c20确认了标准章节对样品的适用性。两者均有效。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "whc-4-r1",
+      "dataset_split": "test",
+      "retrieval_class": "numeric_parameter_table",
+      "detection_project": {
+        "project_name": "空载损耗和空载电流测量(例行试验)",
+        "reported_requirement": {
+          "text": "空载损耗Po(kW): ≤0.215",
+          "unit": "kW"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 10228-2023",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 7,
+            "text_sha256": "7073e4d2d1651f46410f728ccca32ba345ad6399b05b767cc5c3f9781e20aa19",
+            "section": "4",
+            "section_title": "性能参数"
+          },
+          "evidence_quote": "4.1 6 kV、10 kV 级自冷变压器的额定容量、电压组合、联结组标号、空载损耗、负载损耗、空载电流及短路阻抗应符合表 1～表 3 的规定。",
+          "quote_verified": true,
+          "reason": "该条款确立了GB/T 10228-2023中表1适用于10kV级配电变压器，支持将c18作为有效依据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 3,
+            "page_end": 3,
+            "text_sha256": "94dece7e1eadd4d46b37c4bee015f07b8f70dd3cc18725be8b67addc285b7d24",
+            "section": "1",
+            "section_title": "范围"
+          },
+          "evidence_quote": "本文件适用于三相 10 kV 电压等级、无励磁调压、额定频率为 50 Hz、额定容量为 30 kVA～2 500 kVA 的油浸式配电变压器和干式配电变压器",
+          "quote_verified": true,
+          "reason": "仅确认了GB 20052-2024的适用范围，未提供具体的损耗限值数据，属于背景支持。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "table",
+            "page_start": 5,
+            "page_end": 5,
+            "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+            "table_no": "1",
+            "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 4,
+            "text_sha256": "09dc63bef8ea33caad37ed0129c552bad8148ab1506c8065313160c4feed748f",
+            "section": "5.2",
+            "section_title": "变压器能效限定值"
+          },
+          "evidence_quote": "a) 10 kV 配电变压器空载损耗和负载损耗限值均应不高于表 1 和表 2 的规定；",
+          "quote_verified": true,
+          "reason": "指明 10kV 配电变压器的能效限定值应查阅表 1 和表 2，建立了从标准条款到具体数据表的引用关系。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "section",
+            "page_start": 42,
+            "page_end": 42,
+            "text_sha256": "7c8c3971ed4ed2f26c27b68b891fde1ec5b9065ded18603f725b6dc53d235709",
+            "section": "B",
+            "section_title": "（资料性） 常用配电变压器型号标注示例"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "通过型号标注示例，确认 S20-M.RL-200/10-NX2 为电工钢铁心、立体卷铁心结构，且明确其损耗水平代号“20”对应 GB 20052 二级能效要求。这佐证了应使用 GB 20052 中 2级能效的限值作为判定依据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 10,
+            "page_end": 10,
+            "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+            "table_no": "6",
+            "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 10,
+                "page_end": 10,
+                "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+                "table_no": "6",
+                "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            },
+            {
+              "locator": {
+                "standard_no": "GB 20052-2024",
+                "content_type": "table",
+                "page_start": 5,
+                "page_end": 5,
+                "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+                "table_no": "1",
+                "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "candidate_recovered_by_diagnostic_search",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 4,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "核心问题在于报告要求的数值0.215 kW与样品容量200 kVA在标准GB/T 10228-2023表1中不对应（200 kVA对应0.495 kW，50 kVA对应0.215 kW）。因此，声称直接支持的c18因容量行错误被拒绝。其他证据作为背景或对比支持保留或降级。",
+        "recovery_note": "所有候选证据均有效。c09和c04确立了标准适用范围及查表路径；c40通过型号示例确认了产品对应的能效等级（2级）和铁心材质（电工钢）；c20提供了具体的限值数据（200kVA, 2级, 电工钢带 -> 215W），与报告要求完全一致。逻辑链条完整，无需降级。"
+      }
+    },
+    {
+      "case_id": "whc-4-r2",
+      "dataset_split": "test",
+      "retrieval_class": "numeric_parameter_table",
+      "detection_project": {
+        "project_name": "空载损耗和空载电流测量(例行试验)",
+        "reported_requirement": {
+          "text": "空载电流I0(%): ≤0.18(1+30%)",
+          "unit": "%"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.1-2013",
+            "content_type": "section",
+            "page_start": 13,
+            "page_end": 14,
+            "text_sha256": "6b47ad60775cea4133c15d2d6f261ca1c4d38eca4f0ca201492c5bd7611216ab",
+            "section": "3.6",
+            "section_title": "损耗和空载电流"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Chunk定义了空载电流通常用百分数表示，支持了报告中使用“%”作为单位的规范性，属于有效的适用性/定义支持证据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 10,
+            "page_end": 10,
+            "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+            "table_no": "6",
+            "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "no_load_current_limit",
+          "requirement": "给出样品对应的空载电流基准限值。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 10,
+                "page_end": 10,
+                "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+                "table_no": "6",
+                "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [
+        {
+          "context_id": "no_load_current_tolerance",
+          "application_rule": "空载电流基准值命中后，附加设计值+30%的通用允许偏差。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.1-2013",
+                "content_type": "table",
+                "page_start": 35,
+                "page_end": 35,
+                "text_sha256": "6017f91d07380fef32e26d5c571727651c38a9a73919659fd3a1c119c24268cc",
+                "table_no": "1",
+                "table_title": "偏差"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB/T 1094.1-2013 表1（续）明确列出“空载电流”的偏差为“设计值的+30%”，直接支持报告要求中的允差部分。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "required_group_relation_verified_from_exact_corpus_evidence",
+          "deterministic_context_excluded_from_retrieval_gold"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 1,
+        "uncertain_count": 1,
+        "missing_evidence": "缺少明确给出报告数值“0.18%”所依据的具体能效等级或设计标准的条款（例如GB 20052-2024中针对S20型变压器的具体限值表，或者合同技术协议）。目前的候选项仅能验证偏差规则（+30%）和产品适用性，无法直接验证基准值0.18%的正确性来源。",
+        "review_note": "c15保留了直接判定偏差规则的依据；c14保留了对单位定义的支撑；c04降级为uncertain，因为其提供的标准参考值（1.0%）与报告实际使用的基准值（0.18%）严重不符，无法直接支持该特定基准值的合法性，需进一步确认设计值来源。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "whc-5-r2",
+      "dataset_split": "test",
+      "retrieval_class": "numeric_parameter_table",
+      "detection_project": {
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "reported_requirement": {
+          "text": "负载损耗P☐(kW): ≤2.185",
+          "unit": "kW"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 10228-2023",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 7,
+            "text_sha256": "7073e4d2d1651f46410f728ccca32ba345ad6399b05b767cc5c3f9781e20aa19",
+            "section": "4",
+            "section_title": "性能参数"
+          },
+          "evidence_quote": "4.1 6 kV、10 kV 级自冷变压器的额定容量、电压组合、联结组标号、空载损耗、负载损耗、空载电流及短路阻抗应符合表 1～表 3 的规定。",
+          "quote_verified": true,
+          "reason": "该条款明确规定了10kV级配电变压器的性能参数应符合表1～表3的规定，确立了c16中表格的适用性，作为支持性证据成立。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 4,
+            "text_sha256": "09dc63bef8ea33caad37ed0129c552bad8148ab1506c8065313160c4feed748f",
+            "section": "5.2",
+            "section_title": "变压器能效限定值"
+          },
+          "evidence_quote": "a) 10 kV 配电变压器空载损耗和负载损耗限值均应不高于表 1 和表 2 的规定；",
+          "quote_verified": true,
+          "reason": "该条款明确建立了10kV配电变压器负载损耗限值与表1、表2的引用关系，是确定适用数据表的必要依据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 3,
+            "page_end": 3,
+            "text_sha256": "94dece7e1eadd4d46b37c4bee015f07b8f70dd3cc18725be8b67addc285b7d24",
+            "section": "1",
+            "section_title": "范围"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "确认了样品（10kV, 200kVA油浸式）在标准GB 20052-2024的适用范围内，证明标准适用的背景支持。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "table",
+            "page_start": 5,
+            "page_end": 5,
+            "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+            "table_no": "1",
+            "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 10,
+            "page_end": 10,
+            "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+            "table_no": "6",
+            "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 10,
+                "page_end": 10,
+                "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+                "table_no": "6",
+                "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            },
+            {
+              "locator": {
+                "standard_no": "GB 20052-2024",
+                "content_type": "table",
+                "page_start": 5,
+                "page_end": 5,
+                "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+                "table_no": "1",
+                "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "candidate_recovered_by_diagnostic_search",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 3,
+        "uncertain_count": 1,
+        "missing_evidence": "缺少关于样品具体绝缘耐热等级（如B级、F级或H级）的明确信息，虽然通常配电变压器默认为F级或B级，但不同等级的限值不同（c16中分别为2.37, 2.53, 2.71 kW）。此外，若样品符合更高能效标准（如GB 20052中的1级或2级能效），其损耗限值可能更低，当前候选未提供能效等级与损耗限值的映射关系，无法解释为何报告要求是2.185这一特定数值（它低于GB/T 10228的常规限值，可能对应特定能效等级或协议值）。",
+        "review_note": "报告要求的负载损耗限值2.185kW与GB/T 10228-2023表1中常规绝缘等级下的限值（2.37~2.71kW）不符，暗示可能涉及能效等级（如一级能效）或其他标准。c16虽提供基准数据，但因缺乏将2.185与标准值关联的直接依据（如能效换算公式或特定能效等级表），降级为uncertain。c03正确建立了标准章节与表格的联系，保留为supporting。",
+        "recovery_note": "所有候选证据均有效。c22为直接证据，提供了精确匹配的数值；c08和c11分别为引用关系和适用范围的支持性证据，共同构成了完整的证据链。"
+      }
+    },
+    {
+      "case_id": "whc-6-r1",
+      "dataset_split": "test",
+      "retrieval_class": "insulation_voltage",
+      "detection_project": {
+        "project_name": "外施耐压试验(AV)(例行试验)",
+        "reported_requirement": {
+          "text": "高压对低压及地试验电压(kV): 35",
+          "unit": "kV"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "table",
+            "page_start": 15,
+            "page_end": 15,
+            "text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+            "table_no": "2",
+            "table_title": "绕组的试验电压水平"
+          },
+          "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施耐压或线端交流耐压35 kV。",
+          "quote_verified": true,
+          "reason": "GB/T 1094.3-2017表2直接列出10 kV系统（Um=12 kV）的外施耐压或线端交流耐压(AV/LTAC)为35 kV；75 kV是LI列，不能写成AV值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 16,
+            "page_end": 19,
+            "text_sha256": "6628cdb9f6bf3929aa0ed6b3c376de446638849cd7ebe56c58e1e971b7b94966",
+            "section": "7.3",
+            "section_title": "不同 U_ m 变压器的试验要求"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该章节明确规定Um≤72.5kV变压器（含10kV）的外施耐压试验电压应参照表2选取，建立了从产品到数值表的必要引用关系。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 19,
+            "page_end": 20,
+            "text_sha256": "948260756186d5b8e2eea4cfba0210fcc1f8e1f4b5895de8ecc31aa07132cbb8",
+            "section": "10",
+            "section_title": "外施耐压试验(AV)"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该章节定义了外施耐压试验的执行方法和合格判定标准（电压不突然下降），是验证试验结果是否合格的必要规范依据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.3-2017",
+                "content_type": "table",
+                "page_start": 15,
+                "page_end": 15,
+                "text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+                "table_no": "2",
+                "table_title": "绕组的试验电压水平"
+              },
+              "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施耐压或线端交流耐压35 kV。",
+              "quote_verified": true,
+              "reason": "GB/T 1094.3-2017表2直接列出10 kV系统（Um=12 kV）的外施耐压或线端交流耐压(AV/LTAC)为35 kV；75 kV是LI列，不能写成AV值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 2,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "所有候选证据均有效。c14提供具体数值，c07提供数值选取的适用性依据，c01提供试验执行和判定的方法依据，三者共同构成完整的证据链。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "whc-10-r1",
+      "dataset_split": "test",
+      "retrieval_class": "insulation_voltage",
+      "detection_project": {
+        "project_name": "线端雷电全波冲击试验(LI)(型式试验)",
+        "reported_requirement": {
+          "text": "高压线端全波电压(kV): -75(1±3%)波前时间:T1:1.2 μs±30% 半峰值时间:T2:50 μs±20%",
+          "unit": "kV"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 24,
+            "page_end": 26,
+            "text_sha256": "c383f3f76a093d1fa601d48c3979faa59ce0733868316988ea9b04df46f4e43e",
+            "section": "13.2",
+            "section_title": "雷电全波冲击试验(LI)"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Chunk直接规定了雷电全波冲击试验的标准波形参数（1.2μs±30%，50μs±20%）及电压偏差（±3%），与报告要求中的数值和允差完全一致，是判断报告合规性的核心依据。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 16,
+            "page_end": 19,
+            "text_sha256": "6628cdb9f6bf3929aa0ed6b3c376de446638849cd7ebe56c58e1e971b7b94966",
+            "section": "7.3",
+            "section_title": "不同 U_ m 变压器的试验要求"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该段落仅确认了Um≤72.5kV变压器需进行LI试验并引用第13章作为方法依据，属于适用性支持，不包含具体的波形或电压数值规范。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "table",
+            "page_start": 15,
+            "page_end": 15,
+            "text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+            "table_no": "2",
+            "table_title": "绕组的试验电压水平"
+          },
+          "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施耐压或线端交流耐压35 kV。",
+          "quote_verified": true,
+          "reason": "GB/T 1094.3-2017表2直接列出10 kV系统（Um=12 kV）的雷电全波冲击(LI)试验电压为75 kV；35 kV是AV/LTAC列，不能写成LI值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "JB/T 501-2021",
+            "content_type": "table",
+            "page_start": 25,
+            "page_end": 25,
+            "text_sha256": "76c4e8530c5f6ad181e3256760859a44b10f566e2e8975e6c515fa5dcd048d0f",
+            "table_no": "11",
+            "table_title": "绕组的试验电压水平"
+          },
+          "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施电压或线端交流电压35 kV。",
+          "quote_verified": true,
+          "reason": "JB/T 501-2021表11直接给出10 kV系统（Um=12 kV）的LI试验电压为75 kV，可作为同一数值关系的替代real chunk；产品适用性仍待领域审核。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "curated_exact_corpus_evidence"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "lightning_impulse_voltage",
+          "requirement": "给出样品电压等级对应的雷电冲击耐受电压。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.3-2017",
+                "content_type": "table",
+                "page_start": 15,
+                "page_end": 15,
+                "text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+                "table_no": "2",
+                "table_title": "绕组的试验电压水平"
+              },
+              "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施耐压或线端交流耐压35 kV。",
+              "quote_verified": true,
+              "reason": "GB/T 1094.3-2017表2直接列出10 kV系统（Um=12 kV）的雷电全波冲击(LI)试验电压为75 kV；35 kV是AV/LTAC列，不能写成LI值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            },
+            {
+              "locator": {
+                "standard_no": "JB/T 501-2021",
+                "content_type": "table",
+                "page_start": 25,
+                "page_end": 25,
+                "text_sha256": "76c4e8530c5f6ad181e3256760859a44b10f566e2e8975e6c515fa5dcd048d0f",
+                "table_no": "11",
+                "table_title": "绕组的试验电压水平"
+              },
+              "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施电压或线端交流电压35 kV。",
+              "quote_verified": true,
+              "reason": "JB/T 501-2021表11直接给出10 kV系统（Um=12 kV）的LI试验电压为75 kV，可作为同一数值关系的替代real chunk；产品适用性仍待领域审核。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "curated_exact_corpus_evidence"
+            }
+          ]
+        },
+        {
+          "group_id": "lightning_impulse_waveform",
+          "requirement": "给出雷电全波的波形参数和试验电压偏差。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.3-2017",
+                "content_type": "section",
+                "page_start": 24,
+                "page_end": 26,
+                "text_sha256": "c383f3f76a093d1fa601d48c3979faa59ce0733868316988ea9b04df46f4e43e",
+                "section": "13.2",
+                "section_title": "雷电全波冲击试验(LI)"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Chunk直接规定了标准雷电冲击全波的波形参数（1.2μs±30% / 50μs±20%）及试验电压偏差（±3%），与报告要求中的波形和偏差描述完全一致，是判断报告合规性的核心依据。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 1,
+        "uncertain_count": 0,
+        "missing_evidence": "缺少GB/T 1094.3-2017中表2的具体内容，无法直接核对报告中提到的具体试验电压值“-75kV”是否符合该电压等级（10/0.4 kV）的标准规定值。虽然c12指出电压见表2，但提供的候选列表中未包含表2的相关行。",
+        "review_note": "c02提供了具体的波形和偏差数值，直接支持报告要求；c12仅说明试验项目的适用性和章节引用，降级为supporting。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "whc-5-r4",
+      "dataset_split": "test",
+      "retrieval_class": "rule_formula",
+      "detection_project": {
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "reported_requirement": {
+          "text": "总损耗P总(kW): ≤2.400",
+          "unit": "kW"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "deterministic_prefilter",
+      "answerability_status": "not_applicable_to_retrieval",
+      "missing_context_fields": [],
+      "relevant_evidence": [],
+      "required_evidence_groups": [],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_irrelevant_to_retrieval_prefilter",
+          "candidate_recovered_by_diagnostic_search",
+          "excluded_from_retrieval_denominator"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 2,
+        "supporting_candidate_count": 4,
+        "uncertain_count": 1,
+        "missing_evidence": "缺少GB 20052-2024中针对10kV、200kVA配电变压器的具体能效限定值表格（表1或表2），以确认2.400 kW是否为该标准下的确切限值。同时，缺少确认样品绝缘耐热等级（如是否为155级F级）的直接证据，尽管S20通常为F级，但明确确认更佳。",
+        "review_note": "c20从direct降级为uncertain，因为报告要求的2.400kW低于GB/T 10228表1中的2.53kW，暗示可能适用更严格的能效标准（如GB 20052），而当前Chunk缺乏确认具体能效等级或对应严格限值的直接数据。c12和c13作为支持性证据保留，分别确立了标准适用范围和能效标准的存在。",
+        "recovery_note": "核心判定依据为GB 20052-2024表1（c36）。报告要求的2.400kW低于3级能效限值（2.600-2.730kW），满足国家强制性能效限定值。S20型号通常对应2级能效（限值约2.080-2.185kW），2.400kW虽高于2级典型限值，但作为“总损耗”上限要求，只要不低于3级底线即符合强制性规定。若需进一步验证是否达到2级，需结合具体能效等级声明，但就“是否符合标准限值”这一基本合规性而言，c36是直接证据。c33因标准效力低且数值不具约束力被拒。"
+      }
+    },
+    {
+      "case_id": "whc-7-r4",
+      "dataset_split": "test",
+      "retrieval_class": "rule_formula",
+      "detection_project": {
+        "project_name": "感应耐压试验(IVW)(例行试验)",
+        "reported_requirement": {
+          "text": "持续时间(s): <eq>15 \\leq t \\leq 6</eq>0",
+          "unit": "s"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 20,
+            "page_end": 20,
+            "text_sha256": "29262350048235c71caa429a2970919a18a62070c0a41a48b4c4daea66068019",
+            "section": "11.2",
+            "section_title": "感应耐压试验(IVW)"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Chunk直接包含感应耐压试验持续时间的具体数值（60s）和计算公式及下限（15s），完全覆盖报告要求中的范围判断依据。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 39,
+            "page_end": 39,
+            "text_sha256": "6755da98b7adf3225a98a6f0b5ea5890d58182794c2d754b673efe2b43e49c45",
+            "table_no": "36",
+            "table_title": "干式配电变压器例行试验项目、试验方法和判定标准"
+          },
+          "evidence_quote": "相对地试验电压: 2×Ur/√3, 试验电压频率等于或小于2倍频率时, 其全电压下的试验时间为60 s; 试验频率超过两倍额定频率时, 试验电压应为: 120×(额定频率/试验频率)(s), 但不少于15 s。",
+          "quote_verified": true,
+          "reason": "该标准针对干式变压器，而样品S20-M.RL通常为油浸式，产品适用性不匹配；且其内容引用自GB/T 1094.3，仅作为背景支持或引用关系证明，非直接判定依据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 16,
+            "page_end": 19,
+            "text_sha256": "6628cdb9f6bf3929aa0ed6b3c376de446638849cd7ebe56c58e1e971b7b94966",
+            "section": "7.3",
+            "section_title": "不同 U_ m 变压器的试验要求"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该章节仅确认了10kV变压器需进行感应耐压试验并指向第11.2节，未直接提供持续时间数值或公式，属于适用性指引。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.3-2017",
+                "content_type": "section",
+                "page_start": 20,
+                "page_end": 20,
+                "text_sha256": "29262350048235c71caa429a2970919a18a62070c0a41a48b4c4daea66068019",
+                "section": "11.2",
+                "section_title": "感应耐压试验(IVW)"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Chunk直接包含感应耐压试验持续时间的具体数值（60s）和计算公式及下限（15s），完全覆盖报告要求中的范围判断依据。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 2,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "c01提供了核心的时间参数和计算规则，是唯一的direct证据。c02因产品类型潜在不符且为引用性质降级。c09仅为条款索引，降级为supporting。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "whc-14-2-5-r2",
+      "dataset_split": "test",
+      "retrieval_class": "repeat_routine",
+      "detection_project": {
+        "project_name": "短路阻抗和负载损耗测量(重复例行试验)",
+        "reported_requirement": {
+          "text": "负载损耗P☐(kW): ≤2.185",
+          "unit": "kW"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 10228-2023",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 7,
+            "text_sha256": "7073e4d2d1651f46410f728ccca32ba345ad6399b05b767cc5c3f9781e20aa19",
+            "section": "4",
+            "section_title": "性能参数"
+          },
+          "evidence_quote": "4.1 6 kV、10 kV 级自冷变压器的额定容量、电压组合、联结组标号、空载损耗、负载损耗、空载电流及短路阻抗应符合表 1～表 3 的规定。",
+          "quote_verified": true,
+          "reason": "该章节明确引用了表1作为6kV、10kV级自冷变压器性能参数的依据，支持c19的适用性，属于有效的背景支持证据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "table",
+            "page_start": 5,
+            "page_end": 5,
+            "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+            "table_no": "1",
+            "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 3,
+            "page_end": 3,
+            "text_sha256": "94dece7e1eadd4d46b37c4bee015f07b8f70dd3cc18725be8b67addc285b7d24",
+            "section": "1",
+            "section_title": "范围"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该章节定义了标准适用范围，确认了10kV、30-2500kVA油浸式配电变压器在标准覆盖范围内，支持c26的适用性。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 4,
+            "text_sha256": "09dc63bef8ea33caad37ed0129c552bad8148ab1506c8065313160c4feed748f",
+            "section": "5.2",
+            "section_title": "变压器能效限定值"
+          },
+          "evidence_quote": "a) 10 kV 配电变压器空载损耗和负载损耗限值均应不高于表 1 和表 2 的规定；",
+          "quote_verified": true,
+          "reason": "该条款明确规定10kV配电变压器的负载损耗限值应不高于表1的规定，建立了从通用要求到具体数据表（c26）的逻辑引用关系。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 10,
+            "page_end": 10,
+            "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+            "table_no": "6",
+            "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 10,
+                "page_end": 10,
+                "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+                "table_no": "6",
+                "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            },
+            {
+              "locator": {
+                "standard_no": "GB 20052-2024",
+                "content_type": "table",
+                "page_start": 5,
+                "page_end": 5,
+                "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+                "table_no": "1",
+                "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "candidate_recovered_by_diagnostic_search",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 3,
+        "uncertain_count": 1,
+        "missing_evidence": "缺少明确说明该特定型号S20-M.RL-200/10-NX2所对应的具体能效等级（如一级、二级能效）或其技术协议中约定的具体负载损耗保证值的证据。报告中的2.185 kW远低于GB/T 10228-2023表1中F级绝缘的2.53 kW限值，可能对应更高能效等级或B级绝缘（130级，限值2.37kW，仍高于2.185），或者基于特定的合同技术条件。若无合同或能效等级标识，无法完全解释为何要求是2.185而非标准表的2.53。",
+        "review_note": "核心问题在于报告要求的限值2.185kW与GB/T 10228表1中的基础限值2.53kW不符。S20系列通常为高能效变压器，其限值可能源自GB 20052《电力变压器能效限定值及能效等级》。当前Chunk缺乏S20对应的能效等级数据，因此c19不能直接支持报告数值的正确性，降级为uncertain。c07关于偏差的规则不适用于限值本身的判定，予以拒绝。",
+        "recovery_note": "所有候选证据均有效。c26提供了直接数值依据，c19和c18分别提供了范围适用性和条款引用支持，共同构成了完整的证据链。"
+      }
+    },
+    {
+      "case_id": "whc-13-r2",
+      "dataset_split": "test",
+      "retrieval_class": "report_specific",
+      "detection_project": {
+        "project_name": "声级测定(特殊试验)",
+        "reported_requirement": {
+          "text": "声压级<eq>L\\Box_a</eq>[dB(A)]: ≤38",
+          "unit": "dB(A)"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.10-2022",
+            "content_type": "section",
+            "page_start": 13,
+            "page_end": 13,
+            "text_sha256": "102b3e248e229e5262949080195058325d100b4084c63b1e982eb846c6cfe030",
+            "section": "5",
+            "section_title": "声级测量规范"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Chunk来自GB/T 1094.10-2022第5章，规定了配电变压器声级测量的基本规范（如空载励磁状态、总声级定义等）。虽然不直接提供限值数值，但确立了测试方法和适用条件，支持对限值表适用性的判断，作为supporting_candidate合理。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "section",
+            "page_start": 60,
+            "page_end": 63,
+            "text_sha256": "7f103c0f182ea71f4827e3662050930b4bbd6d33c26686387960be4113d031ae",
+            "section": "6",
+            "section_title": "条文说明"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该Chunk为条文说明，解释了表19中声级限值的制定依据（参考标准化方案），有助于理解限值来源，作为背景支持保留。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "section",
+            "page_start": 42,
+            "page_end": 42,
+            "text_sha256": "7c8c3971ed4ed2f26c27b68b891fde1ec5b9065ded18603f725b6dc53d235709",
+            "section": "B",
+            "section_title": "（资料性） 常用配电变压器型号标注示例"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "通过型号示例明确解析了S20-M.RL-200/10-NX2的结构特征（三相、油浸、电工钢、立体卷铁心），是确定适用表格列（闭口立体卷铁心）的关键依据，保留为支持性证据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 18,
+            "page_end": 18,
+            "text_sha256": "9842d46d9e5c22e6ca85f15edc41c0d77b60f05d8ddd75b7eac7f770da538f52",
+            "table_no": "19",
+            "table_title": "三相油浸式电工钢铁心配电变压器声级限值"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "表19直接提供了‘三相电工钢闭口立体卷铁心变压器’在200kVA容量下的声压级限值为38 dB(A)，与报告要求完全一致，是直接判定依据。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 18,
+                "page_end": 18,
+                "text_sha256": "9842d46d9e5c22e6ca85f15edc41c0d77b60f05d8ddd75b7eac7f770da538f52",
+                "table_no": "19",
+                "table_title": "三相油浸式电工钢铁心配电变压器声级限值"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "表19直接提供了‘三相电工钢闭口立体卷铁心变压器’在200kVA容量下的声压级限值为38 dB(A)，与报告要求完全一致，是直接判定依据。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "candidate_recovered_by_diagnostic_search"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 3,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "c03提供了具体的限值数据，且产品参数匹配，保留为direct_candidate；c01提供了测试方法的规范性描述，支持限值的应用背景，保留为supporting_candidate。两者均符合证据规则。",
+        "recovery_note": "所有候选证据均有效。c33确定了产品具体结构类型（立体卷铁心），从而锁定表19中的正确列；c03提供了该列下200kVA对应的具体数值38dB(A)；c30提供了限值制定的背景说明。三者结合完整支持了≤38dB(A)的结论。"
+      }
+    },
+    {
+      "case_id": "whc-14-1-r4",
+      "dataset_split": "test",
+      "retrieval_class": "report_specific",
+      "detection_project": {
+        "project_name": "短路承受能力试验施加电流及相电抗测量",
+        "reported_requirement": {
+          "text": "试验后最大相电抗差(%): ≤2%",
+          "unit": "%"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "context_required",
+      "missing_context_fields": [
+        "winding_structure_type"
+      ],
+      "relevant_evidence": [],
+      "required_evidence_groups": [],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "not_scoreable_without_report_context"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_missing_direct_evidence",
+        "direct_candidate_count": 0,
+        "supporting_candidate_count": 0,
+        "uncertain_count": 1,
+        "missing_evidence": "缺少确认样品具体绕组结构（如是否为圆形同心式线圈或箔式绕组）的证据，以确定是严格适用2%还是可放宽至4%。但报告采用2%作为上限是保守且符合标准基础要求的。",
+        "review_note": "c06直接提供了国标中针对常规结构配电变压器的2%限值，完全支持报告要求。c02涉及不同产品类型（有载调压）且限值不同，应拒绝。",
+        "recovery_note": "c03提供了直接适用的标准条款和数值，确认为direct_candidate。c07因产品类型（干式vs油浸式）及限值差异被拒绝。"
+      }
+    },
+    {
+      "case_id": "xyc-4-r1",
+      "dataset_split": "test",
+      "retrieval_class": "numeric_parameter_table",
+      "detection_project": {
+        "project_name": "空载损耗和空载电流测量(例行试验)",
+        "reported_requirement": {
+          "text": "空载损耗Po(kW): ≤0.215",
+          "unit": "kW"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "section",
+            "page_start": 42,
+            "page_end": 42,
+            "text_sha256": "7c8c3971ed4ed2f26c27b68b891fde1ec5b9065ded18603f725b6dc53d235709",
+            "section": "B",
+            "section_title": "（资料性） 常用配电变压器型号标注示例"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该Chunk通过型号示例明确建立了样品型号S20-M.RL-200/10-NX2与GB 20052-2020二级能效要求的映射关系，是确定报告要求数值来源（即需查GB 20052-2020二级能效表）的关键背景证据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 3,
+            "page_end": 3,
+            "text_sha256": "94dece7e1eadd4d46b37c4bee015f07b8f70dd3cc18725be8b67addc285b7d24",
+            "section": "1",
+            "section_title": "范围"
+          },
+          "evidence_quote": "本文件适用于三相 10 kV 电压等级、无励磁调压、额定频率为 50 Hz、额定容量为 30 kVA～2 500 kVA 的油浸式配电变压器和干式配电变压器",
+          "quote_verified": true,
+          "reason": "该条款明确了标准适用范围包含10kV、200kVA油浸式配电变压器，确认了样品与标准的适用性关系，作为背景支持有效。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 4,
+            "text_sha256": "09dc63bef8ea33caad37ed0129c552bad8148ab1506c8065313160c4feed748f",
+            "section": "5.2",
+            "section_title": "变压器能效限定值"
+          },
+          "evidence_quote": "a) 10 kV 配电变压器空载损耗和负载损耗限值均应不高于表 1 和表 2 的规定",
+          "quote_verified": true,
+          "reason": "该条款建立了10kV配电变压器能效限值与表1的引用关系，是定位具体数值表格的必要依据，作为支持证据有效。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 10,
+            "page_end": 10,
+            "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+            "table_no": "6",
+            "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "manual_corpus_recovery"
+        },
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "table",
+            "page_start": 5,
+            "page_end": 5,
+            "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+            "table_no": "1",
+            "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 10,
+                "page_end": 10,
+                "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+                "table_no": "6",
+                "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            },
+            {
+              "locator": {
+                "standard_no": "GB 20052-2024",
+                "content_type": "table",
+                "page_start": 5,
+                "page_end": 5,
+                "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+                "table_no": "1",
+                "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "candidate_recovered_by_diagnostic_search",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 3,
+        "uncertain_count": 1,
+        "missing_evidence": "缺少GB 20052-2020或GB 20052-2024中针对10kV、200kVA、S20（二级能效）配电变压器的具体空载损耗限值表格。报告要求0.215kW未在提供的候选Chunk中找到直接对应的数值依据。",
+        "review_note": "c18正确指出了产品型号对应的能效标准依据（GB 20052-2020二级），应保留作为支持性证据以指引查找正确的限值表。c02引用的GB/T 6451-2023表格数值（0.270kW）高于报告要求（0.215kW），且标准适用性存疑（通常S20系列对应更严格的能效国标），故拒绝。",
+        "recovery_note": "c07虽包含目标数值215W，但由于表格结构复杂（涉及能效等级、铁心类型、连接组别多个维度），且输入信息中未明确样品的具体连接组别和能效等级声明，直接判定为direct证据存在风险。建议降级为uncertain，提示需确认具体适用的子列。"
+      }
+    },
+    {
+      "case_id": "xyc-5-r2",
+      "dataset_split": "test",
+      "retrieval_class": "numeric_parameter_table",
+      "detection_project": {
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "reported_requirement": {
+          "text": "负载损耗P☐(kW): ≤2.185",
+          "unit": "kW"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB 20052-2024",
+            "content_type": "table",
+            "page_start": 5,
+            "page_end": 5,
+            "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+            "table_no": "1",
+            "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 10228-2023",
+            "content_type": "table",
+            "page_start": 5,
+            "page_end": 5,
+            "text_sha256": "b1e80463bfce75822856f58ff5b35cd67b2b375fdc8fec51b4f92eb9e121ed96",
+            "table_no": "1",
+            "table_title": "6 kV、10 kV 级 30 kVA～2 500 kVA 无励磁调压配电变压器"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该证据来自GB/T 10228-2023，其数值（如2.53kW）与报告限值（2.185kW）不符，不能直接支持判定。仅能作为背景信息证明样品规格符合该标准范围，或用于排除其他标准，属于适用性/背景支持。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 10,
+            "page_end": 10,
+            "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+            "table_no": "6",
+            "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 10,
+                "page_end": 10,
+                "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+                "table_no": "6",
+                "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            },
+            {
+              "locator": {
+                "standard_no": "GB 20052-2024",
+                "content_type": "table",
+                "page_start": 5,
+                "page_end": 5,
+                "text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+                "table_no": "1",
+                "table_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB 20052-2024表1按额定容量和能效等级列出10 kV油浸式配电变压器的空载损耗与负载损耗，可按案例中的容量和产品类别定位对应限值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 1,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "c19提供了精确匹配的能效限值，保留为direct_candidate。c16提供的数值不同，且为标准性能参考而非强制能效限值，降级为supporting_candidate以确认产品规格适用性。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "xyc-5-r3",
+      "dataset_split": "test",
+      "retrieval_class": "numeric_parameter_table",
+      "detection_project": {
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "reported_requirement": {
+          "text": "短路阻抗Z☐(%): 4.0(1±10%)",
+          "unit": "%"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 25446-2010",
+            "content_type": "section",
+            "page_start": 4,
+            "page_end": 4,
+            "text_sha256": "baa929c3464132eecedffdcb24d1abc3c3a7c5336f7b4f490651bbaa353e99bb",
+            "section": "5.1",
+            "section_title": "性能参数"
+          },
+          "evidence_quote": "5.1.2 三相变压器的额定容量、电压组合、分接范围、联结组标号、空载损耗、负载损耗、空载电流及短路阻抗应符合表2的规定。",
+          "quote_verified": true,
+          "reason": "条款5.1.2确立了表2对三相变压器性能参数的约束力，是引用表2数据（c18）的必要法律依据，作为supporting_candidate标签正确。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 10,
+            "page_end": 10,
+            "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+            "table_no": "6",
+            "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "nominal_impedance",
+          "requirement": "给出样品型号和容量对应的短路阻抗基准值。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 10,
+                "page_end": 10,
+                "text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+                "table_no": "6",
+                "table_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Q/GDW 12126.4-2024表6按额定容量列出S20-NX2系列的空载损耗、负载损耗、空载电流和短路阻抗，可按案例中的型号与容量定位对应参数。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [
+        {
+          "context_id": "impedance_tolerance",
+          "application_rule": "短路阻抗基准值命中后，按阻抗值小于10%的主分接规则附加±10%允许偏差。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.1-2013",
+                "content_type": "table",
+                "page_start": 34,
+                "page_end": 34,
+                "text_sha256": "5d634879be135111a1f8c80772ed71e4a5c5db580a651c47130764f8ccf15b4c",
+                "table_no": "1",
+                "table_title": "偏差"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "表1明确规定了有两个独立绕组的变压器在主分接下，当阻抗值<10%时，偏差为±10%。样品阻抗4.0%符合此条件，直接支持报告中的允差(1±10%)。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "required_group_relation_verified_from_exact_corpus_evidence",
+          "deterministic_context_excluded_from_retrieval_gold"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 1,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "所有候选证据均有效。c18提供基准值，c11提供允差规则，c12提供标准适用性依据，共同完整支持报告要求。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "xyc-6-r1",
+      "dataset_split": "test",
+      "retrieval_class": "insulation_voltage",
+      "detection_project": {
+        "project_name": "外施耐压试验(AV)(例行试验)",
+        "reported_requirement": {
+          "text": "高压对低压及地试验电压(kV): 35(1±1%)",
+          "unit": "kV"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "table",
+            "page_start": 15,
+            "page_end": 15,
+            "text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+            "table_no": "2",
+            "table_title": "绕组的试验电压水平"
+          },
+          "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施耐压或线端交流耐压35 kV。",
+          "quote_verified": true,
+          "reason": "GB/T 1094.3-2017表2直接列出10 kV系统（Um=12 kV）的外施耐压或线端交流耐压(AV/LTAC)为35 kV；75 kV是LI列，不能写成AV值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 16,
+            "page_end": 19,
+            "text_sha256": "6628cdb9f6bf3929aa0ed6b3c376de446638849cd7ebe56c58e1e971b7b94966",
+            "section": "7.3",
+            "section_title": "不同 U_ m 变压器的试验要求"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该章节明确规定Um≤72.5kV变压器的例行外施耐压试验电压见表2，建立了从产品类别到具体数值表格的逻辑引用关系，作为支持性证据成立。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 19,
+            "page_end": 20,
+            "text_sha256": "948260756186d5b8e2eea4cfba0210fcc1f8e1f4b5895de8ecc31aa07132cbb8",
+            "section": "10",
+            "section_title": "外施耐压试验(AV)"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该章节定义了外施耐压试验的方法、接线和合格判据，是执行该试验的必要规范性背景，作为支持性证据成立。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.3-2017",
+                "content_type": "table",
+                "page_start": 15,
+                "page_end": 15,
+                "text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+                "table_no": "2",
+                "table_title": "绕组的试验电压水平"
+              },
+              "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施耐压或线端交流耐压35 kV。",
+              "quote_verified": true,
+              "reason": "GB/T 1094.3-2017表2直接列出10 kV系统（Um=12 kV）的外施耐压或线端交流耐压(AV/LTAC)为35 kV；75 kV是LI列，不能写成AV值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 2,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "所有候选证据均有效。c12提供核心数值依据，c06提供适用性指引，c01提供方法学背景。三者共同构成完整的证据链，无需降级或拒绝。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "xyc-10-r1",
+      "dataset_split": "test",
+      "retrieval_class": "insulation_voltage",
+      "detection_project": {
+        "project_name": "线端雷电全波冲击试验(LI)(型式试验)",
+        "reported_requirement": {
+          "text": "高压线端全波电压(kV): -75(1±3%)",
+          "unit": "kV"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 24,
+            "page_end": 26,
+            "text_sha256": "c383f3f76a093d1fa601d48c3979faa59ce0733868316988ea9b04df46f4e43e",
+            "section": "13.2",
+            "section_title": "雷电全波冲击试验(LI)"
+          },
+          "evidence_quote": "试验电压值的偏差为±3 %。",
+          "quote_verified": true,
+          "reason": "Chunk 13.2.1 明确陈述“试验电压值的偏差为±3 %”，直接支持报告要求中的允差“(1±3%)”。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 16,
+            "page_end": 19,
+            "text_sha256": "6628cdb9f6bf3929aa0ed6b3c376de446638849cd7ebe56c58e1e971b7b94966",
+            "section": "7.3",
+            "section_title": "不同 U_ m 变压器的试验要求"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该段落仅指出试验电压需查“表2”，但未包含表2的具体数值（如-75kV）。根据规则4，指向未召回表格的章节只能作为适用性支持，不能作为数值的直接证据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "table",
+            "page_start": 15,
+            "page_end": 15,
+            "text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+            "table_no": "2",
+            "table_title": "绕组的试验电压水平"
+          },
+          "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施耐压或线端交流耐压35 kV。",
+          "quote_verified": true,
+          "reason": "GB/T 1094.3-2017表2直接列出10 kV系统（Um=12 kV）的雷电全波冲击(LI)试验电压为75 kV；35 kV是AV/LTAC列，不能写成LI值。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "gold_discovery_only"
+        },
+        {
+          "locator": {
+            "standard_no": "JB/T 501-2021",
+            "content_type": "table",
+            "page_start": 25,
+            "page_end": 25,
+            "text_sha256": "76c4e8530c5f6ad181e3256760859a44b10f566e2e8975e6c515fa5dcd048d0f",
+            "table_no": "11",
+            "table_title": "绕组的试验电压水平"
+          },
+          "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施电压或线端交流电压35 kV。",
+          "quote_verified": true,
+          "reason": "JB/T 501-2021表11直接给出10 kV系统（Um=12 kV）的LI试验电压为75 kV，可作为同一数值关系的替代real chunk；产品适用性仍待领域审核。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "curated_exact_corpus_evidence"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "lightning_impulse_voltage",
+          "requirement": "给出样品电压等级对应的雷电冲击耐受电压。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.3-2017",
+                "content_type": "table",
+                "page_start": 15,
+                "page_end": 15,
+                "text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+                "table_no": "2",
+                "table_title": "绕组的试验电压水平"
+              },
+              "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施耐压或线端交流耐压35 kV。",
+              "quote_verified": true,
+              "reason": "GB/T 1094.3-2017表2直接列出10 kV系统（Um=12 kV）的雷电全波冲击(LI)试验电压为75 kV；35 kV是AV/LTAC列，不能写成LI值。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "gold_discovery_only"
+            },
+            {
+              "locator": {
+                "standard_no": "JB/T 501-2021",
+                "content_type": "table",
+                "page_start": 25,
+                "page_end": 25,
+                "text_sha256": "76c4e8530c5f6ad181e3256760859a44b10f566e2e8975e6c515fa5dcd048d0f",
+                "table_no": "11",
+                "table_title": "绕组的试验电压水平"
+              },
+              "evidence_quote": "系统标称电压10 kV、设备最高电压12 kV对应雷电全波冲击(LI)75 kV、雷电截波冲击(LIC)85 kV、外施电压或线端交流电压35 kV。",
+              "quote_verified": true,
+              "reason": "JB/T 501-2021表11直接给出10 kV系统（Um=12 kV）的LI试验电压为75 kV，可作为同一数值关系的替代real chunk；产品适用性仍待领域审核。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "curated_exact_corpus_evidence"
+            }
+          ]
+        },
+        {
+          "group_id": "lightning_impulse_waveform",
+          "requirement": "给出雷电全波的波形参数和试验电压偏差。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.3-2017",
+                "content_type": "section",
+                "page_start": 24,
+                "page_end": 26,
+                "text_sha256": "c383f3f76a093d1fa601d48c3979faa59ce0733868316988ea9b04df46f4e43e",
+                "section": "13.2",
+                "section_title": "雷电全波冲击试验(LI)"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "Chunk直接规定了标准雷电冲击全波的波形参数（1.2μs±30% / 50μs±20%）及试验电压偏差（±3%），与报告要求中的波形和偏差描述完全一致，是判断报告合规性的核心依据。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_resolved_by_exact_corpus_evidence",
+          "required_group_relation_verified_from_exact_corpus_evidence"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 1,
+        "uncertain_count": 0,
+        "missing_evidence": "缺少GB/T 1094.3-2017中“表2”的具体内容。虽然c09指出电压值在表2中，但提供的候选列表中未包含表2（Table 2）的文本或数据，因此无法直接验证报告中“-75 kV”这一具体数值是否符合标准规定（通常10kV级配电变压器LI为75kV，但需表2确认）。",
+        "review_note": "c08 提供了明确的允差规定，保留为 direct。c09 仅提供了查找数值的索引路径（表2），缺乏具体电压值，降级为 supporting。注意：当前候选中缺少提供目标电压值 -75kV 的直接证据（即表2的内容），但这不在本轮审核范围内，仅对已有候选进行判定。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "xyc-5-r4",
+      "dataset_split": "test",
+      "retrieval_class": "rule_formula",
+      "detection_project": {
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "reported_requirement": {
+          "text": "总损耗P总(kW): ≤2.400",
+          "unit": "kW"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "deterministic_prefilter",
+      "answerability_status": "not_applicable_to_retrieval",
+      "missing_context_fields": [],
+      "relevant_evidence": [],
+      "required_evidence_groups": [],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "legacy_missing_note_irrelevant_to_retrieval_prefilter",
+          "candidate_recovered_by_diagnostic_search",
+          "excluded_from_retrieval_denominator"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_gold_recovered_pending_domain_review",
+        "direct_candidate_count": 2,
+        "supporting_candidate_count": 4,
+        "uncertain_count": 1,
+        "missing_evidence": "缺少明确说明样品绝缘耐热等级（如130级B或155级F）的证据，以确定具体适用哪一列负载损耗值；若样品为S20系列（通常指较高能效），需确认是否引用了更新的标准版本或企业标准，因为GB/T 10228-2023表1中155级200kVA值为2.53kW，与报告2.400kW存在差异，可能需要更具体的能效等级映射规则。",
+        "review_note": "c19降级为uncertain，因为报告要求值2.400kW介于表中不同绝缘等级限值之间，且缺乏确定产品具体绝缘等级的上下文，无法直接断定该表数值为唯一或正确的判定基准。c11保持supporting，正确引用了适用范围。",
+        "recovery_note": "报告要求≤2.400kW与提供的两个主要标准（GB/T 10228的2.53kW和GB 20052的2.73kW/2.185kW/1.97kW）均无直接精确匹配。S20型号暗示高能效，可能应参照GB 20052的1级或2级，但2.400kW高于2级限值(2.185kW)，低于3级限值(2.73kW)，这导致直接依据缺失。现有候选证据均无法直接解释2.400kW的具体来源，故所有direct_candidate降级。"
+      }
+    },
+    {
+      "case_id": "xyc-7-r4",
+      "dataset_split": "test",
+      "retrieval_class": "rule_formula",
+      "detection_project": {
+        "project_name": "感应耐压试验(IVW)(例行试验)",
+        "reported_requirement": {
+          "text": "持续时间(s): 15≤t≤60",
+          "unit": "s"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 20,
+            "page_end": 20,
+            "text_sha256": "29262350048235c71caa429a2970919a18a62070c0a41a48b4c4daea66068019",
+            "section": "11.2",
+            "section_title": "感应耐压试验(IVW)"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "GB/T 1094.3-2017 第11.2节直接规定了感应耐压试验的持续时间：频率≤2倍额定频率时为60s，超过时按公式计算且不少于15s。这直接构成了报告要求 '15≤t≤60' 的标准依据（即最小值15s，常规最大值60s）。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 39,
+            "page_end": 39,
+            "text_sha256": "6755da98b7adf3225a98a6f0b5ea5890d58182794c2d754b673efe2b43e49c45",
+            "table_no": "36",
+            "table_title": "干式配电变压器例行试验项目、试验方法和判定标准"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该证据来自 Q/GDW 12126.4-2024 表36，标题明确为“干式配电变压器”。而样品型号 S20-M.RL 通常为油浸式变压器（S系列油浸，M密封），产品类型不匹配。虽然其引用的时间要求与国标一致，但作为油浸变压器的直接证据存在产品适用性瑕疵，故降级为支持性证据，用于佐证行业通用性。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.3-2017",
+            "content_type": "section",
+            "page_start": 16,
+            "page_end": 19,
+            "text_sha256": "6628cdb9f6bf3929aa0ed6b3c376de446638849cd7ebe56c58e1e971b7b94966",
+            "section": "7.3",
+            "section_title": "不同 U_ m 变压器的试验要求"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该条款仅指明 Um≤72.5kV 变压器应遵循第11.2节进行IVW试验，本身不包含具体的持续时间数值或公式。它建立了从电压等级到具体章节的引用关系，属于适用性支持，而非直接包含目标数值的证据。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.3-2017",
+                "content_type": "section",
+                "page_start": 20,
+                "page_end": 20,
+                "text_sha256": "29262350048235c71caa429a2970919a18a62070c0a41a48b4c4daea66068019",
+                "section": "11.2",
+                "section_title": "感应耐压试验(IVW)"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB/T 1094.3-2017 第11.2节直接规定了感应耐压试验的持续时间：频率≤2倍额定频率时为60s，超过时按公式计算且不少于15s。这直接构成了报告要求 '15≤t≤60' 的标准依据（即最小值15s，常规最大值60s）。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 2,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "c02 是核心直接证据，完整覆盖了时间范围的下限和上限条件。c01 因标准针对干式变压器，与样品（疑似油浸）类型不完全匹配，降级。c08 仅为章节指引，无具体数值，降级。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "xyc-3-r1",
+      "dataset_split": "test",
+      "retrieval_class": "report_specific",
+      "detection_project": {
+        "project_name": "电压比测量和联结组标号检定(例行试验)",
+        "reported_requirement": {
+          "text": "主分接电压比偏差: 规定电压比的±0.5%;与实际阻抗百分数的±1/10中的较低者",
+          "unit": "%"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.1-2013",
+            "content_type": "table",
+            "page_start": 34,
+            "page_end": 34,
+            "text_sha256": "5d634879be135111a1f8c80772ed71e4a5c5db580a651c47130764f8ccf15b4c",
+            "table_no": "1",
+            "table_title": "偏差"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "GB/T 1094.1-2013 表1第2项明确给出了‘空载电压比’在‘主分接或极限分接’下的偏差规定，数值和逻辑（取±0.5%与阻抗±1/10的较低者）与报告要求完全一致。S20-M.RL属于电力变压器范畴，适用该国标。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 32,
+            "page_end": 32,
+            "text_sha256": "28f49aba4bc35168aab2c7a1b63358abca7988665ad3c0bb27ec2505e8aa4743",
+            "table_no": "30",
+            "table_title": "油浸式配电变压器例行试验项目、试验方法和判定标准"
+          },
+          "evidence_quote": "主分接偏差为下列较低者: a)规定电压比的±0.5 %; b)主分接上实际阻抗百分数的±1/10。",
+          "quote_verified": true,
+          "reason": "Q/GDW 12126.4-2024 是针对油浸式配电变压器的行业标准，表30第2项‘电压比测量和联结组标号检定’的判定标准直接引用了相同的数值规则，且更贴合‘配电变压器’这一具体产品类型，作为direct证据有效。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.1-2013",
+            "content_type": "section",
+            "page_start": 34,
+            "page_end": 34,
+            "text_sha256": "9705494f736476892ff86b9ca5d6d99f50164b3e9bb5765ef6a88f8f7b1e7e16",
+            "section": "10",
+            "section_title": "偏差"
+          },
+          "evidence_quote": "当测量值符合表 1 中的偏差规定时, 认为变压器符合本部分的要求。",
+          "quote_verified": true,
+          "reason": "该段落说明了表1的适用性和法律效力（符合表1即符合要求），是支持c02作为有效判定依据的必要上下文，保持supporting标签合理。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "GB/T 1094.1-2013",
+                "content_type": "table",
+                "page_start": 34,
+                "page_end": 34,
+                "text_sha256": "5d634879be135111a1f8c80772ed71e4a5c5db580a651c47130764f8ccf15b4c",
+                "table_no": "1",
+                "table_title": "偏差"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "GB/T 1094.1-2013 表1第2项明确给出了‘空载电压比’在‘主分接或极限分接’下的偏差规定，数值和逻辑（取±0.5%与阻抗±1/10的较低者）与报告要求完全一致。S20-M.RL属于电力变压器范畴，适用该国标。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            },
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 32,
+                "page_end": 32,
+                "text_sha256": "28f49aba4bc35168aab2c7a1b63358abca7988665ad3c0bb27ec2505e8aa4743",
+                "table_no": "30",
+                "table_title": "油浸式配电变压器例行试验项目、试验方法和判定标准"
+              },
+              "evidence_quote": "主分接偏差为下列较低者: a)规定电压比的±0.5 %; b)主分接上实际阻抗百分数的±1/10。",
+              "quote_verified": true,
+              "reason": "Q/GDW 12126.4-2024 是针对油浸式配电变压器的行业标准，表30第2项‘电压比测量和联结组标号检定’的判定标准直接引用了相同的数值规则，且更贴合‘配电变压器’这一具体产品类型，作为direct证据有效。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved",
+          "or_equivalent_relation_inferred_from_legacy_review"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 2,
+        "supporting_candidate_count": 1,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "所有候选证据均有效。c02和c05分别提供了国标和行标的直接数值依据，内容一致且适用于配电变压器；c07提供了国标的适用性说明。无需降级或拒绝。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "xyc-11-r2",
+      "dataset_split": "test",
+      "retrieval_class": "report_specific",
+      "detection_project": {
+        "project_name": "温升试验(型式试验)",
+        "reported_requirement": {
+          "text": "高压绕组平均温升(K): ≤60",
+          "unit": "K"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 17,
+            "page_end": 17,
+            "text_sha256": "dd45d2c97cdbcbfcd28304f68061ba68373ffaddde4f17fd8c4cc721c1f44f79",
+            "table_no": "17",
+            "table_title": "油浸式配电变压器的温升限值"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该证据来自Q/GDW 12126.4-2024表17，明确列出“400 kVA及以下容量”的“绕组平均温升”限值为60K。样品容量200kVA符合此条件，且数值、项目完全匹配报告要求（≤60K），是直接有效的证据。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 1094.2-2013",
+            "content_type": "section",
+            "page_start": 9,
+            "page_end": 10,
+            "text_sha256": "bb95d46e0fd03dbfa671aa88fb580e7c04c2f2436a91916106b1153f702f5d06",
+            "section": "6.2",
+            "section_title": "额定容量下的温升限值"
+          },
+          "evidence_quote": "",
+          "quote_verified": false,
+          "reason": "该文本仅说明GB/T 1094.2表1的适用范围（矿物油、A级绝缘等），并未提供具体的温升限值数值，也不能直接推导出60K的要求。它只能作为背景信息或适用性判断的支持，属于supporting级别。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "GB/T 6451-2023",
+            "content_type": "section",
+            "page_start": 65,
+            "page_end": 66,
+            "text_sha256": "b31cb73b97281c2b850cbabcdba8b5ed311c6141039e5ad82cccdf4ccae92d50",
+            "section": "12.1",
+            "section_title": "性能参数"
+          },
+          "evidence_quote": "绕组平均温升(用电阻法测量): 65 K。",
+          "quote_verified": true,
+          "reason": "该证据指出GB/T 6451-2023规定的绕组平均温升为65K，这与报告要求的60K不一致。虽然它有助于理解通用国标背景，但不能直接支持报告中更严格的60K限值，因此降级为supporting。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 17,
+                "page_end": 17,
+                "text_sha256": "dd45d2c97cdbcbfcd28304f68061ba68373ffaddde4f17fd8c4cc721c1f44f79",
+                "table_no": "17",
+                "table_title": "油浸式配电变压器的温升限值"
+              },
+              "evidence_quote": "",
+              "quote_verified": false,
+              "reason": "该证据来自Q/GDW 12126.4-2024表17，明确列出“400 kVA及以下容量”的“绕组平均温升”限值为60K。样品容量200kVA符合此条件，且数值、项目完全匹配报告要求（≤60K），是直接有效的证据。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 2,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "报告要求高压绕组平均温升≤60K。候选c13引用的Q/GDW 12126.4-2024明确规定400kVA及以下容量变压器绕组平均温升限值为60K，与样品参数及报告要求完全吻合，保留为direct_candidate。其他候选要么数值为65K（c05, c07）与报告要求不符，要么仅为适用范围说明（c10），均不能作为直接支持≤60K的证据，予以拒绝或降级。",
+        "recovery_note": ""
+      }
+    },
+    {
+      "case_id": "xyc-12-r4",
+      "dataset_split": "test",
+      "retrieval_class": "report_specific",
+      "detection_project": {
+        "project_name": "短时过负载能力试验(型式试验)",
+        "reported_requirement": {
+          "text": "油箱外壳最高温升(K): ≤85",
+          "unit": "K"
+        },
+        "sample_context": {
+          "sample_name": "配电变压器",
+          "model": "S20-M.RL-200/10-NX2",
+          "rated_capacity": "200 kVA",
+          "rated_voltage": "10/0.4 kV"
+        }
+      },
+      "evaluation_scope": "retrieval",
+      "answerability_status": "answerable_candidate",
+      "missing_context_fields": [],
+      "relevant_evidence": [
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 32,
+            "page_end": 32,
+            "text_sha256": "de621387ffa7f763a2cc2a64681233108d5d39a0eb4e56b80676aaeaa37b5424",
+            "table_no": "29",
+            "table_title": "油浸式配电变压器型式试验项目、试验方法和判定标准"
+          },
+          "evidence_quote": "d)油箱外壳及套管的温升不大于85K。",
+          "quote_verified": true,
+          "reason": "Chunk中表29（续）第6项“短时过负载能力试验”的判定标准明确包含“d)油箱外壳及套管的温升不大于85K”，与报告要求数值、对象完全一致，且该标准为油浸式配电变压器型式试验规范，适用性成立。",
+          "legacy_label": "direct_candidate",
+          "discovery_method": "candidate_review"
+        },
+        {
+          "locator": {
+            "standard_no": "Q/GDW 12126.4-2024",
+            "content_type": "table",
+            "page_start": 31,
+            "page_end": 31,
+            "text_sha256": "d4f2285a3689c6eb5f45a7d09fabaf8b79cc056fae2b34960ac186d4366a112a",
+            "table_no": "29",
+            "table_title": "油浸式配电变压器型式试验项目、试验方法和判定标准"
+          },
+          "evidence_quote": "表 29 油浸式配电变压器型式试验项目、试验方法和判定标准",
+          "quote_verified": true,
+          "reason": "该Chunk提供了表29的标题“油浸式配电变压器型式试验项目...”，确认了c04所在表格的适用范围为油浸式变压器，对于验证证据链的适用性至关重要，作为supporting_candidate标签准确。",
+          "legacy_label": "supporting_candidate",
+          "discovery_method": "candidate_review"
+        }
+      ],
+      "required_evidence_groups": [
+        {
+          "group_id": "complete_normative_answer",
+          "requirement": "任一候选 chunk 应能独立给出该检测项目所需的完整规范性答案。",
+          "alternatives": [
+            {
+              "locator": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "page_start": 32,
+                "page_end": 32,
+                "text_sha256": "de621387ffa7f763a2cc2a64681233108d5d39a0eb4e56b80676aaeaa37b5424",
+                "table_no": "29",
+                "table_title": "油浸式配电变压器型式试验项目、试验方法和判定标准"
+              },
+              "evidence_quote": "d)油箱外壳及套管的温升不大于85K。",
+              "quote_verified": true,
+              "reason": "Chunk中表29（续）第6项“短时过负载能力试验”的判定标准明确包含“d)油箱外壳及套管的温升不大于85K”，与报告要求数值、对象完全一致，且该标准为油浸式配电变压器型式试验规范，适用性成立。",
+              "legacy_label": "direct_candidate",
+              "discovery_method": "candidate_review"
+            }
+          ]
+        }
+      ],
+      "deterministic_context_evidence": [],
+      "review": {
+        "status": "pending_domain_review",
+        "migration_basis": "Migrated from v1 direct candidates; evidence sufficiency and OR relation require domain review.",
+        "flags": [
+          "model_derived_not_human_approved"
+        ]
+      },
+      "legacy_review_context": {
+        "gold_status": "candidate_model_reviewed_pending_domain_review",
+        "direct_candidate_count": 1,
+        "supporting_candidate_count": 1,
+        "uncertain_count": 0,
+        "missing_evidence": "",
+        "review_note": "两条候选证据均有效。c04直接提供了目标数值和判定条件；c14提供了表格标题以确认产品类型的适用性。无需降级或拒绝。",
+        "recovery_note": ""
+      }
+    }
+  ]
+}

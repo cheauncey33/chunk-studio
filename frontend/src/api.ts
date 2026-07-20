@@ -168,6 +168,85 @@ export interface VectorSearchResponse {
   hits: VectorSearchHit[]
 }
 
+export interface AuditReportListItem {
+  name: string
+  kind: string
+  size_bytes: number
+  modified_at: number
+  summary: Record<string, unknown> | null
+  case_count: number | null
+  parse_error: string | null
+  version?: unknown
+  scope?: unknown
+  retrieval_policy?: unknown
+}
+
+export interface AuditReportListResponse {
+  reports: AuditReportListItem[]
+}
+
+export interface AuditReportDetail {
+  name: string
+  kind: string
+  size_bytes: number
+  modified_at: number
+  payload: Record<string, unknown>
+}
+
+export interface ManualKnowledgeRules {
+  version: number
+  scope: string
+  status: string
+  rules: Array<Record<string, unknown>>
+}
+
+export interface LexicalIndexStatus {
+  enabled: boolean
+  production_enabled: boolean
+  shadow_enabled: boolean
+  fts5_available: boolean
+  tokenizer_version: string
+  approved_chunks: number
+  indexed_chunks: number
+  fts_rows: number
+  pending_chunks: number
+}
+
+export interface RetrievalShadowHit {
+  chunk_id: string
+  content_type: string
+  score: number
+  rrf_score: number
+  route_ranks: Record<string, number>
+  matched_fields: Record<string, string[]>
+  file_name: string
+  page: number
+  standard_no?: string | null
+  section?: string | null
+  section_title?: string | null
+  table_no?: string | null
+  table_title?: string | null
+  text_excerpt: string
+}
+
+export interface RetrievalShadowRun {
+  id: string
+  query: string
+  status: string
+  duration_ms: number
+  error: string
+  created_at: string
+  payload: {
+    query_routes?: Record<string, string>
+    query_tokens?: Record<string, string[]>
+    production_hit_ids?: string[]
+    lexical_hit_count?: number
+    overlap_count?: number
+    overlap_ids?: string[]
+    lexical_hits?: RetrievalShadowHit[]
+  }
+}
+
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const t = await res.text().catch(() => res.statusText)
@@ -199,8 +278,11 @@ export const api = {
   pageImageUrl: (fileId: string, page: number) =>
     `${API}/files/${fileId}/pages/${page}`,
 
-  listChunks: (fileId?: string) => {
-    const qs = fileId ? `?file_id=${encodeURIComponent(fileId)}` : ''
+  listChunks: (fileId?: string, options: { hasLlmSuggestions?: boolean } = {}) => {
+    const params = new URLSearchParams()
+    if (fileId) params.set('file_id', fileId)
+    if (options.hasLlmSuggestions) params.set('has_llm_suggestions', 'true')
+    const qs = params.size ? `?${params.toString()}` : ''
     return fetch(`${API}/chunks${qs}`).then(j<Chunk[]>)
   },
   createChunk: (body: { file_id: string; page: number; bbox: BBox }) =>
@@ -307,4 +389,14 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ settings }),
     }).then(j<Record<string, string>>),
+
+  listAuditReports: () => fetch(`${API}/audit/reports`).then(j<AuditReportListResponse>),
+  getAuditReport: (name: string) =>
+    fetch(`${API}/audit/reports/${encodeURIComponent(name)}`).then(j<AuditReportDetail>),
+  getManualKnowledgeRules: () =>
+    fetch(`${API}/audit/manual-rules`).then(j<ManualKnowledgeRules>),
+  getLexicalIndexStatus: () =>
+    fetch(`${API}/audit/lexical-index`).then(j<LexicalIndexStatus>),
+  listRetrievalShadowRuns: (limit = 25) =>
+    fetch(`${API}/audit/shadow-runs?limit=${limit}`).then(j<{ runs: RetrievalShadowRun[] }>),
 }

@@ -43,6 +43,34 @@ construction for the 2% reactance-change rule. They intentionally remain
 uncertain instead of being forced into gold. Gold-discovery queries are never
 valid evaluated retrieval inputs.
 
+`retrieval_ground_truth_v2_draft.json` is the review contract that should replace
+the flat `direct_candidate` metric after domain approval. Every detection
+requirement has required evidence groups: all groups are AND-required, while
+exact chunk locators inside one group are OR-equivalent alternatives. It also
+defines a secondary lenient-relevance profile where any direct or supporting
+chunk is a hit. This diagnoses candidate generation but cannot replace the
+primary strict-answer metric, which requires all evidence groups. Uncertain
+candidates never count in either profile. The four total-loss requirements handled by the
+deterministic report prefilter are excluded from retrieval denominators. Cases missing
+product-structure context or carrying unresolved metric conflicts remain
+`context_required`.
+Reusable tolerance tables are declared under `deterministic_context_evidence` and
+attached after primary value evidence is selected; they do not count as retrieval gold.
+Lightning-impulse voltage plus waveform remains an AND relationship with exact chunk hashes;
+the old broad table selectors are not reused. Exact corpus inspection resolved
+all 15 stale retrieval conflicts: nine already had the target table after gold
+recovery, and six needed their second evidence group added.
+
+The v2 file is deliberately not scoreable yet because it was migrated from
+model-reviewed v1 candidates. Each case must become
+`human_approved` before it can enter reported retrieval metrics. Regenerate and
+validate the draft with:
+
+```powershell
+uv run python scripts/build_retrieval_ground_truth_v2.py
+uv run python scripts/validate_retrieval_ground_truth_v2.py
+```
+
 `retrieval_evidence_groups_hbjc_v1.json` defines the evidence contract for the
 10-case HBJC end-to-end trial. Alternatives inside one group are OR-equivalent;
 all required groups for a case are AND-required. Cases whose applicability

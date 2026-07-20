@@ -120,6 +120,8 @@ class VectorSearchHit(BaseModel):
     rerank_score: float | None = None
     rrf_score: float | None = None
     route_ranks: dict[str, int] = Field(default_factory=dict)
+    retrieval_sources: list[str] = Field(default_factory=list)
+    source_ranks: dict[str, int] = Field(default_factory=dict)
     file_id: str
     file_name: str
     page: int

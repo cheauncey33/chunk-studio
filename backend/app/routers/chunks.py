@@ -86,7 +86,11 @@ async def create_chunk(body: ChunkCreate):
 
 
 @router.get("")
-def list_chunks(file_id: str | None = None, page: int | None = None):
+def list_chunks(
+    file_id: str | None = None,
+    page: int | None = None,
+    has_llm_suggestions: bool = False,
+):
     sql = "SELECT * FROM chunks"
     args: list = []
     clauses = []
@@ -96,6 +100,13 @@ def list_chunks(file_id: str | None = None, page: int | None = None):
     if page is not None:
         clauses.append("page=?")
         args.append(page)
+    if has_llm_suggestions:
+        clauses.append(
+            """(
+              COALESCE(json_array_length(metadata_llm, '$.keywords.value'), 0) > 0
+              OR COALESCE(json_array_length(metadata_llm, '$.questions.value'), 0) > 0
+            )"""
+        )
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY page, created_at"

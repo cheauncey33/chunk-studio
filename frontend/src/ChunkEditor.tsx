@@ -9,6 +9,13 @@ import {
   storagePathForField,
   suggestionValue,
 } from './chunkSchema'
+import {
+  formatGeneratedAt,
+  parseLlmSuggestion,
+  shortHash,
+  suggestionItems,
+  textSha256,
+} from './llmMetadata'
 
 interface Props {
   chunk: Chunk | null
@@ -19,6 +26,12 @@ interface Props {
 }
 
 type TextMode = 'source' | 'preview'
+type SuggestionFreshness = 'checking' | 'current' | 'changed' | 'unknown'
+
+const SUGGESTION_LABELS: Record<string, string> = {
+  keywords: '关键词',
+  questions: '可回答问题',
+}
 
 export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Props) {
   const [text, setText] = useState('')
@@ -30,6 +43,7 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
   const [dirtyMeta, setDirtyMeta] = useState(false)
   const [textMode, setTextMode] = useState<TextMode>('preview')
   const [showMeta, setShowMeta] = useState(false)
+  const [suggestionFreshness, setSuggestionFreshness] = useState<SuggestionFreshness>('unknown')
 
   useEffect(() => {
     if (!chunk) return
@@ -44,6 +58,26 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
     if (!chunk || dirtyText) return
     setText(chunk.text || '')
   }, [chunk?.text, chunk?.updated_at, dirtyText]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    let cancelled = false
+    if (!chunk) {
+      setSuggestionFreshness('unknown')
+      return
+    }
+    const sourceHash = Object.values(chunk.metadata_llm || {})
+      .map(parseLlmSuggestion)
+      .find(item => item.sourceTextSha256)?.sourceTextSha256 || ''
+    if (!sourceHash || !crypto.subtle) {
+      setSuggestionFreshness('unknown')
+      return
+    }
+    setSuggestionFreshness('checking')
+    textSha256(chunk.text || '')
+      .then(hash => { if (!cancelled) setSuggestionFreshness(hash === sourceHash ? 'current' : 'changed') })
+      .catch(() => { if (!cancelled) setSuggestionFreshness('unknown') })
+    return () => { cancelled = true }
+  }, [chunk])
 
   const renderedText = useMemo(() => renderChunkText(text), [text])
   const parsing = ocring || chunk?.ocr_status === 'running'
@@ -301,14 +335,51 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
 
       {Object.keys(chunk.metadata_llm || {}).length > 0 && (
         <div className="llm-suggestions">
-          <h4>LLM 建议</h4>
-          {Object.entries(chunk.metadata_llm).map(([key, value]) => (
-            <div key={key} className="llm-row">
-              <span className="k">{key}</span>
-              <span className="v">{JSON.stringify(value)}</span>
-              <button onClick={() => adopt(key)}>采纳</button>
+          <div className="llm-suggestions-head">
+            <div>
+              <h4>LLM 检索元数据</h4>
+              <p className="muted">建议层不会自动参与生产检索，采纳后写入业务元数据。</p>
             </div>
-          ))}
+            <span className={`suggestion-freshness ${suggestionFreshness}`}>
+              {suggestionFreshnessLabel(suggestionFreshness)}
+            </span>
+          </div>
+          {Object.entries(chunk.metadata_llm).map(([key, value]) => {
+            const suggestion = parseLlmSuggestion(value)
+            const items = suggestionItems(suggestion.value)
+            return (
+              <section key={key} className="llm-suggestion-block">
+                <div className="llm-suggestion-title">
+                  <h5>{SUGGESTION_LABELS[key] || key}</h5>
+                  <span className={`suggestion-status ${suggestion.status}`}>
+                    {suggestionStatusLabel(suggestion.status)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => adopt(key)}
+                    disabled={suggestion.status === 'accepted' || items.length === 0}
+                  >
+                    {suggestion.status === 'accepted' ? '已采纳' : '采纳'}
+                  </button>
+                </div>
+                {key === 'questions' ? (
+                  <ol className="llm-question-list">
+                    {items.map(item => <li key={item}>{item}</li>)}
+                  </ol>
+                ) : (
+                  <div className="llm-keyword-list">
+                    {items.map(item => <span key={item}>{item}</span>)}
+                  </div>
+                )}
+                <dl className="llm-provenance">
+                  <div><dt>版本</dt><dd>{suggestion.promptVersion || '旧版未标记'}</dd></div>
+                  <div><dt>模型</dt><dd>{suggestion.model || '未记录'}</dd></div>
+                  <div><dt>生成</dt><dd>{formatGeneratedAt(suggestion.generatedAt)}</dd></div>
+                  <div><dt>正文哈希</dt><dd className="mono" title={suggestion.sourceTextSha256}>{shortHash(suggestion.sourceTextSha256)}</dd></div>
+                </dl>
+              </section>
+            )
+          })}
         </div>
       )}
 
@@ -323,6 +394,19 @@ export function ChunkEditor({ chunk, fields, onSaved, onDelete, onQueued }: Prop
       </div>
     </div>
   )
+}
+
+function suggestionStatusLabel(status: string): string {
+  if (status === 'accepted') return '已采纳'
+  if (status === 'rejected') return '已拒绝'
+  return '建议'
+}
+
+function suggestionFreshnessLabel(value: SuggestionFreshness): string {
+  if (value === 'checking') return '校验正文中'
+  if (value === 'current') return '正文一致'
+  if (value === 'changed') return '正文已变化'
+  return '未校验正文'
 }
 
 function renderChunkText(raw: string): string {

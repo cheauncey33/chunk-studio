@@ -4,13 +4,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 from collections.abc import Callable
 from decimal import Decimal
+from html import unescape
 from html.parser import HTMLParser
 from http import HTTPStatus
 from typing import Any
 
-from . import db, embeddings
+from . import db, embeddings, lexical
 
 
 QUERY_REWRITE_MODEL = os.environ.get("RETRIEVAL_QUERY_MODEL", "qwen-flash")
@@ -18,6 +20,7 @@ RERANK_MODEL = os.environ.get("RETRIEVAL_RERANK_MODEL", "qwen3-rerank")
 CONTENT_TYPES = ("table", "section")
 ROUTE_TOP_K = 30
 CANDIDATES_PER_TYPE = 20
+LEXICAL_CANDIDATES_PER_TYPE = 20
 RRF_K = 60
 MAX_RERANK_DOCUMENT_CHARS = 2400
 RERANK_INSTRUCTION = (
@@ -26,6 +29,11 @@ RERANK_INSTRUCTION = (
 )
 
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+_EQ_SPLIT_NUMBER_RE = re.compile(
+    r"<eq\b[^>]*>(.*?)(\d)\s*</eq>\s*(\d+)(?=\D|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_EQ_TAG_RE = re.compile(r"</?eq\b[^>]*>", re.IGNORECASE)
 _STANDARD_RE = re.compile(
     r"(?:GB(?:/T)?|JB/T|DL/T|Q/GDW|IEC|ISO)\s*[0-9][0-9A-Z.\-/]*",
     re.IGNORECASE,
@@ -35,6 +43,7 @@ QueryPlanner = Callable[[str], dict[str, str]]
 QueryBatchEmbedder = Callable[..., list[list[float]]]
 VectorSearcher = Callable[..., dict[str, Any]]
 TextReranker = Callable[..., list[tuple[int, float]]]
+LexicalSearcher = Callable[..., dict[str, Any]]
 
 
 class _RerankTextExtractor(HTMLParser):
@@ -48,6 +57,9 @@ class _RerankTextExtractor(HTMLParser):
 
 
 def plan_query_rewrites(query: str, *, model: str = QUERY_REWRITE_MODEL) -> dict[str, str]:
+    planner_query = _normalize_query_for_rewrite(query)
+    if not planner_query:
+        raise ValueError("query must not be blank")
     api_key = os.environ.get("DASHSCOPE_API_KEY") or db.get_setting("llm.api_key")
     if not api_key:
         raise RuntimeError("DashScope API key is not configured")
@@ -68,7 +80,7 @@ def plan_query_rewrites(query: str, *, model: str = QUERY_REWRITE_MODEL) -> dict
                     '{"semantic":"...","keyword":"..."}'
                 ),
             },
-            {"role": "user", "content": query},
+            {"role": "user", "content": planner_query},
         ],
         result_format="message",
         response_format={"type": "json_object"},
@@ -82,7 +94,7 @@ def plan_query_rewrites(query: str, *, model: str = QUERY_REWRITE_MODEL) -> dict
     content = response.output["choices"][0]["message"]["content"]
     parsed = _parse_json_object(content)
     rewrites = {
-        route: _validate_rewrite(query, parsed.get(route), route=route)
+        route: _validate_rewrite(planner_query, parsed.get(route), route=route)
         for route in ("semantic", "keyword")
     }
     if len(set(rewrites.values())) != len(rewrites):
@@ -144,6 +156,8 @@ def hybrid_search(
     batch_embedder: QueryBatchEmbedder | None = None,
     vector_searcher: VectorSearcher | None = None,
     reranker: TextReranker | None = None,
+    lexical_searcher: LexicalSearcher | None = None,
+    lexical_enabled: bool | None = None,
 ) -> dict[str, Any]:
     query = query.strip()
     if not query:
@@ -155,6 +169,9 @@ def hybrid_search(
     batch_embedder = batch_embedder or embeddings.embed_queries_with_dashscope
     vector_searcher = vector_searcher or embeddings.vector_search_by_vector
     reranker = reranker or rerank_documents
+    lexical_searcher = lexical_searcher or lexical.search
+    if lexical_enabled is None:
+        lexical_enabled = lexical.production_enabled()
 
     degraded: list[str] = []
     routes = {"production": query}
@@ -193,7 +210,7 @@ def hybrid_search(
     if len(route_vectors) != len(routes):
         raise RuntimeError("query embedder returned an unexpected vector count")
 
-    candidate_pool: list[dict[str, Any]] = []
+    dense_by_type: dict[str, list[dict[str, Any]]] = {}
     total_by_type: dict[str, int] = {}
     for content_type in CONTENT_TYPES:
         merged: dict[str, dict[str, Any]] = {}
@@ -212,38 +229,66 @@ def hybrid_search(
             for rank, hit in enumerate(result["hits"], start=1):
                 candidate = merged.setdefault(
                     hit["chunk_id"],
-                    {
-                        "hit": hit,
-                        "content_type": content_type,
-                        "route_ranks": {},
-                        "route_scores": {},
-                        "rrf_score": 0.0,
-                    },
+                    _candidate(hit, content_type=content_type, source="dense"),
                 )
                 candidate["route_ranks"][route] = rank
                 candidate["route_scores"][route] = float(hit["score"])
+                candidate["source_ranks"][f"dense:{route}"] = rank
+                candidate["source_scores"][f"dense:{route}"] = float(hit["score"])
                 candidate["rrf_score"] += 1 / (RRF_K + rank)
 
-        ranked_for_type = sorted(
-            merged.values(),
-            key=lambda item: (
-                item["rrf_score"],
-                max(item["route_scores"].values()),
-                item["hit"]["chunk_id"],
-            ),
-            reverse=True,
-        )[:CANDIDATES_PER_TYPE]
-        candidate_pool.extend(ranked_for_type)
+        dense_by_type[content_type] = _rank_candidates(merged.values())[:CANDIDATES_PER_TYPE]
 
-    candidate_pool.sort(
-        key=lambda item: (
-            item["rrf_score"],
-            max(item["route_scores"].values()),
-            item["hit"]["chunk_id"],
-        ),
-        reverse=True,
-    )
+    lexical_by_type: dict[str, list[dict[str, Any]]] = {}
+    dual_active = False
+    if lexical_enabled:
+        sync_index = True
+        try:
+            lexical_routes = [
+                (route, routes[route])
+                for route in ("production", "keyword")
+                if route in routes
+            ]
+            for content_type in CONTENT_TYPES:
+                merged = {}
+                for route, route_query in lexical_routes:
+                    result = lexical_searcher(
+                        route_query,
+                        content_type=content_type,
+                        top_k=ROUTE_TOP_K,
+                        sync=sync_index,
+                    )
+                    sync_index = False
+                    for rank, hit in enumerate(result["hits"], start=1):
+                        candidate = merged.setdefault(
+                            hit["chunk_id"],
+                            _candidate(hit, content_type=content_type, source="lexical"),
+                        )
+                        candidate["route_ranks"][route] = rank
+                        candidate["route_scores"][route] = float(hit["score"])
+                        candidate["source_ranks"][f"lexical:{route}"] = rank
+                        candidate["source_scores"][f"lexical:{route}"] = float(hit["score"])
+                        candidate["rrf_score"] += 1 / (RRF_K + rank)
+                lexical_by_type[content_type] = _rank_candidates(merged.values())[
+                    :LEXICAL_CANDIDATES_PER_TYPE
+                ]
+            dual_active = True
+        except (RuntimeError, sqlite3.Error):
+            degraded.append("lexical_retrieval_failed")
+            lexical_by_type = {}
+
+    candidate_pool: list[dict[str, Any]] = []
+    for content_type in CONTENT_TYPES:
+        candidate_pool.extend(
+            _merge_candidate_lists(
+                dense_by_type[content_type],
+                lexical_by_type.get(content_type, []),
+            )
+        )
+
+    candidate_pool = _rank_candidates(candidate_pool)
     candidate_count = len(candidate_pool)
+    mode_prefix = "dual" if dual_active else "dense"
     if not candidate_pool:
         return _response(
             query,
@@ -251,7 +296,7 @@ def hybrid_search(
             total_by_type,
             [],
             candidate_count=0,
-            retrieval_mode="hybrid_rerank",
+            retrieval_mode=f"{mode_prefix}_rerank",
             rerank_model=RERANK_MODEL,
             degraded=degraded,
         )
@@ -263,7 +308,7 @@ def hybrid_search(
             _result_hit(candidate_pool[index], rerank_score=score)
             for index, score in reranked
         ]
-        retrieval_mode = "hybrid_rerank"
+        retrieval_mode = f"{mode_prefix}_rerank"
         rerank_model: str | None = RERANK_MODEL
     except RuntimeError:
         degraded.append("rerank_failed")
@@ -271,7 +316,7 @@ def hybrid_search(
             _result_hit(candidate, rerank_score=None)
             for candidate in candidate_pool[:top_k]
         ]
-        retrieval_mode = "rrf_fallback"
+        retrieval_mode = f"{mode_prefix}_rrf_fallback"
         rerank_model = None
 
     return _response(
@@ -313,11 +358,67 @@ def _response(
 
 def _result_hit(candidate: dict[str, Any], *, rerank_score: float | None) -> dict[str, Any]:
     hit = dict(candidate["hit"])
-    hit["score"] = max(candidate["route_scores"].values())
+    dense_scores = [
+        score for route, score in candidate["source_scores"].items()
+        if route.startswith("dense:")
+    ]
+    hit["score"] = max(dense_scores or candidate["source_scores"].values())
     hit["rrf_score"] = candidate["rrf_score"]
     hit["rerank_score"] = rerank_score
     hit["route_ranks"] = candidate["route_ranks"]
+    hit["retrieval_sources"] = candidate["sources"]
+    hit["source_ranks"] = candidate["source_ranks"]
     return hit
+
+
+def _candidate(hit: dict[str, Any], *, content_type: str, source: str) -> dict[str, Any]:
+    return {
+        "hit": hit,
+        "content_type": content_type,
+        "sources": [source],
+        "route_ranks": {},
+        "route_scores": {},
+        "source_ranks": {},
+        "source_scores": {},
+        "rrf_score": 0.0,
+    }
+
+
+def _rank_candidates(candidates: Any) -> list[dict[str, Any]]:
+    return sorted(
+        candidates,
+        key=lambda item: (
+            item["rrf_score"],
+            max(item["source_scores"].values(), default=0.0),
+            item["hit"]["chunk_id"],
+        ),
+        reverse=True,
+    )
+
+
+def _merge_candidate_lists(
+    dense_candidates: list[dict[str, Any]],
+    lexical_candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for candidate in [*dense_candidates, *lexical_candidates]:
+        chunk_id = candidate["hit"]["chunk_id"]
+        if chunk_id not in merged:
+            merged[chunk_id] = {
+                **candidate,
+                "sources": list(candidate["sources"]),
+                "route_ranks": dict(candidate["route_ranks"]),
+                "route_scores": dict(candidate["route_scores"]),
+                "source_ranks": dict(candidate["source_ranks"]),
+                "source_scores": dict(candidate["source_scores"]),
+            }
+            continue
+        current = merged[chunk_id]
+        current["sources"] = list(dict.fromkeys([*current["sources"], *candidate["sources"]]))
+        current["source_ranks"].update(candidate["source_ranks"])
+        current["source_scores"].update(candidate["source_scores"])
+        current["rrf_score"] += candidate["rrf_score"]
+    return list(merged.values())
 
 
 def _rerank_document(candidate: dict[str, Any]) -> str:
@@ -345,6 +446,28 @@ def _plain_text(value: str) -> str:
     parser.feed(value)
     parser.close()
     return re.sub(r"\s+", " ", " ".join(parser.parts)).strip()
+
+
+def _normalize_query_for_rewrite(value: str) -> str:
+    text = unescape(str(value or ""))
+    text = _EQ_SPLIT_NUMBER_RE.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}{match.group(3)}",
+        text,
+    )
+    text = _EQ_TAG_RE.sub(" ", text)
+    replacements = (
+        (r"\\leq(?:slant)?\b", "≤"),
+        (r"\\le\b", "≤"),
+        (r"\\geq(?:slant)?\b", "≥"),
+        (r"\\ge\b", "≥"),
+        (r"\\pm\b", "±"),
+        (r"\\times\b", "×"),
+        (r"\\cdot\b", "·"),
+        (r"\\%", "%"),
+    )
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _validate_rewrite(query: str, value: Any, *, route: str) -> str:

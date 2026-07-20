@@ -23,8 +23,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, db, jobs as job_service
-from .routers import auto_chunks, chunks, export, extract, fields, files, jobs, ocr, search, settings
+from . import config, db, jobs as job_service, lexical
+from .routers import audit, auto_chunks, chunks, export, extract, fields, files, jobs, ocr, search, settings
 
 # Ensure data dirs exist before StaticFiles mounts reference them (mounts happen
 # at import time, before the startup event fires).
@@ -47,6 +47,7 @@ app.add_middleware(
 async def _startup() -> None:
     config.ensure_dirs()
     db.init_db()
+    lexical.ensure_schema()
     app.state.job_worker = asyncio.create_task(job_service.worker_loop())
 
 
@@ -58,6 +59,7 @@ def health():
 # API routers (mounted under /api for clarity)
 api_prefix = "/api"
 for r in (files.router, chunks.router, auto_chunks.router, fields.router, settings.router,
+          audit.router,
           jobs.router, extract.router, ocr.router, export.router, search.router):
     app.include_router(r, prefix=api_prefix)
 

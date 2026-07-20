@@ -6,9 +6,12 @@ import { ChunkEditor } from './ChunkEditor'
 import { FieldConfigPanel } from './FieldConfigPanel'
 import { SearchPage } from './SearchPage'
 import { SettingsPage } from './SettingsPage'
+import { AuditPage } from './AuditPage'
+import { MetadataSuggestionsPage } from './MetadataSuggestionsPage'
 import './App.css'
 
-type Tab = 'studio' | 'search' | 'fields' | 'settings'
+type Tab = 'studio' | 'search' | 'metadata' | 'audit' | 'fields' | 'settings'
+type ReturnTab = 'search' | 'metadata'
 type AutoChunkKind = 'table' | 'section' | 'image'
 type CategoryTarget = 'upload' | 'file'
 type UploadMeta = {
@@ -115,7 +118,7 @@ function App() {
   const [rightW, setRightW] = useState(480)
   const [rightListH, setRightListH] = useState(320)
   const [pendingLocation, setPendingLocation] = useState<{ fileId: string; chunkId: string; page: number } | null>(null)
-  const [returnToSearchAvailable, setReturnToSearchAvailable] = useState(false)
+  const [returnTab, setReturnTab] = useState<ReturnTab | null>(null)
 
   const startResize = (side: 'left' | 'right') => (e: React.MouseEvent) => {
     e.preventDefault()
@@ -551,7 +554,10 @@ function App() {
   const pendingCount = chunks.filter(chunk => chunk.text_source === 'pending').length
   const parsedCount = chunks.filter(chunk => chunk.text_source === 'ocr' || chunk.text_source === 'digital').length
 
-  const locateSearchHit = (hit: { file_id: string; chunk_id: string; page: number }) => {
+  const locateChunk = (
+    hit: { file_id: string; chunk_id: string; page: number },
+    returnTarget: ReturnTab,
+  ) => {
     const file = files.find(item => item.id === hit.file_id)
     if (!file) {
       alert('检索结果对应的文件已不存在。')
@@ -559,7 +565,7 @@ function App() {
     }
     setSelectedKnowledgeCategory('all')
     setPendingLocation({ fileId: hit.file_id, chunkId: hit.chunk_id, page: hit.page })
-    setReturnToSearchAvailable(true)
+    setReturnTab(returnTarget)
     setCurrentFile(file)
     setTab('studio')
   }
@@ -577,6 +583,8 @@ function App() {
         <nav>
           <button className={tab === 'studio' ? 'on' : ''} onClick={() => setTab('studio')}>文档</button>
           <button className={tab === 'search' ? 'on' : ''} onClick={() => setTab('search')}>检索</button>
+          <button className={tab === 'metadata' ? 'on' : ''} onClick={() => setTab('metadata')}>LLM 元数据</button>
+          <button className={tab === 'audit' ? 'on' : ''} onClick={() => setTab('audit')}>评测</button>
           <button className={tab === 'fields' ? 'on' : ''} onClick={() => setTab('fields')}>字段</button>
           <button className={tab === 'settings' ? 'on' : ''} onClick={() => setTab('settings')}>设置</button>
         </nav>
@@ -664,16 +672,16 @@ function App() {
                     <p>{currentFile.page_count} 页 · 当前第 {page} 页 · 拖拽框选建立切片</p>
                   </div>
                   <div className="doc-stats">
-                    {returnToSearchAvailable && (
+                    {returnTab && (
                       <button
                         type="button"
                         className="return-search"
                         onClick={() => {
-                          setTab('search')
-                          setReturnToSearchAvailable(false)
+                          setTab(returnTab)
+                          setReturnTab(null)
                         }}
                       >
-                        返回检索结果
+                        {returnTab === 'search' ? '返回检索结果' : '返回 LLM 元数据'}
                       </button>
                     )}
                     <div className="stat-card"><strong>{chunks.length}</strong><span>切片</span></div>
@@ -774,7 +782,17 @@ function App() {
         </div>
       )}
 
-      <SearchPage hidden={tab !== 'search'} onLocate={locateSearchHit} />
+      <SearchPage hidden={tab !== 'search'} onLocate={hit => locateChunk(hit, 'search')} />
+      {tab === 'metadata' && (
+        <MetadataSuggestionsPage
+          onLocate={chunk => locateChunk({
+            file_id: chunk.file_id,
+            chunk_id: chunk.id,
+            page: chunk.page,
+          }, 'metadata')}
+        />
+      )}
+      {tab === 'audit' && <AuditPage />}
       {tab === 'fields' && <FieldConfigPanel fields={fields} onChanged={refreshFields} />}
       {tab === 'settings' && <SettingsPage />}
 

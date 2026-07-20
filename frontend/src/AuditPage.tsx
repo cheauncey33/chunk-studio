@@ -1,0 +1,526 @@
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  api,
+  type AuditReportDetail,
+  type AuditReportListItem,
+  type LexicalIndexStatus,
+  type ManualKnowledgeRules,
+  type RetrievalShadowRun,
+} from './api'
+
+type JsonRecord = Record<string, unknown>
+type ReportFilter = 'all' | 'end_to_end_audit' | 'retrieval_group_eval' | 'retrieval'
+
+const REPORT_FILTERS: Array<{ key: ReportFilter; label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'end_to_end_audit', label: '端到端' },
+  { key: 'retrieval_group_eval', label: '证据组' },
+  { key: 'retrieval', label: '检索' },
+]
+
+const STATUS_LABELS: Record<string, string> = {
+  correct: '正确',
+  incorrect: '错误',
+  insufficient_context: '上下文不足',
+  evidence_not_found: '未找到证据',
+  evaluated: '已评测',
+  context_required: '缺上下文',
+}
+
+export function AuditPage() {
+  const [reports, setReports] = useState<AuditReportListItem[]>([])
+  const [selectedReportName, setSelectedReportName] = useState('')
+  const [selectedCaseId, setSelectedCaseId] = useState('')
+  const [report, setReport] = useState<AuditReportDetail | null>(null)
+  const [manualRules, setManualRules] = useState<ManualKnowledgeRules | null>(null)
+  const [lexicalStatus, setLexicalStatus] = useState<LexicalIndexStatus | null>(null)
+  const [shadowRuns, setShadowRuns] = useState<RetrievalShadowRun[]>([])
+  const [filter, setFilter] = useState<ReportFilter>('end_to_end_audit')
+  const [loadingReports, setLoadingReports] = useState(false)
+  const [loadingDetail, setLoadingDetail] = useState(false)
+  const [error, setError] = useState('')
+
+  const refreshReports = useCallback(async () => {
+    setLoadingReports(true)
+    setError('')
+    try {
+      const [reportList, rules, indexStatus, shadowRunList] = await Promise.all([
+        api.listAuditReports(),
+        api.getManualKnowledgeRules().catch(() => null),
+        api.getLexicalIndexStatus().catch(() => null),
+        api.listRetrievalShadowRuns().catch(() => ({ runs: [] })),
+      ])
+      setReports(reportList.reports)
+      setManualRules(rules)
+      setLexicalStatus(indexStatus)
+      setShadowRuns(shadowRunList.runs)
+      setSelectedReportName(current => {
+        if (current && reportList.reports.some(item => item.name === current)) return current
+        return reportList.reports.find(item => item.kind === 'end_to_end_audit' && !item.parse_error)?.name
+          || reportList.reports.find(item => !item.parse_error)?.name
+          || reportList.reports[0]?.name
+          || ''
+      })
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setLoadingReports(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    refreshReports()
+  }, [refreshReports])
+
+  useEffect(() => {
+    if (!selectedReportName) {
+      setReport(null)
+      return
+    }
+    const selected = reports.find(item => item.name === selectedReportName)
+    if (selected?.parse_error) {
+      setReport(null)
+      setError(`报告 JSON 无法解析：${selected.parse_error}`)
+      return
+    }
+    setLoadingDetail(true)
+    setError('')
+    api.getAuditReport(selectedReportName)
+      .then(setReport)
+      .catch(err => {
+        setReport(null)
+        setError((err as Error).message)
+      })
+      .finally(() => setLoadingDetail(false))
+  }, [reports, selectedReportName])
+
+  const filteredReports = useMemo(() => {
+    if (filter === 'all') return reports
+    return reports.filter(item => item.kind === filter)
+  }, [filter, reports])
+
+  const cases = useMemo(() => (
+    asArray(report?.payload.cases).filter(isRecord)
+  ), [report])
+
+  useEffect(() => {
+    if (!cases.length) {
+      setSelectedCaseId('')
+      return
+    }
+    if (!cases.some(item => caseId(item) === selectedCaseId)) {
+      setSelectedCaseId(caseId(cases[0]))
+    }
+  }, [cases, selectedCaseId])
+
+  const selectedCase = useMemo(() => (
+    cases.find(item => caseId(item) === selectedCaseId) || cases[0] || null
+  ), [cases, selectedCaseId])
+
+  return (
+    <main className="audit-page">
+      <div className="audit-shell">
+        <header className="audit-heading">
+          <div>
+            <h2>评测审查</h2>
+            <p>查看本地 workflow 输出、case 判定、证据链和人工知识库规则。</p>
+          </div>
+          <button type="button" onClick={refreshReports} disabled={loadingReports}>
+            {loadingReports ? '刷新中' : '刷新'}
+          </button>
+        </header>
+
+        {error && (
+          <div className="search-error audit-error" role="alert">
+            <strong>加载失败</strong>
+            <span>{error}</span>
+          </div>
+        )}
+
+        <ShadowMonitor status={lexicalStatus} runs={shadowRuns} />
+
+        <div className="audit-layout">
+          <aside className="audit-sidebar">
+            <div className="audit-filter">
+              {REPORT_FILTERS.map(item => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={filter === item.key ? 'on' : ''}
+                  onClick={() => setFilter(item.key)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            <div className="audit-report-list">
+              {filteredReports.map(item => (
+                <button
+                  type="button"
+                  key={item.name}
+                  className={selectedReportName === item.name ? 'selected' : ''}
+                  onClick={() => setSelectedReportName(item.name)}
+                >
+                  <span className="audit-report-name">{item.name}</span>
+                  <span className="audit-report-meta">
+                    {kindLabel(item.kind)} · {item.case_count ?? '—'} cases · {formatTime(item.modified_at)}
+                  </span>
+                  {item.parse_error && <span className="audit-report-error">JSON 解析失败</span>}
+                </button>
+              ))}
+              {!filteredReports.length && <div className="search-empty">当前分类下没有报告。</div>}
+            </div>
+
+            <section className="audit-rules">
+              <h3>人工规则</h3>
+              <p>{manualRules ? `${manualRules.rules.length} 条 · ${manualRules.status}` : '未加载'}</p>
+              {manualRules?.rules.map(rule => (
+                <div className="audit-rule" key={String(rule.rule_id)}>
+                  <strong>{String(rule.rule_id || 'rule')}</strong>
+                  <span>{String(rule.rule_type || '')}</span>
+                </div>
+              ))}
+            </section>
+          </aside>
+
+          <section className="audit-main">
+            {loadingDetail && <div className="search-placeholder"><strong>正在加载报告</strong></div>}
+            {!loadingDetail && report && (
+              <>
+                <ReportSummary report={report} />
+                <div className="audit-case-list">
+                  {cases.map(item => (
+                    <CaseRow
+                      key={caseId(item)}
+                      item={item}
+                      selected={caseId(item) === caseId(selectedCase || {})}
+                      onSelect={() => setSelectedCaseId(caseId(item))}
+                    />
+                  ))}
+                  {!cases.length && <div className="search-empty">这个报告没有 case 列表。</div>}
+                </div>
+              </>
+            )}
+            {!loadingDetail && !report && !error && (
+              <div className="search-placeholder">
+                <strong>选择一个报告开始审查</strong>
+                <span>如果没有报告，需要先运行对应 workflow 生成本地 JSON。</span>
+              </div>
+            )}
+          </section>
+
+          <aside className="audit-detail">
+            <CaseDetail item={selectedCase} />
+          </aside>
+        </div>
+      </div>
+    </main>
+  )
+}
+
+function ShadowMonitor({ status, runs }: {
+  status: LexicalIndexStatus | null
+  runs: RetrievalShadowRun[]
+}) {
+  const [selectedId, setSelectedId] = useState('')
+  const selected = runs.find(run => run.id === selectedId) || runs[0] || null
+  const hits = selected?.payload.lexical_hits || []
+
+  useEffect(() => {
+    if (!runs.length) {
+      setSelectedId('')
+      return
+    }
+    if (!runs.some(run => run.id === selectedId)) setSelectedId(runs[0].id)
+  }, [runs, selectedId])
+
+  return (
+    <section className="shadow-monitor">
+      <header className="shadow-monitor-head">
+        <div>
+          <h3>FTS5 检索</h3>
+          <span>{status?.tokenizer_version || '未初始化'}</span>
+        </div>
+        <strong className={status?.enabled ? 'enabled' : 'disabled'}>
+          {status?.production_enabled ? '生产双路' : status?.shadow_enabled ? 'Shadow' : '已关闭'}
+        </strong>
+      </header>
+      <div className="shadow-stats">
+        <div><strong>{status?.indexed_chunks ?? '—'}</strong><span>已索引</span></div>
+        <div><strong>{status?.approved_chunks ?? '—'}</strong><span>approved</span></div>
+        <div><strong>{status?.pending_chunks ?? '—'}</strong><span>待同步</span></div>
+        <div><strong>{runs.length}</strong><span>近期运行</span></div>
+      </div>
+      <div className="shadow-monitor-body">
+        <div className="shadow-run-list">
+          {runs.map(run => (
+            <button
+              type="button"
+              key={run.id}
+              className={selected?.id === run.id ? 'selected' : ''}
+              onClick={() => setSelectedId(run.id)}
+            >
+              <span>{run.query}</span>
+              <small>
+                {run.status} · {run.duration_ms.toFixed(0)} ms · overlap {run.payload.overlap_count ?? 0}
+              </small>
+            </button>
+          ))}
+          {!runs.length && <div className="search-empty">暂无 shadow 运行记录</div>}
+        </div>
+        <div className="shadow-run-detail">
+          {!selected && <div className="search-empty">执行一次检索后显示旁路结果</div>}
+          {selected && (
+            <>
+              <div className="shadow-query">
+                <strong>{selected.query}</strong>
+                <span>{selected.created_at} · {selected.payload.lexical_hit_count ?? 0} lexical hits</span>
+                {selected.error && <em>{selected.error}</em>}
+              </div>
+              <div className="shadow-hit-list">
+                {hits.slice(0, 10).map((hit, index) => (
+                  <div className="shadow-hit" key={hit.chunk_id}>
+                    <strong>{index + 1}</strong>
+                    <div>
+                      <span>{hit.table_title || hit.section_title || hit.standard_no || hit.file_name}</span>
+                      <small>
+                        {hit.content_type} · p.{hit.page} · {Object.keys(hit.matched_fields).join(', ')}
+                      </small>
+                    </div>
+                    <code>{hit.rrf_score.toFixed(4)}</code>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function ReportSummary({ report }: { report: AuditReportDetail }) {
+  const payload = report.payload
+  const summary = asRecord(payload.summary)
+  const judgments = asRecord(summary.judgments)
+  const statCandidates: Array<[string, unknown]> = [
+    ['cases', summary.cases],
+    ['direct gold', summary.direct_gold_recalled == null ? summary.complete_case_recall : summary.direct_gold_recalled],
+    ['correct', judgments.correct],
+    ['incorrect', judgments.incorrect],
+    ['insufficient', judgments.insufficient_context],
+    ['evidence miss', judgments.evidence_not_found],
+  ]
+  const stats = statCandidates.filter(([, value]) => value != null)
+
+  return (
+    <section className="audit-summary">
+      <div className="audit-report-title">
+        <div>
+          <h3>{report.name}</h3>
+          <p>{kindLabel(report.kind)} · {formatBytes(report.size_bytes)} · {formatTime(report.modified_at)}</p>
+        </div>
+        {payload.retrieval_policy != null && <span>{String(payload.retrieval_policy)}</span>}
+      </div>
+      <div className="audit-stats">
+        {stats.map(([label, value]) => (
+          <div key={label}>
+            <strong>{display(value)}</strong>
+            <span>{label}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function CaseRow({ item, selected, onSelect }: {
+  item: JsonRecord
+  selected: boolean
+  onSelect: () => void
+}) {
+  const judgment = asRecord(item.judgment)
+  const testItem = asRecord(item.test_item)
+  const requirement = asRecord(item.reported_requirement)
+  const status = String(judgment.status || item.evaluation_status || 'unknown')
+  return (
+    <button type="button" className={`audit-case ${selected ? 'selected' : ''}`} onClick={onSelect}>
+      <div className="audit-case-head">
+        <strong>{caseId(item)}</strong>
+        <StatusBadge status={status} />
+      </div>
+      <span>{String(testItem.project_name || item.group_id || '')}</span>
+      <p>{String(requirement.text || '')}</p>
+      <div className="audit-case-flags">
+        {item.direct_gold_available != null && <span>gold: {displayBool(item.direct_gold_available)}</span>}
+        {item.direct_gold_recalled != null && <span>recall: {displayBool(item.direct_gold_recalled)}</span>}
+        {item.required_group_count != null && <span>groups: {display(item.recalled_group_count)}/{display(item.required_group_count)}</span>}
+      </div>
+    </button>
+  )
+}
+
+function CaseDetail({ item }: { item: JsonRecord | null }) {
+  if (!item) {
+    return <div className="audit-detail-empty">选择一个 case 查看证据链。</div>
+  }
+  const judgment = asRecord(item.judgment)
+  const requirement = asRecord(item.reported_requirement)
+  const queries = Object.entries(asRecord(item.queries))
+  const evidence = asArray(judgment.evidence).filter(isRecord)
+  const groups = asArray(item.groups).filter(isRecord)
+  const manualRuleSet = asRecord(item.manual_knowledge_rules)
+  const selectedRules = asArray(manualRuleSet.rules).filter(isRecord)
+  const status = String(judgment.status || item.evaluation_status || 'unknown')
+
+  return (
+    <div className="audit-detail-body">
+      <div className="audit-detail-head">
+        <div>
+          <h3>{caseId(item)}</h3>
+          <p>{String(asRecord(item.test_item).project_name || '')}</p>
+        </div>
+        <StatusBadge status={status} />
+      </div>
+
+      <section>
+        <h4>报告标准值</h4>
+        <p className="audit-requirement">{String(requirement.text || '—')}</p>
+      </section>
+
+      {judgment.reason != null && (
+        <section>
+          <h4>Judge 结论</h4>
+          <p>{String(judgment.reason)}</p>
+          <div className="audit-case-flags">
+            {asArray(judgment.evidence_candidate_keys).map(key => (
+              <span key={String(key)}>{String(key)}</span>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {groups.length > 0 && (
+        <section>
+          <h4>证据组召回</h4>
+          {groups.map(group => (
+            <div className="audit-group" key={String(group.group_id)}>
+              <strong>{String(group.group_id)}</strong>
+              <span>{displayBool(group.recalled)}</span>
+              {asArray(group.matched_manual_rules).map(rule => (
+                <em key={String(rule)}>{String(rule)}</em>
+              ))}
+            </div>
+          ))}
+        </section>
+      )}
+
+      {selectedRules.length > 0 && (
+        <section>
+          <h4>本 case 注入的人工规则</h4>
+          {selectedRules.map(rule => (
+            <details className="audit-evidence" key={String(rule.rule_id)}>
+              <summary>{String(rule.rule_id)}</summary>
+              <p>{String(rule.rule_text || '')}</p>
+            </details>
+          ))}
+        </section>
+      )}
+
+      {queries.length > 0 && (
+        <section>
+          <h4>查询计划</h4>
+          <dl className="audit-query-list">
+            {queries.map(([key, value]) => (
+              <div key={key}>
+                <dt>{key}</dt>
+                <dd>{String(value)}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
+
+      {evidence.length > 0 && (
+        <section>
+          <h4>候选证据</h4>
+          {evidence.map((candidate, index) => (
+            <EvidenceItem key={`${String(candidate.candidate_key)}-${index}`} item={candidate} />
+          ))}
+        </section>
+      )}
+    </div>
+  )
+}
+
+function EvidenceItem({ item }: { item: JsonRecord }) {
+  const metadata = asRecord(item.business_metadata)
+  return (
+    <details className="audit-evidence" open>
+      <summary>
+        <strong>{String(item.candidate_key || 'candidate')}</strong>
+        <span>{String(item.content_type || metadata.content_type || '')}</span>
+      </summary>
+      <dl className="audit-metadata">
+        {['standard_no', 'table_no', 'table_title', 'section', 'section_title'].map(key => (
+          metadata[key] == null ? null : (
+            <div key={key}>
+              <dt>{key}</dt>
+              <dd>{String(metadata[key])}</dd>
+            </div>
+          )
+        ))}
+      </dl>
+      <pre>{String(item.text || '').slice(0, 5000)}</pre>
+    </details>
+  )
+}
+
+function StatusBadge({ status }: { status: string }) {
+  return <span className={`audit-status ${status}`}>{STATUS_LABELS[status] || status}</span>
+}
+
+function asRecord(value: unknown): JsonRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {}
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
+function caseId(item: JsonRecord): string {
+  return String(item.case_id || item.id || 'case')
+}
+
+function display(value: unknown): string {
+  if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(3)
+  if (typeof value === 'boolean') return displayBool(value)
+  if (value == null || value === '') return '—'
+  return String(value)
+}
+
+function displayBool(value: unknown): string {
+  return value ? 'yes' : 'no'
+}
+
+function kindLabel(kind: string): string {
+  if (kind === 'end_to_end_audit') return '端到端审计'
+  if (kind === 'retrieval_group_eval') return '证据组评测'
+  if (kind === 'retrieval') return '检索产物'
+  return '报告'
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / 1024 / 1024).toFixed(1)} MB`
+}
+
+function formatTime(timestamp: number): string {
+  if (!Number.isFinite(timestamp)) return '—'
+  return new Date(timestamp * 1000).toLocaleString()
+}
