@@ -1,7 +1,8 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
   Bot,
   CircleHelp,
+  ClipboardCheck,
   FolderOpen,
   History,
   Moon,
@@ -16,77 +17,106 @@ import { helpText } from '@/lib/help-text'
 import { cn } from '@/lib/utils'
 
 const NAV = [
-  { to: '/', label: '知识库', icon: FolderOpen, end: true, help: helpText.nav.knowledge },
-  { to: '/assistants', label: '审查助手', icon: Bot, help: helpText.nav.assistants },
-  { to: '/runs', label: '运行记录', icon: History, help: helpText.nav.runs },
-  { to: '/settings', label: '设置', icon: Settings, help: helpText.nav.settings },
+  { to: '/', label: '审查', icon: ClipboardCheck, end: true, help: helpText.nav.workbench },
+  { to: '/knowledge-bases', label: '知识库', icon: FolderOpen, help: helpText.nav.knowledge },
+  { to: '/assistants', label: '助手', icon: Bot, help: helpText.nav.assistants },
+  { to: '/runs', label: '结果详情', icon: History, help: helpText.nav.runs },
+  { to: '/settings', label: '系统设置', icon: Settings, help: helpText.nav.settings },
 ] as const
+
+function isNavActive(to: string, pathname: string, end?: boolean) {
+  if (to === '/knowledge-bases') {
+    return (
+      pathname === '/knowledge-bases'
+      || pathname.startsWith('/kb/')
+      || pathname.startsWith('/chunk/')
+    )
+  }
+  if (to === '/settings') return pathname.startsWith('/settings')
+  if (to === '/assistants') return pathname.startsWith('/assistants')
+  if (to === '/runs') return pathname === '/runs' || pathname.startsWith('/runs/')
+  if (end) return pathname === to
+  return pathname === to || pathname.startsWith(`${to}/`)
+}
 
 export function RootLayout() {
   const { theme, toggleTheme } = useTheme()
   const { enabled, toggle } = useHelpMode()
+  const { pathname } = useLocation()
 
   return (
-    <div className="flex h-screen overflow-hidden bg-bg-canvas text-text-primary">
-      <aside className="flex w-[72px] flex-col items-center border-r border-border-button bg-bg-base py-4 xl:w-56 xl:items-stretch xl:px-3">
-        <div className="mb-6 flex items-center gap-3 px-1 xl:px-2">
-          <div className="grid size-9 place-items-center rounded-lg bg-accent-primary text-xs font-bold text-white">
+    <div className="flex h-screen flex-col overflow-hidden bg-bg-canvas text-text-primary">
+      <header className="relative z-20 flex h-[4.5rem] shrink-0 items-center border-b border-[#e5e7eb] bg-white px-5 dark:border-border-button dark:bg-bg-base">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#13c2c2] text-base font-bold text-white">
             CS
           </div>
-          <div className="hidden xl:block">
-            <div className="text-sm font-semibold">Chunk Studio</div>
-            <div className="text-xs text-text-secondary">标准资料审查工作台</div>
+          <div className="hidden min-w-0 sm:block">
+            <div className="truncate text-[16px] font-semibold tracking-tight text-[#111827] dark:text-text-primary">
+              Chunk Studio
+            </div>
+            <div className="truncate text-[13px] text-[#6b7280] dark:text-text-secondary">
+              油浸式变压器审查
+            </div>
           </div>
         </div>
 
-        <nav className="flex flex-1 flex-col gap-2">
-          {NAV.map(item => (
-            <Explain key={item.to} text={item.help} title={item.label} side="right" className="w-full">
-              <NavLink
-                to={item.to}
-                end={'end' in item ? item.end : false}
-                className={({ isActive }) =>
-                  cn(
-                    'flex w-full items-center justify-center gap-2.5 rounded-lg px-2 py-2.5 text-sm text-text-secondary transition hover:bg-bg-card hover:text-text-primary xl:justify-start xl:px-3',
-                    isActive && 'bg-bg-card font-medium text-text-primary',
-                  )
-                }
-              >
-                <item.icon className="size-5 shrink-0" />
-                <span className="hidden xl:inline">{item.label}</span>
-              </NavLink>
-            </Explain>
-          ))}
+        <nav
+          className="absolute left-1/2 top-1/2 flex max-w-[min(100%-14rem,56rem)] -translate-x-1/2 -translate-y-1/2 items-center gap-1 overflow-x-auto rounded-full bg-[#f3f4f6] p-1.5 dark:bg-bg-card"
+          aria-label="主导航"
+        >
+          {NAV.map(item => {
+            const active = isNavActive(item.to, pathname, 'end' in item ? item.end : false)
+            return (
+              <Explain key={item.to} text={item.help} title={item.label} side="bottom">
+                <NavLink
+                  to={item.to}
+                  end={'end' in item ? item.end : false}
+                  className={cn(
+                    'inline-flex shrink-0 items-center gap-2 rounded-full px-5 py-2 text-[22px] font-bold leading-none whitespace-nowrap transition',
+                    active
+                      ? 'bg-[#111827] text-white shadow-sm dark:bg-white dark:text-[#111827]'
+                      : 'text-[#4b5563] hover:bg-white/80 hover:text-[#111827] dark:text-text-secondary dark:hover:bg-bg-base dark:hover:text-text-primary',
+                  )}
+                >
+                  <item.icon className="size-5 shrink-0 opacity-90" />
+                  <span>{item.label}</span>
+                </NavLink>
+              </Explain>
+            )
+          })}
         </nav>
 
-        <div className="mt-auto flex flex-col items-center gap-1 xl:items-stretch">
-          <Explain text={helpText.nav.helpMode} title="说明模式" side="right" className="w-full">
+        <div className="ml-auto flex items-center gap-1">
+          <Explain text={helpText.nav.helpMode} title="说明模式" side="bottom">
             <Button
               variant={enabled ? 'default' : 'ghost'}
-              size="sm"
-              className="w-full justify-center xl:justify-start"
+              size="icon"
+              className="size-10 rounded-full"
               onClick={toggle}
-              title="说明模式"
+              title={enabled ? '关闭说明模式' : '说明模式'}
             >
-              <CircleHelp />
-              <span className="hidden xl:inline">{enabled ? '说明模式开' : '说明模式'}</span>
+              <CircleHelp className="size-5" />
             </Button>
           </Explain>
-          <Explain text={helpText.nav.theme} title="外观" side="right" className="w-full">
-            <Button variant="ghost" size="icon" className="xl:w-full xl:justify-start xl:px-3" onClick={toggleTheme} title="切换主题">
-              {theme === 'light' ? <Moon /> : <Sun />}
-              <span className="hidden xl:inline">外观</span>
+          <Explain text={helpText.nav.theme} title="外观" side="bottom">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-10 rounded-full"
+              onClick={toggleTheme}
+              title="切换主题"
+            >
+              {theme === 'light' ? <Moon className="size-5" /> : <Sun className="size-5" />}
             </Button>
           </Explain>
         </div>
-      </aside>
+      </header>
 
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <HelpModeBanner />
-        <main className="min-w-0 flex-1 overflow-hidden">
-          <Outlet />
-        </main>
-      </div>
+      <HelpModeBanner />
+      <main className="min-w-0 flex-1 overflow-hidden">
+        <Outlet />
+      </main>
     </div>
   )
 }

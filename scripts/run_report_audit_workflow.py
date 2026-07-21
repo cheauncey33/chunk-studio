@@ -20,7 +20,6 @@ from build_retrieval_evidence_reviews import (  # noqa: E402
     RRF_K,
     ROUTE_TOP_K,
     _call_model,
-    _merge_hits,
     _production_query,
 )
 from extract_report_test_items import extract_report  # noqa: E402
@@ -68,15 +67,10 @@ def _assistant_evidence_file_ids(
     *,
     excluded_file_ids: set[str] | None = None,
 ) -> list[str]:
-    excluded = excluded_file_ids or set()
-    file_ids = [
-        file_id
-        for file_id in db.assistant_scoped_file_ids(assistant_id)
-        if file_id not in excluded
-    ]
-    if not file_ids:
-        raise ValueError("assistant has no evidence files after excluding runtime inputs")
-    return file_ids
+    return db.assistant_evidence_file_ids(
+        assistant_id,
+        excluded_file_ids=excluded_file_ids,
+    )
 
 
 def _prompt_content(profile: dict[str, Any], key: str) -> str:
@@ -276,6 +270,52 @@ def _select_retrieval_candidates(
     return eligible[:top_k]
 
 
+def _retrieve_hybrid_candidates(
+    query: str,
+    *,
+    file_ids: list[str],
+    top_k: int,
+    route_top_k: int,
+    candidates_per_type: int,
+    rrf_k: int,
+    similarity_threshold: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Run production hybrid_search and map hits into workflow candidate shape."""
+    from app import retrieval
+
+    result = retrieval.hybrid_search(
+        query,
+        top_k=top_k,
+        route_top_k=route_top_k,
+        candidates_per_type=candidates_per_type,
+        rrf_k=rrf_k,
+        similarity_threshold=similarity_threshold,
+        file_ids=file_ids,
+    )
+    candidates: list[dict[str, Any]] = []
+    for hit in result.get("hits") or []:
+        meta = hit.get("business_metadata") or {}
+        content_type = str(meta.get("content_type") or "section")
+        score = float(
+            hit["rerank_score"]
+            if hit.get("rerank_score") is not None
+            else hit.get("score") or 0
+        )
+        candidates.append({
+            **hit,
+            "content_type": content_type,
+            "route_scores": {"hybrid": score},
+            "rrf_score": float(hit.get("rrf_score") or score),
+        })
+    debug = {
+        "retrieval_mode": result.get("retrieval_mode"),
+        "query_routes": result.get("query_routes"),
+        "candidate_count": result.get("candidate_count"),
+        "degraded": result.get("degraded") or [],
+    }
+    return candidates, debug
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path)
@@ -349,7 +389,13 @@ def main() -> None:
         case["case_id"]: case
         for case in json.loads(GOLD.read_text(encoding="utf-8"))["cases"]
     }
-    manual_knowledge_rules = _load_manual_knowledge_rules(profile["rules"])
+    manual_knowledge_rules = _load_manual_knowledge_rules(
+        db.resolve_assistant_manual_rules(
+            args.assistant_id,
+            fallback=profile["rules"],
+        )
+    )
+    few_shot_rules = db.resolve_assistant_few_shot_rules(args.assistant_id)
     results = list(checkpoint.get("cases") or [])
     completed_ids = {item["case_id"] for item in results}
     for index, case in enumerate(cases, start=1):
@@ -377,24 +423,15 @@ def main() -> None:
             value = str(planned.get(route) or "").strip()
             if value:
                 queries[route] = value
-        candidates = _merge_hits(
-            queries,
-            "table",
-            route_top_k=route_top_k,
-            final_per_type=final_per_type,
-            rrf_k=rrf_k,
+        # Hybrid search does its own constrained rewrite from the production query,
+        # matching knowledge-base 试检索 / production retrieval.
+        candidates, retrieval_debug = _retrieve_hybrid_candidates(
+            queries["production"],
             file_ids=evidence_file_ids,
-        ) + _merge_hits(
-            queries,
-            "section",
-            route_top_k=route_top_k,
-            final_per_type=final_per_type,
-            rrf_k=rrf_k,
-            file_ids=evidence_file_ids,
-        )
-        candidates = _select_retrieval_candidates(
-            candidates,
             top_k=top_k,
+            route_top_k=route_top_k,
+            candidates_per_type=final_per_type,
+            rrf_k=rrf_k,
             similarity_threshold=similarity_threshold,
         )
         for rank, candidate in enumerate(candidates, start=1):
@@ -435,13 +472,24 @@ def main() -> None:
                     "output": planned,
                 },
                 "retrieval": {
-                    "input": {"queries": queries},
+                    "input": {
+                        "query": queries["production"],
+                        "queries": queries,
+                        "file_ids": evidence_file_ids,
+                        "retrieval_backend": "hybrid_search",
+                        "top_k": top_k,
+                        "route_top_k": route_top_k,
+                        "candidates_per_type": final_per_type,
+                        "rrf_k": rrf_k,
+                        "similarity_threshold": similarity_threshold,
+                    },
                     "output": {
                         "candidate_counts": {
                             kind: sum(c["content_type"] == kind for c in candidates)
                             for kind in ("table", "section")
                         },
                         "candidates": compact_candidates,
+                        **retrieval_debug,
                     },
                 },
                 "audit_judge": {
@@ -473,11 +521,15 @@ def main() -> None:
         "assistant_id": args.assistant_id,
         "assistant_version_id": profile["id"],
         "assistant_version": profile["version"],
-        "manual_knowledge_rules": "assistant_version.rules",
+        "manual_knowledge_rules": "knowledge_bases.manual_rules|assistant_version.rules_fallback",
         "manual_knowledge_rule_summary": {
             "version": manual_knowledge_rules.get("version"),
             "status": manual_knowledge_rules.get("status"),
             "rule_ids": [rule.get("rule_id") for rule in manual_knowledge_rules.get("rules", [])],
+        },
+        "few_shot_rule_summary": {
+            "version": few_shot_rules.get("version"),
+            "item_ids": [item.get("id") for item in few_shot_rules.get("items", [])],
         },
         "judge_provider": "deepseek",
         "judge_model": judge_model,
@@ -487,11 +539,12 @@ def main() -> None:
             "assistant_version_id": profile["id"],
             "provider_config": llm.public_config(model=judge_model),
             "retrieval_config": {
+                "backend": "hybrid_search",
                 "embedding_model": embeddings.DEFAULT_MODEL,
                 "embedding_dimension": embeddings.DEFAULT_DIMENSION,
                 "top_k": top_k,
                 "route_top_k": route_top_k,
-                "final_per_type": final_per_type,
+                "candidates_per_type": final_per_type,
                 "rrf_k": rrf_k,
                 "similarity_threshold": similarity_threshold,
                 "content_types": ["table", "section"],

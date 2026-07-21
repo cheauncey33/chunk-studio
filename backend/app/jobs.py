@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 from . import chunk_schema, config, db, extractors
 from .adapters import ocr as ocr_adapter
 
+logger = logging.getLogger(__name__)
 JOB_POLL_SECONDS = 1.0
 
 
@@ -67,8 +69,18 @@ def enqueue_ocr_for_file(
     return [enqueue_ocr_chunk(r["id"]) for r in rows]
 
 
-def enqueue_parse_file(file_id: str, *, priority: int = -10, force: bool = False) -> dict[str, Any]:
-    """Create or return a MinerU full-document parse job for a PDF file."""
+def enqueue_parse_file(
+    file_id: str,
+    *,
+    priority: int = -10,
+    force: bool = False,
+    delete_chunks: bool = False,
+) -> dict[str, Any]:
+    """Create or return a MinerU full-document parse job for a PDF file.
+
+    When delete_chunks=True, remove existing chunks for this file first so the
+    post-parse auto-chunk pipeline can rebuild from a clean slate (RAGFlow-like).
+    """
     row = db.get_conn().execute("SELECT id FROM files WHERE id=?", (file_id,)).fetchone()
     if not row:
         raise KeyError("file not found")
@@ -83,6 +95,10 @@ def enqueue_parse_file(file_id: str, *, priority: int = -10, force: bool = False
         ).fetchone()
         if existing:
             return dict(existing)
+
+    deleted = 0
+    if delete_chunks:
+        deleted = _delete_file_chunks(file_id)
 
     jid = uuid.uuid4().hex
     parse_id = uuid.uuid4().hex
@@ -103,11 +119,37 @@ def enqueue_parse_file(file_id: str, *, priority: int = -10, force: bool = False
                 jid,
                 file_id,
                 priority,
-                json.dumps({"parse_id": parse_id}, ensure_ascii=False),
+                json.dumps(
+                    {
+                        "parse_id": parse_id,
+                        "delete_chunks": bool(delete_chunks),
+                        "deleted_chunk_count": deleted,
+                    },
+                    ensure_ascii=False,
+                ),
                 created,
             ),
         )
     return get_job(jid)
+
+
+def _delete_file_chunks(file_id: str) -> int:
+    """Delete all chunks for a file and best-effort remove crop images."""
+    rows = db.get_conn().execute(
+        "SELECT id, crop_path FROM chunks WHERE file_id=?",
+        (file_id,),
+    ).fetchall()
+    with db.transaction() as conn:
+        conn.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
+    for row in rows:
+        crop = (row["crop_path"] or "").strip()
+        if not crop:
+            continue
+        try:
+            config.from_rel(crop).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return len(rows)
 
 
 def enqueue_assistant_audit(
@@ -133,8 +175,19 @@ def enqueue_assistant_audit(
         raise ValueError("assistant has no enabled files in its knowledge bases")
     if report_file_id not in scoped_file_ids:
         raise ValueError("report file is outside the assistant knowledge-base scope")
-    if naming_rule_file_id and naming_rule_file_id not in scoped_file_ids:
+
+    from . import audit_run
+
+    resolved_naming_id = audit_run.resolve_naming_rule_file_id(
+        assistant_id, naming_rule_file_id
+    )
+    if resolved_naming_id and resolved_naming_id not in scoped_file_ids:
         raise ValueError("naming-rule file is outside the assistant knowledge-base scope")
+    excluded = {report_file_id}
+    if resolved_naming_id:
+        excluded.add(resolved_naming_id)
+    # Fail fast: after excluding the report/naming inputs, evidence must remain.
+    db.assistant_evidence_file_ids(assistant_id, excluded_file_ids=excluded)
 
     existing = db.get_conn().execute(
         """SELECT * FROM jobs
@@ -146,18 +199,16 @@ def enqueue_assistant_audit(
     if existing:
         return get_job(existing["id"])
 
-    from . import audit_run
-
     # Validate inputs early so the API can fail fast.
     audit_run.resolve_markdown_path(report_file_id)
-    audit_run.resolve_naming_rule_path(naming_rule_file_id)
+    audit_run.resolve_naming_rule_path(resolved_naming_id, assistant_id=assistant_id)
 
     jid = uuid.uuid4().hex
     created = now_iso()
     payload = {
         "assistant_id": assistant_id,
         "report_file_id": report_file_id,
-        "naming_rule_file_id": naming_rule_file_id,
+        "naming_rule_file_id": resolved_naming_id,
         "report_id": report_id,
     }
     with db.transaction() as conn:
@@ -289,13 +340,46 @@ async def _run_parse_job(job: dict[str, Any]) -> None:
                 parse_id,
             ),
         )
+
+    chunk_summary: dict[str, Any] = {}
+    try:
+        from . import chunk_pipeline
+
+        chunk_config = chunk_pipeline.resolve_file_chunk_config(file_id)
+        if chunk_config.get("auto_chunk_after_parse", True):
+            # Fresh rebuild after delete_chunks; otherwise skip near-duplicates.
+            job_payload = job.get("result") or {}
+            skip_existing = not bool(job_payload.get("delete_chunks"))
+            chunk_summary = await chunk_pipeline.run_auto_chunk_pipeline(
+                file_id,
+                parse_id,
+                chunk_config=chunk_config,
+                skip_existing=skip_existing,
+            )
+            parse_result["auto_chunk"] = {
+                "total": chunk_summary.get("total", 0),
+                "sections": chunk_summary.get("sections", 0),
+                "tables": chunk_summary.get("tables", 0),
+                "images": chunk_summary.get("images", 0),
+            }
+    except Exception as exc:
+        logger.exception("auto-chunk after parse failed for file %s", file_id)
+        parse_result["auto_chunk_error"] = str(exc)
+
+    with db.transaction() as conn:
+        conn.execute(
+            """UPDATE document_parses
+               SET result=?, updated_at=?
+               WHERE id=?""",
+            (json.dumps(parse_result, ensure_ascii=False), now_iso(), parse_id),
+        )
         conn.execute(
             """UPDATE jobs
                SET status='done', error='', result=?, finished_at=?
                WHERE id=?""",
             (
                 json.dumps({"parse_id": parse_id, **parse_result}, ensure_ascii=False),
-                finished,
+                now_iso(),
                 job["id"],
             ),
         )

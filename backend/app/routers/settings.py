@@ -1,7 +1,7 @@
 """Settings: LLM / OCR config stored as key/value. Export bundle too."""
 from __future__ import annotations
 
-import json
+import os
 
 from fastapi import APIRouter
 
@@ -22,31 +22,77 @@ KNOWN_KEYS = [
     "retrieval.lexical_production_enabled", "retrieval.lexical_shadow_enabled",
 ]
 
+# Match runtime resolution order used by llm.py / adapters/ocr.py.
+SECRET_ENV_KEYS = {
+    "llm.api_key": ("DEEPSEEK_API_KEY", "env_first"),
+    "mineru.token": ("MINERU_TOKEN", "db_first"),
+    "ocr.token": (None, "db_first"),
+}
+
+DISPLAY_DEFAULTS = {
+    "llm.base_url": "https://api.deepseek.com",
+    "llm.model": "deepseek-v4-flash",
+    "mineru.base_url": "https://mineru.net",
+    "mineru.model_version": "vlm",
+    "retrieval.lexical_production_enabled": "true",
+    "retrieval.lexical_shadow_enabled": "true",
+}
+
 
 @router.get("")
 def get_settings():
-    s = db.get_all_settings()
-    # mask api_key / token for display
-    masked = dict(s)
-    masked.setdefault("llm.base_url", "https://api.deepseek.com")
-    masked.setdefault("llm.model", "deepseek-v4-flash")
-    masked.setdefault("retrieval.lexical_production_enabled", "true")
-    masked.setdefault("retrieval.lexical_shadow_enabled", "true")
-    for k in ("llm.api_key", "ocr.token"):
-        if k in masked and masked[k]:
-            v = masked[k]
-            masked[k] = v[:4] + "…" + v[-4:] if len(v) > 8 else "••••"
-    return masked
+    stored = db.get_all_settings()
+    values: dict[str, str] = dict(stored)
+    sources: dict[str, str] = {}
+
+    for key, default in DISPLAY_DEFAULTS.items():
+        if not str(values.get(key) or "").strip():
+            values[key] = default
+            sources[key] = "default"
+        else:
+            sources[key] = "db"
+
+    for key, (env_name, order) in SECRET_ENV_KEYS.items():
+        db_value = str(stored.get(key) or "").strip()
+        env_value = str(os.environ.get(env_name) or "").strip() if env_name else ""
+        if order == "env_first":
+            if env_value:
+                values[key] = _mask_secret(env_value)
+                sources[key] = "env"
+            elif db_value:
+                values[key] = _mask_secret(db_value)
+                sources[key] = "db"
+            else:
+                values[key] = ""
+                sources[key] = "unset"
+        else:
+            if db_value:
+                values[key] = _mask_secret(db_value)
+                sources[key] = "db"
+            elif env_value:
+                values[key] = _mask_secret(env_value)
+                sources[key] = "env"
+            else:
+                values[key] = ""
+                sources[key] = "unset"
+
+    return {"settings": values, "sources": sources}
 
 
 @router.put("")
 def update_settings(body: SettingsUpdate):
     for k, v in body.settings.items():
-        # never persist the masked sentinel back
-        if k in ("llm.api_key", "ocr.token") and _is_masked_secret(v):
+        # never persist the masked sentinel back (covers DB + env-sourced secrets)
+        if k in SECRET_ENV_KEYS and _is_masked_secret(v):
             continue
         db.set_setting(k, v)
     return get_settings()
+
+
+def _mask_secret(value: str) -> str:
+    if len(value) > 8:
+        return value[:4] + "…" + value[-4:]
+    return "••••"
 
 
 def _is_masked_secret(value: str) -> bool:

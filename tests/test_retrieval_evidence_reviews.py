@@ -13,7 +13,7 @@ from build_retrieval_evidence_reviews import _merge_hits, _parse_json_object, _p
 def test_merge_hits_uses_versioned_retrieval_parameters(monkeypatch) -> None:
     calls: list[int] = []
 
-    def fake_search(query: str, *, top_k: int, content_type: str):
+    def fake_search(query: str, *, top_k: int, content_type: str, file_ids=None):
         calls.append(top_k)
         return {
             "hits": [
@@ -53,6 +53,40 @@ def test_merge_hits_uses_versioned_retrieval_parameters(monkeypatch) -> None:
 
     assert calls == [7, 7]
     assert len(hits) == 1
+
+
+def test_merge_hits_forwards_file_ids_to_vector_search(monkeypatch) -> None:
+    seen_scopes: list[list[str] | None] = []
+
+    def fake_search(query: str, *, top_k: int, content_type: str, file_ids=None):
+        seen_scopes.append(file_ids)
+        return {
+            "hits": [
+                {
+                    "chunk_id": "in-scope",
+                    "score": 0.9,
+                    "file_id": "standard",
+                    "file_name": "standard.pdf",
+                    "page": 1,
+                    "crop_url": None,
+                    "text": "evidence",
+                    "business_metadata": {"content_type": content_type},
+                    "source_trace": {},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(evidence_reviews.embeddings, "vector_search", fake_search)
+    hits = _merge_hits(
+        {"production": "query"},
+        "section",
+        route_top_k=5,
+        final_per_type=3,
+        file_ids=["standard", "peer"],
+    )
+
+    assert seen_scopes == [["standard", "peer"]]
+    assert [hit["chunk_id"] for hit in hits] == ["in-scope"]
 
 
 def test_production_query_keeps_context_item_and_requirement() -> None:

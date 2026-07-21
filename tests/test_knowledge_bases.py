@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from io import BytesIO
 from pathlib import Path
 import sys
@@ -10,7 +11,7 @@ from fastapi import UploadFile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app import db
-from app.routers import assistants, files
+from app.routers import assistants, files, knowledge_bases
 
 
 def _init_temp_db(monkeypatch, tmp_path) -> None:
@@ -128,4 +129,331 @@ def test_upload_to_named_knowledge_base_does_not_keep_default_membership(
     ).fetchall()
 
     assert [row["knowledge_base_id"] for row in memberships] == ["kb_target"]
+    _close_temp_db(monkeypatch)
+
+
+def test_patch_knowledge_base_file_toggles_enabled(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO knowledge_bases
+               (id,name,description,status,is_default,parser_config,
+                retrieval_config,created_at,updated_at)
+               VALUES ('kb_test','测试库','','active',0,'{}','{}','now','now')"""
+        )
+        conn.execute(
+            """INSERT INTO files(id,name,path,metadata,created_at)
+               VALUES ('f_toggle','toggle.pdf','files/toggle.pdf','{}','now')"""
+        )
+        conn.execute(
+            """INSERT INTO knowledge_base_files
+               (knowledge_base_id,file_id,role,enabled,created_at)
+               VALUES ('kb_test','f_toggle','source',1,'now')"""
+        )
+
+    disabled = knowledge_bases.update_knowledge_base_file(
+        "kb_test",
+        "f_toggle",
+        knowledge_bases.KnowledgeBaseFileUpdate(enabled=False),
+    )
+    assert disabled["id"] == "f_toggle"
+    assert disabled["enabled"] is False
+    assert disabled["role"] == "source"
+
+    enabled = knowledge_bases.update_knowledge_base_file(
+        "kb_test",
+        "f_toggle",
+        knowledge_bases.KnowledgeBaseFileUpdate(enabled=True),
+    )
+    assert enabled["enabled"] is True
+    _close_temp_db(monkeypatch)
+
+
+def test_patch_knowledge_base_corpus_rules(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO files(id,name,path,metadata,created_at)
+               VALUES ('f_name','naming.pdf','files/naming.pdf','{}','now')"""
+        )
+        conn.execute(
+            """INSERT INTO knowledge_base_files
+               (knowledge_base_id,file_id,role,enabled,created_at)
+               VALUES ('kb_uncategorized','f_name','source',1,'now')"""
+        )
+
+    updated = knowledge_bases.update_knowledge_base(
+        "kb_uncategorized",
+        knowledge_bases.KnowledgeBaseUpdate(
+            manual_rules={
+                "version": 1,
+                "scope": "knowledge_base_manual_rules",
+                "status": "test",
+                "rules": [
+                    {
+                        "rule_id": "r1",
+                        "rule_text": "demo",
+                    }
+                ],
+            },
+            few_shot_rules={
+                "version": 1,
+                "items": [{"id": "fs1", "title": "样例", "input": "i", "output": "o"}],
+            },
+            parser_config={"chunk_method": "general"},
+            default_naming_file_id="f_name",
+        ),
+    )
+    assert updated["manual_rules"]["rules"][0]["rule_id"] == "r1"
+    assert updated["few_shot_rules"]["items"][0]["id"] == "fs1"
+    assert updated["parser_config"]["chunk_method"] == "general"
+    assert updated["default_naming_file_id"] == "f_name"
+
+    cleared = knowledge_bases.update_knowledge_base(
+        "kb_uncategorized",
+        knowledge_bases.KnowledgeBaseUpdate(clear_default_naming_file=True),
+    )
+    assert cleared["default_naming_file_id"] is None
+    _close_temp_db(monkeypatch)
+
+
+def test_merge_manual_rules_priority_and_fallback(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    with db.transaction() as conn:
+        for kb_id, name, priority, rule_id, text in [
+            ("kb_a", "库A", 0, "shared", "from-a"),
+            ("kb_b", "库B", 10, "shared", "from-b"),
+        ]:
+            conn.execute(
+                """INSERT INTO knowledge_bases
+                   (id,name,description,status,is_default,parser_config,
+                    retrieval_config,manual_rules,few_shot_rules,
+                    default_naming_file_id,created_at,updated_at)
+                   VALUES (?,?,?,'active',0,'{}','{}',?,'{}',NULL,'now','now')""",
+                (
+                    kb_id,
+                    name,
+                    "",
+                    json.dumps(
+                        {
+                            "version": 1,
+                            "scope": "knowledge_base_manual_rules",
+                            "rules": [{"rule_id": rule_id, "rule_text": text}],
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            conn.execute(
+                """INSERT INTO assistant_knowledge_bases
+                   (assistant_id,knowledge_base_id,priority,enabled)
+                   VALUES ('assistant_oil_transformer_audit',?,?,1)""",
+                (kb_id, priority),
+            )
+
+    merged = db.resolve_assistant_manual_rules("assistant_oil_transformer_audit")
+    by_id = {rule["rule_id"]: rule for rule in merged["rules"]}
+    assert by_id["shared"]["rule_text"] == "from-b"
+
+    empty = db.merge_manual_rules(
+        [],
+        fallback={
+            "scope": "knowledge_base_manual_rules",
+            "rules": [{"rule_id": "fallback", "rule_text": "ok"}],
+        },
+    )
+    assert empty["rules"][0]["rule_id"] == "fallback"
+    _close_temp_db(monkeypatch)
+
+
+def test_assistant_default_naming_file_id_uses_highest_priority(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO files(id,name,path,metadata,created_at) VALUES
+               ('f_low','low.pdf','files/low.pdf','{}','now'),
+               ('f_high','high.pdf','files/high.pdf','{}','now')"""
+        )
+        for kb_id, name, priority, naming in [
+            ("kb_low", "低优", 1, "f_low"),
+            ("kb_high", "高优", 9, "f_high"),
+        ]:
+            conn.execute(
+                """INSERT INTO knowledge_bases
+                   (id,name,description,status,is_default,parser_config,
+                    retrieval_config,manual_rules,few_shot_rules,
+                    default_naming_file_id,created_at,updated_at)
+                   VALUES (?,?,?,'active',0,'{}','{}','{}','{}',?,'now','now')""",
+                (kb_id, name, "", naming),
+            )
+            conn.execute(
+                """INSERT INTO knowledge_base_files
+                   (knowledge_base_id,file_id,role,enabled,created_at)
+                   VALUES (?,?,'source',1,'now')""",
+                (kb_id, naming),
+            )
+            conn.execute(
+                """INSERT INTO assistant_knowledge_bases
+                   (assistant_id,knowledge_base_id,priority,enabled)
+                   VALUES ('assistant_oil_transformer_audit',?,?,1)""",
+                (kb_id, priority),
+            )
+
+    assert db.assistant_default_naming_file_id("assistant_oil_transformer_audit") == "f_high"
+    from app import audit_run
+
+    assert (
+        audit_run.resolve_naming_rule_file_id(
+            "assistant_oil_transformer_audit",
+            "f_low",
+        )
+        == "f_low"
+    )
+    assert (
+        audit_run.resolve_naming_rule_file_id("assistant_oil_transformer_audit", None)
+        == "f_high"
+    )
+    _close_temp_db(monkeypatch)
+
+
+def test_seed_backfills_manual_rules_onto_default_kb(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    row = db.get_conn().execute(
+        "SELECT manual_rules FROM knowledge_bases WHERE id='kb_uncategorized'"
+    ).fetchone()
+    payload = json.loads(row["manual_rules"] or "{}")
+    assert payload.get("scope") == "knowledge_base_manual_rules"
+    assert any(
+        rule.get("rule_id") == "transformer_total_loss_sum_v1"
+        for rule in payload.get("rules") or []
+    )
+    _close_temp_db(monkeypatch)
+
+
+def test_retrieval_test_accepts_explicit_file_ids(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO knowledge_bases
+               (id,name,description,status,is_default,parser_config,
+                retrieval_config,created_at,updated_at)
+               VALUES ('kb_ret','检索库','','active',0,'{}','{}','now','now')"""
+        )
+        conn.execute(
+            """INSERT INTO files(id,name,path,metadata,created_at)
+               VALUES ('f_a','a.pdf','files/a.pdf','{}','now'),
+                      ('f_b','b.pdf','files/b.pdf','{}','now')"""
+        )
+        conn.execute(
+            """INSERT INTO knowledge_base_files
+               (knowledge_base_id,file_id,role,enabled,created_at)
+               VALUES ('kb_ret','f_a','source',1,'now'),
+                      ('kb_ret','f_b','source',0,'now')"""
+        )
+
+    captured: dict = {}
+
+    def fake_hybrid_search(query, **kwargs):
+        captured["query"] = query
+        captured["file_ids"] = kwargs.get("file_ids")
+        return {
+            "hits": [],
+            "retrieval_mode": "hybrid",
+            "query_routes": [],
+            "candidate_count": 0,
+            "degraded": False,
+        }
+
+    monkeypatch.setattr(knowledge_bases.retrieval, "hybrid_search", fake_hybrid_search)
+
+    defaulted = knowledge_bases.retrieval_test(
+        "kb_ret",
+        knowledge_bases.RetrievalTestRequest(query="空载损耗"),
+    )
+    assert defaulted["scoped_file_ids"] == ["f_a"]
+    assert captured["file_ids"] == ["f_a"]
+
+    scoped = knowledge_bases.retrieval_test(
+        "kb_ret",
+        knowledge_bases.RetrievalTestRequest(query="空载损耗", file_ids=["f_b", "f_a", "f_a"]),
+    )
+    assert scoped["scoped_file_ids"] == ["f_b", "f_a"]
+    assert captured["file_ids"] == ["f_b", "f_a"]
+
+    from fastapi import HTTPException
+
+    try:
+        knowledge_bases.retrieval_test(
+            "kb_ret",
+            knowledge_bases.RetrievalTestRequest(query="空载损耗", file_ids=["missing"]),
+        )
+        raise AssertionError("expected unknown file_ids to fail")
+    except HTTPException as exc:
+        assert exc.status_code == 400
+
+    _close_temp_db(monkeypatch)
+
+
+def test_delete_knowledge_base_removes_exclusive_files(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    from app import config as app_config
+    from fastapi import HTTPException
+
+    files_dir = tmp_path / "files"
+    files_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = files_dir / "only.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF")
+    shared_path = files_dir / "shared.pdf"
+    shared_path.write_bytes(b"%PDF-1.4\n%%EOF")
+    monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(app_config, "FILES_DIR", files_dir)
+
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO knowledge_bases
+               (id,name,description,status,is_default,parser_config,
+                retrieval_config,created_at,updated_at)
+               VALUES ('kb_del','待删库','','active',0,'{}','{}','now','now')"""
+        )
+        conn.execute(
+            """INSERT INTO files(id,name,path,metadata,created_at)
+               VALUES ('f_only','only.pdf','files/only.pdf','{}','now'),
+                      ('f_shared','shared.pdf','files/shared.pdf','{}','now')"""
+        )
+        conn.execute(
+            """INSERT INTO chunks(id,file_id,page,bbox,text,status,created_at,updated_at)
+               VALUES ('c1','f_only',1,'{}','a','pending','now','now'),
+                      ('c2','f_shared',1,'{}','b','pending','now','now')"""
+        )
+        conn.execute(
+            """INSERT INTO knowledge_base_files
+               (knowledge_base_id,file_id,role,enabled,created_at)
+               VALUES ('kb_del','f_only','source',1,'now'),
+                      ('kb_del','f_shared','source',1,'now'),
+                      ('kb_uncategorized','f_shared','source',1,'now')"""
+        )
+
+    result = knowledge_bases.delete_knowledge_base("kb_del")
+    assert result["ok"] is True
+    assert result["deleted_file_count"] == 1
+    assert result["deleted_chunk_count"] == 1
+
+    remaining = {
+        row["id"]
+        for row in db.get_conn().execute("SELECT id FROM files").fetchall()
+    }
+    assert "f_only" not in remaining
+    assert "f_shared" in remaining
+    assert not pdf_path.exists()
+    assert shared_path.exists()
+
+    try:
+        knowledge_bases.delete_knowledge_base("kb_uncategorized")
+        raise AssertionError("expected default KB delete to fail")
+    except HTTPException as exc:
+        assert exc.status_code == 400
+
     _close_temp_db(monkeypatch)

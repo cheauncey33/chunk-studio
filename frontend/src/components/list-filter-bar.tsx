@@ -36,12 +36,12 @@ export function ListFilterBar({
               titleHelp
                 ? (
                   <Explain text={titleHelp} title={title}>
-                    <h1 className="text-lg font-semibold text-text-primary">{title}</h1>
+                    <h1 className="text-[18px] font-semibold tracking-tight text-text-primary">{title}</h1>
                   </Explain>
                 )
-                : <h1 className="text-lg font-semibold text-text-primary">{title}</h1>
+                : <h1 className="text-[18px] font-semibold tracking-tight text-text-primary">{title}</h1>
             )}
-            {description && <p className="mt-1 text-sm text-text-secondary">{description}</p>}
+            {description && <p className="mt-1.5 text-[15px] leading-relaxed text-text-secondary">{description}</p>}
           </>
         )}
       </div>

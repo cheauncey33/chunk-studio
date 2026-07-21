@@ -86,8 +86,8 @@ export default function ChunkPage() {
   )
 
   useEffect(() => {
-    api.getSettings().then(settings => {
-      setAutoOcr(settings['ocr.auto_on_create'] === 'true')
+    api.getSettings().then(payload => {
+      setAutoOcr(payload.settings['ocr.auto_on_create'] === 'true')
     }).catch(() => undefined)
   }, [])
 
@@ -222,7 +222,7 @@ export default function ChunkPage() {
           <BreadcrumbList>
             <BreadcrumbItem>
               <BreadcrumbLink asChild>
-                <Link to="/">知识库</Link>
+                <Link to="/knowledge-bases">知识库</Link>
               </BreadcrumbLink>
             </BreadcrumbItem>
             {kb && (

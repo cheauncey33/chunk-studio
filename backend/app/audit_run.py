@@ -41,14 +41,31 @@ def resolve_markdown_path(file_id: str) -> Path:
     return path
 
 
-def resolve_naming_rule_path(file_id: str | None) -> Path:
-    if file_id:
-        return resolve_markdown_path(file_id)
+def resolve_naming_rule_path(
+    file_id: str | None,
+    *,
+    assistant_id: str | None = None,
+) -> Path:
+    resolved_id = file_id
+    if not resolved_id and assistant_id:
+        resolved_id = db.assistant_default_naming_file_id(assistant_id)
+    if resolved_id:
+        return resolve_markdown_path(resolved_id)
     if DEFAULT_NAMING_RULE.is_file():
         return DEFAULT_NAMING_RULE
     raise ValueError(
-        "naming rule not provided and default evaluation prompt is missing"
+        "naming rule not provided, no knowledge-base default, and evaluation fallback is missing"
     )
+
+
+def resolve_naming_rule_file_id(
+    assistant_id: str,
+    naming_rule_file_id: str | None = None,
+) -> str | None:
+    """Explicit run override, else KB default, else None (eval fallback path)."""
+    if naming_rule_file_id:
+        return naming_rule_file_id
+    return db.assistant_default_naming_file_id(assistant_id)
 
 
 def run_assistant_audit(
@@ -62,8 +79,9 @@ def run_assistant_audit(
     if not SCRIPT_PATH.is_file():
         raise RuntimeError(f"audit workflow script missing: {SCRIPT_PATH}")
 
+    resolved_naming_id = resolve_naming_rule_file_id(assistant_id, naming_rule_file_id)
     report_md = resolve_markdown_path(report_file_id)
-    naming_md = resolve_naming_rule_path(naming_rule_file_id)
+    naming_md = resolve_naming_rule_path(resolved_naming_id, assistant_id=assistant_id)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     short = assistant_id.replace("assistant_", "")[:24] or "audit"
@@ -85,8 +103,8 @@ def run_assistant_audit(
         "--output",
         str(output_path),
     ]
-    if naming_rule_file_id:
-        cmd.extend(["--naming-rule-file-id", naming_rule_file_id])
+    if resolved_naming_id:
+        cmd.extend(["--naming-rule-file-id", resolved_naming_id])
     logger.info("starting assistant audit: %s", " ".join(cmd))
     completed = subprocess.run(
         cmd,
@@ -116,5 +134,6 @@ def run_assistant_audit(
         "report_name": report_name,
         "report_path": config.to_rel(output_path),
         "summary": summary,
+        "naming_rule_file_id": resolved_naming_id,
         "stdout_tail": (completed.stdout or "")[-1000:],
     }

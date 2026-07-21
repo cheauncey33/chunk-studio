@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -24,6 +24,16 @@ class KnowledgeBaseUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
     description: str | None = Field(default=None, max_length=500)
     retrieval_config: dict[str, Any] | None = None
+    parser_config: dict[str, Any] | None = None
+    manual_rules: dict[str, Any] | None = None
+    few_shot_rules: dict[str, Any] | None = None
+    default_naming_file_id: str | None = None
+    clear_default_naming_file: bool = False
+
+
+class KnowledgeBaseFileUpdate(BaseModel):
+    enabled: bool | None = None
+    role: Literal["source", "reference"] | None = None
 
 
 class RetrievalTestRequest(BaseModel):
@@ -33,6 +43,7 @@ class RetrievalTestRequest(BaseModel):
     route_top_k: int = Field(default=30, ge=1, le=100)
     candidates_per_type: int = Field(default=20, ge=1, le=100)
     rrf_k: int = Field(default=60, ge=1, le=200)
+    file_ids: list[str] | None = None
 
 
 def _loads(value: str | None, fallback: Any) -> Any:
@@ -43,6 +54,7 @@ def _loads(value: str | None, fallback: Any) -> Any:
 
 
 def _kb_out(row: Any) -> dict[str, Any]:
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
     return {
         "id": row["id"],
         "name": row["name"],
@@ -51,6 +63,11 @@ def _kb_out(row: Any) -> dict[str, Any]:
         "is_default": bool(row["is_default"]),
         "parser_config": _loads(row["parser_config"], {}),
         "retrieval_config": _loads(row["retrieval_config"], {}),
+        "manual_rules": _loads(row["manual_rules"] if "manual_rules" in keys else "{}", {}),
+        "few_shot_rules": _loads(row["few_shot_rules"] if "few_shot_rules" in keys else "{}", {}),
+        "default_naming_file_id": (
+            row["default_naming_file_id"] if "default_naming_file_id" in keys else None
+        ),
         "file_count": int(row["file_count"]),
         "chunk_count": int(row["chunk_count"]),
         "created_at": row["created_at"],
@@ -97,17 +114,21 @@ def list_knowledge_bases():
 def create_knowledge_base(body: KnowledgeBaseCreate):
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     knowledge_base_id = f"kb_{uuid.uuid4().hex}"
+    from .. import chunk_pipeline
+
     try:
         with db.transaction() as conn:
             conn.execute(
                 """INSERT INTO knowledge_bases
                    (id,name,description,status,is_default,parser_config,
-                    retrieval_config,created_at,updated_at)
-                   VALUES (?,?,?,'active',0,'{}',?, ?,?)""",
+                    retrieval_config,manual_rules,few_shot_rules,
+                    default_naming_file_id,created_at,updated_at)
+                   VALUES (?,?,?,'active',0,?,?,'{}','{}',NULL,?,?)""",
                 (
                     knowledge_base_id,
                     body.name.strip(),
                     body.description.strip(),
+                    json.dumps(chunk_pipeline.DEFAULT_PARSER_CONFIG, ensure_ascii=False),
                     json.dumps(
                         {
                             "top_k": 10,
@@ -134,6 +155,67 @@ def get_knowledge_base(knowledge_base_id: str):
     return _kb_out(_get_kb(knowledge_base_id))
 
 
+@router.delete("/{knowledge_base_id}")
+def delete_knowledge_base(knowledge_base_id: str):
+    """Delete a knowledge base and files that only belong to it.
+
+    Default knowledge bases cannot be deleted. Files that are also linked to
+    other knowledge bases keep their PDF/chunks and only lose this membership.
+    """
+    from .. import config
+
+    row = _get_kb(knowledge_base_id)
+    if bool(row["is_default"]):
+        raise HTTPException(400, "默认知识库不可删除")
+
+    owned = db.get_conn().execute(
+        """SELECT f.id, f.path,
+                  (SELECT COUNT(*) FROM knowledge_base_files o
+                   WHERE o.file_id=f.id AND o.knowledge_base_id!=?) AS other_kbs,
+                  (SELECT COUNT(*) FROM chunks c WHERE c.file_id=f.id) AS chunk_count
+           FROM knowledge_base_files kbf
+           JOIN files f ON f.id=kbf.file_id
+           WHERE kbf.knowledge_base_id=?""",
+        (knowledge_base_id, knowledge_base_id),
+    ).fetchall()
+
+    exclusive = [dict(item) for item in owned if int(item["other_kbs"] or 0) == 0]
+    exclusive_ids = [item["id"] for item in exclusive]
+    deleted_chunk_count = sum(int(item["chunk_count"] or 0) for item in exclusive)
+    deleted_file_count = len(exclusive_ids)
+
+    with db.transaction() as conn:
+        if exclusive_ids:
+            placeholders = ",".join("?" for _ in exclusive_ids)
+            conn.execute(
+                f"DELETE FROM chunks WHERE file_id IN ({placeholders})",
+                exclusive_ids,
+            )
+            conn.execute(
+                f"DELETE FROM files WHERE id IN ({placeholders})",
+                exclusive_ids,
+            )
+        conn.execute(
+            "DELETE FROM knowledge_bases WHERE id=?",
+            (knowledge_base_id,),
+        )
+
+    for item in exclusive:
+        path = (item.get("path") or "").strip()
+        if not path:
+            continue
+        try:
+            config.from_rel(path).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    return {
+        "ok": True,
+        "deleted_file_count": deleted_file_count,
+        "deleted_chunk_count": deleted_chunk_count,
+    }
+
+
 @router.patch("/{knowledge_base_id}")
 def update_knowledge_base(knowledge_base_id: str, body: KnowledgeBaseUpdate):
     _get_kb(knowledge_base_id)
@@ -144,9 +226,29 @@ def update_knowledge_base(knowledge_base_id: str, body: KnowledgeBaseUpdate):
         if value is not None:
             updates.append(f"{key}=?")
             params.append(value.strip())
-    if body.retrieval_config is not None:
-        updates.append("retrieval_config=?")
-        params.append(json.dumps(body.retrieval_config, ensure_ascii=False))
+    for key in ("retrieval_config", "parser_config", "manual_rules", "few_shot_rules"):
+        value = getattr(body, key)
+        if value is not None:
+            updates.append(f"{key}=?")
+            params.append(json.dumps(value, ensure_ascii=False))
+    if body.clear_default_naming_file:
+        updates.append("default_naming_file_id=?")
+        params.append(None)
+    elif body.default_naming_file_id is not None:
+        file_id = body.default_naming_file_id.strip()
+        if file_id:
+            owned = db.get_conn().execute(
+                """SELECT 1 FROM knowledge_base_files
+                   WHERE knowledge_base_id=? AND file_id=?""",
+                (knowledge_base_id, file_id),
+            ).fetchone()
+            if not owned:
+                raise HTTPException(400, "naming-rule file is not in this knowledge base")
+            updates.append("default_naming_file_id=?")
+            params.append(file_id)
+        else:
+            updates.append("default_naming_file_id=?")
+            params.append(None)
     if updates:
         updates.append("updated_at=?")
         params.append(time.strftime("%Y-%m-%dT%H:%M:%S"))
@@ -159,56 +261,73 @@ def update_knowledge_base(knowledge_base_id: str, body: KnowledgeBaseUpdate):
     return _kb_out(_get_kb(knowledge_base_id))
 
 
+_KB_FILE_SELECT = """SELECT f.id, f.name, f.page_count, f.metadata, f.created_at,
+                              kbf.role, kbf.enabled,
+                              COUNT(c.id) AS chunk_count,
+                              SUM(CASE WHEN c.status='approved' THEN 1 ELSE 0 END)
+                                  AS approved_count,
+                              (
+                                SELECT p.status FROM document_parses p
+                                WHERE p.file_id=f.id
+                                ORDER BY p.created_at DESC LIMIT 1
+                              ) AS parse_status,
+                              (
+                                SELECT p.error FROM document_parses p
+                                WHERE p.file_id=f.id
+                                ORDER BY p.created_at DESC LIMIT 1
+                              ) AS parse_error,
+                              (
+                                SELECT p.markdown_path FROM document_parses p
+                                WHERE p.file_id=f.id
+                                ORDER BY p.created_at DESC LIMIT 1
+                              ) AS parse_markdown_path
+                       FROM knowledge_base_files kbf
+                       JOIN files f ON f.id=kbf.file_id
+                       LEFT JOIN chunks c ON c.file_id=f.id
+                       WHERE kbf.knowledge_base_id=?"""
+
+
+def _kb_file_out(row: Any) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "page_count": row["page_count"],
+        "metadata": _loads(row["metadata"], {}),
+        "created_at": row["created_at"],
+        "role": row["role"],
+        "enabled": bool(row["enabled"]),
+        "chunk_count": int(row["chunk_count"] or 0),
+        "approved_count": int(row["approved_count"] or 0),
+        "parse_status": row["parse_status"],
+        "parse_error": row["parse_error"] or "",
+        "parse_ready": bool(
+            row["parse_status"] == "done" and row["parse_markdown_path"]
+        ),
+    }
+
+
+def _get_kb_file(knowledge_base_id: str, file_id: str) -> dict[str, Any]:
+    row = db.get_conn().execute(
+        f"""{_KB_FILE_SELECT}
+            AND kbf.file_id=?
+            GROUP BY f.id""",
+        (knowledge_base_id, file_id),
+    ).fetchone()
+    if not row:
+        raise HTTPException(404, "knowledge base file not found")
+    return _kb_file_out(row)
+
+
 @router.get("/{knowledge_base_id}/files")
 def list_knowledge_base_files(knowledge_base_id: str):
     _get_kb(knowledge_base_id)
     rows = db.get_conn().execute(
-        """SELECT f.id, f.name, f.page_count, f.metadata, f.created_at,
-                  kbf.role, kbf.enabled,
-                  COUNT(c.id) AS chunk_count,
-                  SUM(CASE WHEN c.status='approved' THEN 1 ELSE 0 END) AS approved_count,
-                  (
-                    SELECT p.status FROM document_parses p
-                    WHERE p.file_id=f.id
-                    ORDER BY p.created_at DESC LIMIT 1
-                  ) AS parse_status,
-                  (
-                    SELECT p.error FROM document_parses p
-                    WHERE p.file_id=f.id
-                    ORDER BY p.created_at DESC LIMIT 1
-                  ) AS parse_error,
-                  (
-                    SELECT p.markdown_path FROM document_parses p
-                    WHERE p.file_id=f.id
-                    ORDER BY p.created_at DESC LIMIT 1
-                  ) AS parse_markdown_path
-           FROM knowledge_base_files kbf
-           JOIN files f ON f.id=kbf.file_id
-           LEFT JOIN chunks c ON c.file_id=f.id
-           WHERE kbf.knowledge_base_id=?
-           GROUP BY f.id
-           ORDER BY f.created_at DESC""",
+        f"""{_KB_FILE_SELECT}
+            GROUP BY f.id
+            ORDER BY f.created_at DESC""",
         (knowledge_base_id,),
     ).fetchall()
-    return [
-        {
-            "id": row["id"],
-            "name": row["name"],
-            "page_count": row["page_count"],
-            "metadata": _loads(row["metadata"], {}),
-            "created_at": row["created_at"],
-            "role": row["role"],
-            "enabled": bool(row["enabled"]),
-            "chunk_count": int(row["chunk_count"] or 0),
-            "approved_count": int(row["approved_count"] or 0),
-            "parse_status": row["parse_status"],
-            "parse_error": row["parse_error"] or "",
-            "parse_ready": bool(
-                row["parse_status"] == "done" and row["parse_markdown_path"]
-            ),
-        }
-        for row in rows
-    ]
+    return [_kb_file_out(row) for row in rows]
 
 
 @router.put("/{knowledge_base_id}/files/{file_id}")
@@ -231,6 +350,44 @@ def add_file_to_knowledge_base(knowledge_base_id: str, file_id: str):
             (now, knowledge_base_id),
         )
     return {"ok": True}
+
+
+@router.patch("/{knowledge_base_id}/files/{file_id}")
+def update_knowledge_base_file(
+    knowledge_base_id: str,
+    file_id: str,
+    body: KnowledgeBaseFileUpdate,
+):
+    _get_kb(knowledge_base_id)
+    if not db.get_conn().execute(
+        """SELECT 1 FROM knowledge_base_files
+           WHERE knowledge_base_id=? AND file_id=?""",
+        (knowledge_base_id, file_id),
+    ).fetchone():
+        raise HTTPException(404, "knowledge base file not found")
+    updates: list[str] = []
+    params: list[Any] = []
+    if body.enabled is not None:
+        updates.append("enabled=?")
+        params.append(1 if body.enabled else 0)
+    if body.role is not None:
+        updates.append("role=?")
+        params.append(body.role)
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    with db.transaction() as conn:
+        if updates:
+            params.extend([knowledge_base_id, file_id])
+            conn.execute(
+                f"""UPDATE knowledge_base_files
+                    SET {', '.join(updates)}
+                    WHERE knowledge_base_id=? AND file_id=?""",
+                params,
+            )
+        conn.execute(
+            "UPDATE knowledge_bases SET updated_at=? WHERE id=?",
+            (now, knowledge_base_id),
+        )
+    return _get_kb_file(knowledge_base_id, file_id)
 
 
 @router.delete("/{knowledge_base_id}/files/{file_id}")
@@ -297,12 +454,29 @@ def list_knowledge_base_chunks(
 @router.post("/{knowledge_base_id}/retrieval-test")
 def retrieval_test(knowledge_base_id: str, body: RetrievalTestRequest):
     _get_kb(knowledge_base_id)
-    file_rows = db.get_conn().execute(
-        """SELECT file_id FROM knowledge_base_files
-           WHERE knowledge_base_id=? AND enabled=1""",
+    membership_rows = db.get_conn().execute(
+        """SELECT file_id, enabled FROM knowledge_base_files
+           WHERE knowledge_base_id=?""",
         (knowledge_base_id,),
     ).fetchall()
-    file_ids = [row["file_id"] for row in file_rows]
+    membership = {row["file_id"]: bool(row["enabled"]) for row in membership_rows}
+    if body.file_ids is None:
+        file_ids = [file_id for file_id, enabled in membership.items() if enabled]
+    else:
+        unknown = [file_id for file_id in body.file_ids if file_id not in membership]
+        if unknown:
+            raise HTTPException(
+                400,
+                f"file_ids not in this knowledge base: {', '.join(unknown[:5])}",
+            )
+        # Preserve request order while de-duplicating.
+        seen: set[str] = set()
+        file_ids = []
+        for file_id in body.file_ids:
+            if file_id in seen:
+                continue
+            seen.add(file_id)
+            file_ids.append(file_id)
     try:
         result = retrieval.hybrid_search(
             body.query,
@@ -319,6 +493,7 @@ def retrieval_test(knowledge_base_id: str, body: RetrievalTestRequest):
         raise HTTPException(502, str(exc)) from exc
     result["knowledge_base_id"] = knowledge_base_id
     result["scoped_file_count"] = len(file_ids)
+    result["scoped_file_ids"] = file_ids
     result["retrieval_params"] = {
         "top_k": body.top_k,
         "route_top_k": body.route_top_k,

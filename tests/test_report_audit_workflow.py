@@ -95,3 +95,92 @@ def test_runtime_retrieval_config_and_selection_apply_version_values() -> None:
 def test_runtime_retrieval_config_rejects_invalid_values() -> None:
     with pytest.raises(ValueError, match="top_k"):
         workflow._retrieval_runtime_config({"retrieval_config": {"top_k": 0}})
+
+
+def test_retrieve_hybrid_candidates_maps_hits_and_passes_scope(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_hybrid_search(query: str, **kwargs):
+        captured["query"] = query
+        captured["kwargs"] = kwargs
+        return {
+            "retrieval_mode": "dual_rerank",
+            "query_routes": {"production": query, "semantic": "s", "keyword": "k"},
+            "candidate_count": 2,
+            "degraded": [],
+            "hits": [
+                {
+                    "chunk_id": "t1",
+                    "text": "table evidence",
+                    "score": 0.4,
+                    "rerank_score": 0.91,
+                    "rrf_score": 0.03,
+                    "business_metadata": {"content_type": "table"},
+                },
+                {
+                    "chunk_id": "s1",
+                    "text": "section evidence",
+                    "score": 0.5,
+                    "rerank_score": 0.7,
+                    "rrf_score": 0.02,
+                    "business_metadata": {"content_type": "section"},
+                },
+            ],
+        }
+
+    import app.retrieval as retrieval_mod
+
+    monkeypatch.setattr(retrieval_mod, "hybrid_search", fake_hybrid_search)
+    candidates, debug = workflow._retrieve_hybrid_candidates(
+        "空载损耗限值",
+        file_ids=["standard"],
+        top_k=5,
+        route_top_k=11,
+        candidates_per_type=9,
+        rrf_k=40,
+        similarity_threshold=0.3,
+    )
+
+    assert captured["query"] == "空载损耗限值"
+    assert captured["kwargs"]["file_ids"] == ["standard"]
+    assert captured["kwargs"]["top_k"] == 5
+    assert captured["kwargs"]["route_top_k"] == 11
+    assert captured["kwargs"]["candidates_per_type"] == 9
+    assert captured["kwargs"]["rrf_k"] == 40
+    assert captured["kwargs"]["similarity_threshold"] == 0.3
+    assert [item["chunk_id"] for item in candidates] == ["t1", "s1"]
+    assert candidates[0]["content_type"] == "table"
+    assert candidates[0]["route_scores"] == {"hybrid": 0.91}
+    assert debug["retrieval_mode"] == "dual_rerank"
+
+
+def test_enqueue_rejects_empty_evidence_after_excluding_report(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    from app import jobs
+
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO files(id,name,path,metadata,created_at)
+               VALUES ('report','report.pdf','files/report.pdf','{}','now')"""
+        )
+        conn.execute(
+            """INSERT INTO knowledge_base_files
+               (knowledge_base_id,file_id,role,enabled,created_at)
+               VALUES ('kb_uncategorized','report','source',1,'now')"""
+        )
+        conn.execute(
+            """INSERT INTO document_parses
+               (id,file_id,provider,status,markdown_path,result,error,created_at,updated_at)
+               VALUES ('p1','report','mineru','done','parses/report.md','{}','','now','now')"""
+        )
+
+    parse_path = tmp_path / "parses"
+    parse_path.mkdir(parents=True, exist_ok=True)
+    (parse_path / "report.md").write_text("# report", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="no evidence files after excluding"):
+        jobs.enqueue_assistant_audit(
+            "assistant_oil_transformer_audit",
+            report_file_id="report",
+        )
+    _close_temp_db(monkeypatch)

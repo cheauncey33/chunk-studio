@@ -3,12 +3,15 @@ import { createBrowserRouter, Navigate } from 'react-router-dom'
 import { RootLayout } from '@/layouts/root-layout'
 import { KnowledgeLayout } from '@/layouts/kb-layout'
 
+const WorkbenchPage = lazy(() => import('@/pages/workbench'))
 const DatasetsPage = lazy(() => import('@/pages/datasets'))
 const DatasetFilesPage = lazy(() => import('@/pages/dataset/files'))
 const DatasetChunksPage = lazy(() => import('@/pages/dataset/chunks'))
 const DatasetRetrievalPage = lazy(() => import('@/pages/dataset/retrieval'))
+const DatasetOverviewPage = lazy(() => import('@/pages/dataset/overview'))
 const DatasetMetadataPage = lazy(() => import('@/pages/dataset/metadata'))
 const DatasetSettingsPage = lazy(() => import('@/pages/dataset/settings'))
+const DatasetRulesPage = lazy(() => import('@/pages/dataset/rules'))
 const ChunkPage = lazy(() => import('@/pages/chunk'))
 const AssistantsPage = lazy(() => import('@/pages/assistants'))
 const RunsPage = lazy(() => import('@/pages/runs'))
@@ -32,17 +35,23 @@ export const router = createBrowserRouter([
     path: '/',
     element: <RootLayout />,
     children: [
-      { index: true, element: withSuspense(<DatasetsPage />) },
+      { index: true, element: withSuspense(<WorkbenchPage />) },
+      { path: 'knowledge-bases', element: withSuspense(<DatasetsPage />) },
+      // Keep old home path working for bookmarks.
+      { path: 'datasets', element: <Navigate to="/knowledge-bases" replace /> },
       {
         path: 'kb/:id',
         element: <KnowledgeLayout />,
         children: [
           { index: true, element: <Navigate to="files" replace /> },
           { path: 'files', element: withSuspense(<DatasetFilesPage />) },
-          { path: 'chunks', element: withSuspense(<DatasetChunksPage />) },
           { path: 'retrieval', element: withSuspense(<DatasetRetrievalPage />) },
-          { path: 'metadata', element: withSuspense(<DatasetMetadataPage />) },
+          { path: 'overview', element: withSuspense(<DatasetOverviewPage />) },
           { path: 'settings', element: withSuspense(<DatasetSettingsPage />) },
+          { path: 'rules', element: withSuspense(<DatasetRulesPage />) },
+          // Not in the sidebar; kept routeable for deep links and file-row overflow actions.
+          { path: 'chunks', element: withSuspense(<DatasetChunksPage />) },
+          { path: 'metadata', element: withSuspense(<DatasetMetadataPage />) },
         ],
       },
       { path: 'assistants', element: withSuspense(<AssistantsPage />) },

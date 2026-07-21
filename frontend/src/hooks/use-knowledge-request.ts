@@ -79,7 +79,8 @@ export function useCreateKnowledgeBase() {
 export function useUpdateKnowledgeBase(id: string) {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (body: { name?: string; description?: string }) => api.updateKnowledgeBase(id, body),
+    mutationFn: (body: Parameters<typeof api.updateKnowledgeBase>[1]) =>
+      api.updateKnowledgeBase(id, body),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.knowledgeBases }),
   })
 }

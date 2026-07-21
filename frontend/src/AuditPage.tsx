@@ -42,9 +42,15 @@ const STATUS_LABELS: Record<string, string> = {
   context_required: '缺上下文',
 }
 
-export function AuditPage({ embedded = false }: { embedded?: boolean } = {}) {
+export function AuditPage({
+  embedded = false,
+  initialReport = '',
+}: {
+  embedded?: boolean
+  initialReport?: string
+} = {}) {
   const [reports, setReports] = useState<AuditReportListItem[]>([])
-  const [selectedReportName, setSelectedReportName] = useState('')
+  const [selectedReportName, setSelectedReportName] = useState(initialReport)
   const [selectedCaseId, setSelectedCaseId] = useState('')
   const [report, setReport] = useState<AuditReportDetail | null>(null)
   const [workflow, setWorkflow] = useState<AuditWorkflowTrace | null>(null)
@@ -74,6 +80,9 @@ export function AuditPage({ embedded = false }: { embedded?: boolean } = {}) {
       setLexicalStatus(indexStatus)
       setShadowRuns(shadowRunList.runs)
       setSelectedReportName(current => {
+        if (initialReport && reportList.reports.some(item => item.name === initialReport)) {
+          return initialReport
+        }
         if (current && reportList.reports.some(item => item.name === current)) return current
         return reportList.reports.find(item => item.kind === 'end_to_end_audit' && !item.parse_error)?.name
           || reportList.reports.find(item => !item.parse_error)?.name
@@ -85,7 +94,7 @@ export function AuditPage({ embedded = false }: { embedded?: boolean } = {}) {
     } finally {
       setLoadingReports(false)
     }
-  }, [])
+  }, [initialReport])
 
   useEffect(() => {
     refreshReports()
@@ -270,8 +279,8 @@ export function AuditPage({ embedded = false }: { embedded?: boolean } = {}) {
 
                   <section className="audit-rules">
                     <h3>人工规则</h3>
-                    <p>{manualRules ? `${manualRules.rules.length} 条 · ${manualRules.status}` : '未加载'}</p>
-                    {manualRules?.rules.map(rule => (
+                    <p>{manualRules ? `${manualRules.rules?.length ?? 0} 条 · ${manualRules.status || '—'}` : '未加载'}</p>
+                    {manualRules?.rules?.map(rule => (
                       <div className="audit-rule" key={String(rule.rule_id)}>
                         <strong>{String(rule.rule_id || 'rule')}</strong>
                         <span>{String(rule.rule_type || '')}</span>

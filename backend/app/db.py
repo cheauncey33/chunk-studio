@@ -153,16 +153,19 @@ CREATE TABLE IF NOT EXISTS document_parses (
 CREATE INDEX IF NOT EXISTS idx_document_parses_file ON document_parses(file_id, created_at);
 
 CREATE TABLE IF NOT EXISTS knowledge_bases (
-    id                TEXT PRIMARY KEY,
-    name              TEXT NOT NULL UNIQUE,
-    description       TEXT NOT NULL DEFAULT '',
-    status            TEXT NOT NULL DEFAULT 'active'
-                      CHECK (status IN ('active','archived')),
-    is_default        INTEGER NOT NULL DEFAULT 0,
-    parser_config     TEXT NOT NULL DEFAULT '{}',
-    retrieval_config  TEXT NOT NULL DEFAULT '{}',
-    created_at        TEXT NOT NULL,
-    updated_at        TEXT NOT NULL
+    id                       TEXT PRIMARY KEY,
+    name                     TEXT NOT NULL UNIQUE,
+    description              TEXT NOT NULL DEFAULT '',
+    status                   TEXT NOT NULL DEFAULT 'active'
+                             CHECK (status IN ('active','archived')),
+    is_default               INTEGER NOT NULL DEFAULT 0,
+    parser_config            TEXT NOT NULL DEFAULT '{}',
+    retrieval_config         TEXT NOT NULL DEFAULT '{}',
+    manual_rules             TEXT NOT NULL DEFAULT '{}',
+    few_shot_rules           TEXT NOT NULL DEFAULT '{}',
+    default_naming_file_id   TEXT,
+    created_at               TEXT NOT NULL,
+    updated_at               TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS knowledge_base_files (
@@ -235,6 +238,7 @@ def init_db() -> None:
     _migrate_chunk_layer_columns()
     _migrate_chunk_status_values()
     _migrate_field_config()
+    _migrate_knowledge_base_corpus_rules()
     _backfill_chunk_layers()
     _backfill_auto_metadata()
     _seed_knowledge_base_and_assistant()
@@ -255,11 +259,16 @@ def _seed_knowledge_base_and_assistant() -> None:
     kb_id = "kb_uncategorized"
     assistant_id = "assistant_oil_transformer_audit"
     version_id = "assistant_oil_transformer_audit_v1"
+    rules_path = config.PROJECT_ROOT / "evaluation" / "manual_knowledge_rules_v1.json"
+    seed_manual_rules = (
+        json.loads(rules_path.read_text(encoding="utf-8")) if rules_path.exists() else {}
+    )
     _conn.execute(
         """INSERT OR IGNORE INTO knowledge_bases
            (id, name, description, status, is_default, parser_config,
-            retrieval_config, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
+            retrieval_config, manual_rules, few_shot_rules,
+            default_naming_file_id, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             kb_id,
             "未分类知识库",
@@ -277,10 +286,50 @@ def _seed_knowledge_base_and_assistant() -> None:
                 },
                 ensure_ascii=False,
             ),
+            json.dumps(seed_manual_rules, ensure_ascii=False),
+            "{}",
+            None,
             now,
             now,
         ),
     )
+    # Ensure default parser_config has auto-chunk defaults when still empty.
+    from . import chunk_pipeline
+
+    kb_row = _conn.execute(
+        "SELECT parser_config FROM knowledge_bases WHERE id=?",
+        (kb_id,),
+    ).fetchone()
+    try:
+        existing_parser = json.loads((kb_row["parser_config"] if kb_row else None) or "{}")
+    except (json.JSONDecodeError, TypeError):
+        existing_parser = {}
+    if not existing_parser:
+        _conn.execute(
+            "UPDATE knowledge_bases SET parser_config=?, updated_at=? WHERE id=?",
+            (
+                json.dumps(chunk_pipeline.DEFAULT_PARSER_CONFIG, ensure_ascii=False),
+                now,
+                kb_id,
+            ),
+        )
+    # Backfill corpus rules onto the default KB when empty (do not clobber edits).
+    row = _conn.execute(
+        "SELECT manual_rules FROM knowledge_bases WHERE id=?",
+        (kb_id,),
+    ).fetchone()
+    existing_rules = {}
+    try:
+        existing_rules = json.loads((row["manual_rules"] if row else None) or "{}")
+    except (json.JSONDecodeError, TypeError):
+        existing_rules = {}
+    if seed_manual_rules and not (existing_rules.get("rules") or []):
+        _conn.execute(
+            """UPDATE knowledge_bases
+               SET manual_rules=?, updated_at=?
+               WHERE id=?""",
+            (json.dumps(seed_manual_rules, ensure_ascii=False), now, kb_id),
+        )
     _conn.execute(
         """INSERT OR IGNORE INTO knowledge_base_files
            (knowledge_base_id, file_id, role, enabled, created_at)
@@ -320,8 +369,7 @@ def _seed_knowledge_base_and_assistant() -> None:
             "path": str(path.relative_to(config.PROJECT_ROOT)).replace("\\", "/"),
             "content": path.read_text(encoding="utf-8") if path.exists() else "",
         }
-    rules_path = config.PROJECT_ROOT / "evaluation" / "manual_knowledge_rules_v1.json"
-    rules = json.loads(rules_path.read_text(encoding="utf-8")) if rules_path.exists() else {}
+    rules = seed_manual_rules
     _conn.execute(
         """INSERT OR IGNORE INTO assistant_versions
            (id, assistant_id, version, status, model_config, node_prompts,
@@ -380,6 +428,25 @@ def _migrate_files_metadata() -> None:
     if "metadata" not in cols:
         _conn.execute("ALTER TABLE files ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
 
+
+def _migrate_knowledge_base_corpus_rules() -> None:
+    """Add KB-scoped naming / manual / few-shot rule columns."""
+    cols = {
+        row["name"]
+        for row in _conn.execute("PRAGMA table_info(knowledge_bases)").fetchall()
+    }
+    if "manual_rules" not in cols:
+        _conn.execute(
+            "ALTER TABLE knowledge_bases ADD COLUMN manual_rules TEXT NOT NULL DEFAULT '{}'"
+        )
+    if "few_shot_rules" not in cols:
+        _conn.execute(
+            "ALTER TABLE knowledge_bases ADD COLUMN few_shot_rules TEXT NOT NULL DEFAULT '{}'"
+        )
+    if "default_naming_file_id" not in cols:
+        _conn.execute(
+            "ALTER TABLE knowledge_bases ADD COLUMN default_naming_file_id TEXT"
+        )
 
 def _migrate_chunk_layer_columns() -> None:
     """Add JSON layer columns to existing chunk tables."""
@@ -665,6 +732,134 @@ def assistant_scoped_file_ids(assistant_id: str) -> list[str]:
         (assistant_id,),
     ).fetchall()
     return [row["file_id"] for row in rows]
+
+
+def assistant_bound_knowledge_bases(assistant_id: str) -> list[dict[str, Any]]:
+    """Enabled bound KBs ordered by priority ascending (higher priority last / wins)."""
+    rows = get_conn().execute(
+        """SELECT kb.*, akb.priority AS bind_priority
+           FROM assistant_knowledge_bases akb
+           JOIN knowledge_bases kb ON kb.id=akb.knowledge_base_id
+           WHERE akb.assistant_id=? AND akb.enabled=1 AND kb.status='active'
+           ORDER BY akb.priority ASC, kb.name ASC""",
+        (assistant_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _loads_json(value: Any, fallback: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value or "")
+    except (json.JSONDecodeError, TypeError):
+        return fallback
+
+
+def merge_manual_rules(
+    kb_rows: list[dict[str, Any]],
+    *,
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Merge KB manual rules; later (higher-priority) KBs overwrite same rule_id."""
+    merged: dict[str, dict[str, Any]] = {}
+    meta: dict[str, Any] = {
+        "version": 1,
+        "scope": "knowledge_base_manual_rules",
+        "status": "merged_from_knowledge_bases",
+    }
+    for row in kb_rows:
+        payload = _loads_json(row.get("manual_rules"), {})
+        if not isinstance(payload, dict):
+            continue
+        for key in ("version", "status"):
+            if payload.get(key) is not None:
+                meta[key] = payload[key]
+        if payload.get("scope"):
+            meta["scope"] = payload["scope"]
+        for rule in payload.get("rules") or []:
+            if not isinstance(rule, dict):
+                continue
+            rule_id = str(rule.get("rule_id") or "").strip()
+            if rule_id:
+                merged[rule_id] = rule
+    if merged:
+        return {**meta, "scope": "knowledge_base_manual_rules", "rules": list(merged.values())}
+    fallback_payload = fallback if isinstance(fallback, dict) else {}
+    if fallback_payload.get("rules"):
+        return fallback_payload
+    return {**meta, "rules": []}
+
+
+def merge_few_shot_rules(kb_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge KB few-shot packs; later KBs overwrite same item id."""
+    merged: dict[str, dict[str, Any]] = {}
+    version = 1
+    for row in kb_rows:
+        payload = _loads_json(row.get("few_shot_rules"), {})
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("version") is not None:
+            version = payload["version"]
+        for item in payload.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or "").strip()
+            if item_id:
+                merged[item_id] = item
+    return {"version": version, "items": list(merged.values())}
+
+
+def resolve_assistant_manual_rules(
+    assistant_id: str,
+    *,
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return merge_manual_rules(
+        assistant_bound_knowledge_bases(assistant_id),
+        fallback=fallback,
+    )
+
+
+def resolve_assistant_few_shot_rules(assistant_id: str) -> dict[str, Any]:
+    return merge_few_shot_rules(assistant_bound_knowledge_bases(assistant_id))
+
+
+def assistant_default_naming_file_id(assistant_id: str) -> str | None:
+    """Pick naming file from the highest-priority bound KB that has one set."""
+    rows = get_conn().execute(
+        """SELECT kb.default_naming_file_id
+           FROM assistant_knowledge_bases akb
+           JOIN knowledge_bases kb ON kb.id=akb.knowledge_base_id
+           WHERE akb.assistant_id=? AND akb.enabled=1 AND kb.status='active'
+             AND kb.default_naming_file_id IS NOT NULL
+             AND TRIM(kb.default_naming_file_id) != ''
+           ORDER BY akb.priority DESC, kb.name ASC
+           LIMIT 1""",
+        (assistant_id,),
+    ).fetchall()
+    if not rows:
+        return None
+    return str(rows[0]["default_naming_file_id"])
+
+
+def assistant_evidence_file_ids(
+    assistant_id: str,
+    *,
+    excluded_file_ids: set[str] | None = None,
+) -> list[str]:
+    """Bound-KB files that may be used as retrieval evidence (after exclusions)."""
+    excluded = excluded_file_ids or set()
+    file_ids = [
+        file_id
+        for file_id in assistant_scoped_file_ids(assistant_id)
+        if file_id not in excluded
+    ]
+    if not file_ids:
+        raise ValueError(
+            "assistant has no evidence files after excluding runtime inputs"
+        )
+    return file_ids
 
 
 # --- Settings helpers (key/value table) ---

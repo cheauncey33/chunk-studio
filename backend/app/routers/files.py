@@ -146,13 +146,83 @@ def list_file_parses(file_id: str):
     return out
 
 
+class ParseEnqueueBody(BaseModel):
+    delete_chunks: bool = False
+    force: bool = True
+
+
 @router.post("/{file_id}/parse")
-def enqueue_file_parse(file_id: str):
+def enqueue_file_parse(file_id: str, body: ParseEnqueueBody = ParseEnqueueBody()):
+    """Enqueue MinerU parse. Optionally wipe existing chunks first (re-parse)."""
     _get_file(file_id)
     try:
-        return jobs.enqueue_parse_file(file_id)
+        return jobs.enqueue_parse_file(
+            file_id,
+            force=body.force,
+            delete_chunks=body.delete_chunks,
+        )
     except KeyError:
         raise HTTPException(404, "file not found")
+
+
+class AutoChunkBody(BaseModel):
+    chunk_config: dict[str, Any] | None = None
+    skip_existing: bool = False
+    persist_override: bool = False
+
+
+@router.post("/{file_id}/auto-chunk")
+async def auto_chunk_file(file_id: str, body: AutoChunkBody | None = None):
+    """Generate chunks from the latest completed parse using KB/file rules."""
+    from .. import chunk_pipeline
+
+    _get_file(file_id)
+    body = body or AutoChunkBody()
+    parse = db.get_conn().execute(
+        """SELECT id FROM document_parses
+           WHERE file_id=? AND status='done' AND raw_zip_path IS NOT NULL
+             AND TRIM(raw_zip_path) != ''
+           ORDER BY created_at DESC LIMIT 1""",
+        (file_id,),
+    ).fetchone()
+    if not parse:
+        raise HTTPException(400, "file has no completed parse with layout zip")
+
+    if body.persist_override and body.chunk_config is not None:
+        row = db.get_conn().execute(
+            "SELECT metadata FROM files WHERE id=?",
+            (file_id,),
+        ).fetchone()
+        try:
+            metadata = json.loads((row["metadata"] if row else None) or "{}")
+        except (json.JSONDecodeError, TypeError):
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata["chunk_config"] = body.chunk_config
+        with db.transaction() as conn:
+            conn.execute(
+                "UPDATE files SET metadata=? WHERE id=?",
+                (json.dumps(metadata, ensure_ascii=False), file_id),
+            )
+
+    config = (
+        chunk_pipeline.normalize_parser_config(body.chunk_config)
+        if body.chunk_config is not None
+        else chunk_pipeline.resolve_file_chunk_config(file_id)
+    )
+    try:
+        summary = await chunk_pipeline.run_auto_chunk_pipeline(
+            file_id,
+            parse["id"],
+            chunk_config=config,
+            skip_existing=body.skip_existing,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"auto-chunk failed: {exc}") from exc
+    return summary
 
 
 @router.get("/{file_id}/pages/{page_no}")

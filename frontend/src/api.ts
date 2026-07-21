@@ -178,6 +178,25 @@ export interface VectorSearchResponse {
   hits: VectorSearchHit[]
 }
 
+export interface ManualKnowledgeRules {
+  version?: number
+  scope?: string
+  status?: string
+  rules?: Array<Record<string, unknown> & { rule_id?: string; rule_text?: string }>
+}
+
+export interface FewShotRules {
+  version?: number
+  items?: Array<{
+    id: string
+    node?: string
+    title?: string
+    input?: string
+    output?: string
+    note?: string
+  }>
+}
+
 export interface KnowledgeBase {
   id: string
   name: string
@@ -186,6 +205,9 @@ export interface KnowledgeBase {
   is_default: boolean
   parser_config: Record<string, unknown>
   retrieval_config: Record<string, unknown>
+  manual_rules: ManualKnowledgeRules
+  few_shot_rules: FewShotRules
+  default_naming_file_id: string | null
   file_count: number
   chunk_count: number
   created_at: string
@@ -264,13 +286,6 @@ export interface AuditReportDetail {
   payload: Record<string, unknown>
 }
 
-export interface ManualKnowledgeRules {
-  version: number
-  scope: string
-  status: string
-  rules: Array<Record<string, unknown>>
-}
-
 export interface AuditWorkflowPrompt {
   path: string
   content: string
@@ -344,6 +359,37 @@ export interface RetrievalShadowRun {
   }
 }
 
+export type SettingSource = 'db' | 'env' | 'default' | 'unset'
+
+export interface SettingsPayload {
+  settings?: Record<string, string>
+  sources?: Record<string, string>
+  // legacy flat shape
+  [key: string]: unknown
+}
+
+export interface NormalizedSettings {
+  settings: Record<string, string>
+  sources: Record<string, SettingSource>
+}
+
+function normalizeSettingsPayload(data: SettingsPayload): NormalizedSettings {
+  if (data && typeof data === 'object' && data.settings && typeof data.settings === 'object') {
+    const sources: Record<string, SettingSource> = {}
+    for (const [key, value] of Object.entries(data.sources || {})) {
+      if (value === 'db' || value === 'env' || value === 'default' || value === 'unset') {
+        sources[key] = value
+      }
+    }
+    return { settings: data.settings, sources }
+  }
+  const flat: Record<string, string> = {}
+  for (const [key, value] of Object.entries(data || {})) {
+    if (typeof value === 'string') flat[key] = value
+  }
+  return { settings: flat, sources: {} }
+}
+
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const t = await res.text().catch(() => res.statusText)
@@ -363,19 +409,44 @@ export const api = {
     }).then(j<KnowledgeBase>),
   updateKnowledgeBase: (
     id: string,
-    body: Partial<Pick<KnowledgeBase, 'name' | 'description' | 'retrieval_config'>>,
+    body: Partial<
+      Pick<
+        KnowledgeBase,
+        | 'name'
+        | 'description'
+        | 'retrieval_config'
+        | 'parser_config'
+        | 'manual_rules'
+        | 'few_shot_rules'
+        | 'default_naming_file_id'
+      >
+    > & { clear_default_naming_file?: boolean },
   ) =>
     fetch(`${API}/knowledge-bases/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }).then(j<KnowledgeBase>),
+  deleteKnowledgeBase: (id: string) =>
+    fetch(`${API}/knowledge-bases/${id}`, { method: 'DELETE' }).then(
+      j<{ ok: boolean; deleted_file_count: number; deleted_chunk_count: number }>,
+    ),
   listKnowledgeBaseFiles: (id: string) =>
     fetch(`${API}/knowledge-bases/${id}/files`).then(j<KnowledgeBaseFile[]>),
   addFileToKnowledgeBase: (knowledgeBaseId: string, fileId: string) =>
     fetch(`${API}/knowledge-bases/${knowledgeBaseId}/files/${fileId}`, {
       method: 'PUT',
     }).then(j<{ ok: boolean }>),
+  updateKnowledgeBaseFile: (
+    knowledgeBaseId: string,
+    fileId: string,
+    body: Partial<{ enabled: boolean; role: 'source' | 'reference' }>,
+  ) =>
+    fetch(`${API}/knowledge-bases/${knowledgeBaseId}/files/${fileId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<KnowledgeBaseFile>),
   listKnowledgeBaseChunks: (id: string, limit = 100, offset = 0) =>
     fetch(`${API}/knowledge-bases/${id}/chunks?limit=${limit}&offset=${offset}`)
       .then(j<KnowledgeBaseChunk[]>),
@@ -388,6 +459,7 @@ export const api = {
       route_top_k?: number
       candidates_per_type?: number
       rrf_k?: number
+      file_ids?: string[]
     },
   ) =>
     fetch(`${API}/knowledge-bases/${id}/retrieval-test`, {
@@ -397,6 +469,7 @@ export const api = {
     }).then(j<VectorSearchResponse & {
       knowledge_base_id: string
       scoped_file_count: number
+      scoped_file_ids?: string[]
       retrieval_params?: Record<string, number>
     }>),
 
@@ -456,8 +529,34 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }).then(j<CSFile>),
-  parseFile: (id: string) =>
-    fetch(`${API}/files/${id}/parse`, { method: 'POST' }).then(j<Job>),
+  parseFile: (id: string, opts: { delete_chunks?: boolean; force?: boolean } = {}) =>
+    fetch(`${API}/files/${id}/parse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        delete_chunks: Boolean(opts.delete_chunks),
+        force: opts.force !== false,
+      }),
+    }).then(j<Job>),
+  autoChunkFile: (
+    id: string,
+    body: {
+      chunk_config?: Record<string, unknown>
+      skip_existing?: boolean
+      persist_override?: boolean
+    } = {},
+  ) =>
+    fetch(`${API}/files/${id}/auto-chunk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<{
+      total: number
+      sections: number
+      tables: number
+      images: number
+      config: Record<string, unknown>
+    }>),
   listFileParses: (id: string) =>
     fetch(`${API}/files/${id}/parses`).then(j<DocumentParse[]>),
 
@@ -568,13 +667,14 @@ export const api = {
       body: JSON.stringify({ query, top_k: topK }),
     }).then(j<VectorSearchResponse>),
 
-  getSettings: () => fetch(`${API}/settings`).then(j<Record<string, string>>),
+  getSettings: () =>
+    fetch(`${API}/settings`).then(j<SettingsPayload>).then(normalizeSettingsPayload),
   updateSettings: (settings: Record<string, string>) =>
     fetch(`${API}/settings`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ settings }),
-    }).then(j<Record<string, string>>),
+    }).then(j<SettingsPayload>).then(normalizeSettingsPayload),
 
   listAuditReports: () => fetch(`${API}/audit/reports`).then(j<AuditReportListResponse>),
   getAuditReport: (name: string) =>
