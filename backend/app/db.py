@@ -151,6 +151,71 @@ CREATE TABLE IF NOT EXISTS document_parses (
     FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_document_parses_file ON document_parses(file_id, created_at);
+
+CREATE TABLE IF NOT EXISTS knowledge_bases (
+    id                TEXT PRIMARY KEY,
+    name              TEXT NOT NULL UNIQUE,
+    description       TEXT NOT NULL DEFAULT '',
+    status            TEXT NOT NULL DEFAULT 'active'
+                      CHECK (status IN ('active','archived')),
+    is_default        INTEGER NOT NULL DEFAULT 0,
+    parser_config     TEXT NOT NULL DEFAULT '{}',
+    retrieval_config  TEXT NOT NULL DEFAULT '{}',
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_base_files (
+    knowledge_base_id TEXT NOT NULL,
+    file_id           TEXT NOT NULL,
+    role              TEXT NOT NULL DEFAULT 'source'
+                      CHECK (role IN ('source','reference')),
+    enabled           INTEGER NOT NULL DEFAULT 1,
+    created_at        TEXT NOT NULL,
+    PRIMARY KEY (knowledge_base_id, file_id),
+    FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_base_files_file
+    ON knowledge_base_files(file_id, knowledge_base_id);
+
+CREATE TABLE IF NOT EXISTS audit_assistants (
+    id                TEXT PRIMARY KEY,
+    name              TEXT NOT NULL UNIQUE,
+    description       TEXT NOT NULL DEFAULT '',
+    status            TEXT NOT NULL DEFAULT 'active'
+                      CHECK (status IN ('draft','active','archived')),
+    active_version_id TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    FOREIGN KEY (active_version_id) REFERENCES assistant_versions(id)
+);
+
+CREATE TABLE IF NOT EXISTS assistant_versions (
+    id                TEXT PRIMARY KEY,
+    assistant_id      TEXT NOT NULL,
+    version           INTEGER NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'draft'
+                      CHECK (status IN ('draft','active','retired')),
+    model_config      TEXT NOT NULL DEFAULT '{}',
+    node_prompts      TEXT NOT NULL DEFAULT '{}',
+    rules             TEXT NOT NULL DEFAULT '{}',
+    retrieval_config  TEXT NOT NULL DEFAULT '{}',
+    created_at        TEXT NOT NULL,
+    activated_at      TEXT,
+    UNIQUE (assistant_id, version),
+    FOREIGN KEY (assistant_id) REFERENCES audit_assistants(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS assistant_knowledge_bases (
+    assistant_id      TEXT NOT NULL,
+    knowledge_base_id TEXT NOT NULL,
+    priority          INTEGER NOT NULL DEFAULT 0,
+    enabled           INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (assistant_id, knowledge_base_id),
+    FOREIGN KEY (assistant_id) REFERENCES audit_assistants(id) ON DELETE CASCADE,
+    FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases(id) ON DELETE CASCADE
+);
 """
 
 _db_lock = threading.Lock()
@@ -172,7 +237,138 @@ def init_db() -> None:
     _migrate_field_config()
     _backfill_chunk_layers()
     _backfill_auto_metadata()
+    _seed_knowledge_base_and_assistant()
     _conn.commit()
+
+
+def _seed_knowledge_base_and_assistant() -> None:
+    """Create the non-destructive first migration boundary.
+
+    Existing files are attached to the default knowledge base only when they
+    have no knowledge-base relation yet. Prompt files remain versioned source
+    assets, while their content is snapshotted into assistant version 1 so
+    future edits create a new, auditable version.
+    """
+    import time
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    kb_id = "kb_uncategorized"
+    assistant_id = "assistant_oil_transformer_audit"
+    version_id = "assistant_oil_transformer_audit_v1"
+    _conn.execute(
+        """INSERT OR IGNORE INTO knowledge_bases
+           (id, name, description, status, is_default, parser_config,
+            retrieval_config, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (
+            kb_id,
+            "未分类知识库",
+            "现有文件的默认归属",
+            "active",
+            1,
+            "{}",
+            json.dumps(
+                {
+                    "top_k": 10,
+                    "similarity_threshold": 0.2,
+                    "keyword_weight": 0.3,
+                    "vector_weight": 0.7,
+                    "content_type": "all",
+                },
+                ensure_ascii=False,
+            ),
+            now,
+            now,
+        ),
+    )
+    _conn.execute(
+        """INSERT OR IGNORE INTO knowledge_base_files
+           (knowledge_base_id, file_id, role, enabled, created_at)
+           SELECT ?, f.id, 'source', 1, ?
+           FROM files f
+           WHERE NOT EXISTS (
+             SELECT 1 FROM knowledge_base_files kbf WHERE kbf.file_id=f.id
+           )""",
+        (kb_id, now),
+    )
+    _conn.execute(
+        """INSERT OR IGNORE INTO audit_assistants
+           (id, name, description, status, active_version_id, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?)""",
+        (
+            assistant_id,
+            "油浸式变压器审查",
+            "检测报告参数、项目、型号规则、证据检索与标准值审查",
+            "active",
+            None,
+            now,
+            now,
+        ),
+    )
+    prompt_paths = {
+        "report_parameters": "report_parameter_extraction_v1.md",
+        "test_items": "report_test_item_extraction_v1.md",
+        "model_decode": "model_naming_decode_v1.md",
+        "query_planner": "retrieval_query_planner_v1.md",
+        "audit_judge": "standard_value_audit_judge_v1.md",
+    }
+    prompt_dir = config.PROJECT_ROOT / "evaluation" / "prompts"
+    node_prompts = {}
+    for key, filename in prompt_paths.items():
+        path = prompt_dir / filename
+        node_prompts[key] = {
+            "path": str(path.relative_to(config.PROJECT_ROOT)).replace("\\", "/"),
+            "content": path.read_text(encoding="utf-8") if path.exists() else "",
+        }
+    rules_path = config.PROJECT_ROOT / "evaluation" / "manual_knowledge_rules_v1.json"
+    rules = json.loads(rules_path.read_text(encoding="utf-8")) if rules_path.exists() else {}
+    _conn.execute(
+        """INSERT OR IGNORE INTO assistant_versions
+           (id, assistant_id, version, status, model_config, node_prompts,
+            rules, retrieval_config, created_at, activated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (
+            version_id,
+            assistant_id,
+            1,
+            "active",
+            json.dumps(
+                {
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-flash",
+                    "temperature": 0,
+                    "response_format": "json_object",
+                    "thinking": "disabled",
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps(node_prompts, ensure_ascii=False),
+            json.dumps(rules, ensure_ascii=False),
+            json.dumps(
+                {
+                    "top_k": 10,
+                    "route_top_k": 30,
+                    "candidate_count_per_type": 20,
+                    "similarity_threshold": 0.2,
+                    "keyword_weight": 0.3,
+                    "vector_weight": 0.7,
+                },
+                ensure_ascii=False,
+            ),
+            now,
+            now,
+        ),
+    )
+    _conn.execute(
+        "UPDATE audit_assistants SET active_version_id=? WHERE id=? AND active_version_id IS NULL",
+        (version_id, assistant_id),
+    )
+    _conn.execute(
+        """INSERT OR IGNORE INTO assistant_knowledge_bases
+           (assistant_id, knowledge_base_id, priority, enabled)
+           VALUES (?,?,0,1)""",
+        (assistant_id, kb_id),
+    )
 
 
 def _migrate_files_metadata() -> None:
@@ -454,6 +650,21 @@ def transaction() -> Iterator[sqlite3.Connection]:
         except Exception:
             conn.rollback()
             raise
+
+
+def assistant_scoped_file_ids(assistant_id: str) -> list[str]:
+    rows = get_conn().execute(
+        """SELECT DISTINCT kbf.file_id
+           FROM assistant_knowledge_bases akb
+           JOIN knowledge_bases kb ON kb.id=akb.knowledge_base_id
+           JOIN knowledge_base_files kbf
+             ON kbf.knowledge_base_id=akb.knowledge_base_id
+           WHERE akb.assistant_id=? AND akb.enabled=1
+             AND kb.status='active' AND kbf.enabled=1
+           ORDER BY kbf.file_id""",
+        (assistant_id,),
+    ).fetchall()
+    return [row["file_id"] for row in rows]
 
 
 # --- Settings helpers (key/value table) ---

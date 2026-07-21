@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from 'react-router-dom'
 import { Toaster } from 'sonner'
+import { HelpModeProvider } from '@/components/help-mode'
 import { ThemeProvider } from '@/components/theme-provider'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { router } from '@/routes'
@@ -20,12 +21,14 @@ const queryClient = new QueryClient({
 export default function App() {
   return (
     <ThemeProvider defaultTheme="light">
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider delayDuration={200}>
-          <RouterProvider router={router} />
-          <Toaster position="top-right" richColors closeButton />
-        </TooltipProvider>
-      </QueryClientProvider>
+      <HelpModeProvider>
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider delayDuration={120}>
+            <RouterProvider router={router} />
+            <Toaster position="top-right" richColors closeButton />
+          </TooltipProvider>
+        </QueryClientProvider>
+      </HelpModeProvider>
     </ThemeProvider>
   )
 }

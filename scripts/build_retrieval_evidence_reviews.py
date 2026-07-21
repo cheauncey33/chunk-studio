@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from http import HTTPStatus
 import json
-import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -14,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 sys.path.insert(0, str(BACKEND))
 
-from app import db, embeddings  # noqa: E402
+from app import db, embeddings, llm  # noqa: E402
 from app.evidence_locator import chunk_text_sha256, resolve_evidence_locator  # noqa: E402
 
 
@@ -26,7 +24,7 @@ DEFAULT_QUERIES = REPORT_DIR / "retrieval_queries_40_v1.json"
 DEFAULT_CANDIDATES = REPORT_DIR / "retrieval_candidates_40_v1.json"
 DEFAULT_LABELS = REPORT_DIR / "retrieval_labels_40_v1.json"
 DEFAULT_OUTPUT = ROOT / "evaluation" / "retrieval_evidence_candidates_v1.json"
-MODEL = "qwen3.6-27b"
+MODEL = "deepseek-v4-flash"
 CONTENT_TYPES = ("table", "section")
 ROUTE_TOP_K = 20
 FINAL_PER_TYPE = 20
@@ -44,54 +42,7 @@ def _write_json(path: Path, value: Any) -> None:
 
 
 def _parse_json_object(content: Any) -> dict[str, Any]:
-    if isinstance(content, list):
-        content = "".join(
-            str(item.get("text") or "") if isinstance(item, dict) else str(item)
-            for item in content
-        )
-    text = str(content or "").strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    parsed = json.loads(text, strict=False)
-    if not isinstance(parsed, dict):
-        raise ValueError("model response must be an object")
-    return parsed
-
-
-def _call_openai_compatible_model(
-    system_prompt: str,
-    payload: dict[str, Any],
-    *,
-    api_key: str,
-    base_url: str,
-    model: str,
-) -> dict[str, Any]:
-    import httpx
-
-    response = httpx.post(
-        f"{base_url.rstrip('/')}/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-            ],
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-            "stream": False,
-        },
-        timeout=180,
-    )
-    if response.status_code != HTTPStatus.OK:
-        raise RuntimeError(
-            f"model call failed: status={response.status_code} body={response.text[:500]}"
-        )
-    data = response.json()
-    return _parse_json_object(data["choices"][0]["message"]["content"])
+    return llm.parse_json_object(content)
 
 
 def _call_model(
@@ -99,70 +50,15 @@ def _call_model(
     payload: dict[str, Any],
     *,
     model: str = MODEL,
-    provider: str = "dashscope",
-    base_url: str | None = None,
-    api_key: str | None = None,
 ) -> dict[str, Any]:
-    if provider == "openai_compatible":
-        resolved_api_key = (
-            api_key
-            or os.environ.get("DEEPSEEK_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-            or db.get_setting("llm.api_key")
-        )
-        if not resolved_api_key:
-            raise RuntimeError("OpenAI-compatible API key is not configured")
-        return _call_openai_compatible_model(
-            system_prompt,
-            payload,
-            api_key=resolved_api_key,
-            base_url=base_url or os.environ.get("DEEPSEEK_BASE_URL") or "https://api.deepseek.com",
-            model=model,
-        )
-
-    api_key = os.environ.get("DASHSCOPE_API_KEY") or db.get_setting("llm.api_key")
-    if not api_key:
-        raise RuntimeError("DashScope API key is not configured")
-
-    last_error: Exception | None = None
-    for _ in range(2):
-        if model == "qwen3.6-27b":
-            from dashscope import MultiModalConversation
-
-            response = MultiModalConversation.call(
-                api_key=api_key,
-                model=model,
-                messages=[
-                    {"role": "system", "content": [{"text": system_prompt}]},
-                    {"role": "user", "content": [{"text": json.dumps(payload, ensure_ascii=False)}]},
-                ],
-                result_format="message",
-                enable_thinking=False,
-                temperature=0,
-            )
-        else:
-            from dashscope import Generation
-
-            response = Generation.call(
-                api_key=api_key,
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                ],
-                result_format="message",
-                response_format={"type": "json_object"},
-                temperature=0,
-            )
-        if response.status_code != HTTPStatus.OK:
-            raise RuntimeError(
-                f"model call failed: status={response.status_code} code={response.code} message={response.message}"
-            )
-        try:
-            return _parse_json_object(response.output["choices"][0]["message"]["content"])
-        except (json.JSONDecodeError, ValueError) as exc:
-            last_error = exc
-    raise RuntimeError("model returned invalid JSON twice") from last_error
+    return llm.chat_json(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+        model=model,
+        temperature=0,
+    )
 
 
 def _production_query(case: dict[str, Any]) -> str:
@@ -202,10 +98,24 @@ def plan_queries(cases: list[dict[str, Any]], prompt: str, path: Path) -> dict[s
     return output
 
 
-def _merge_hits(queries: dict[str, str], content_type: str) -> list[dict[str, Any]]:
+def _merge_hits(
+    queries: dict[str, str],
+    content_type: str,
+    *,
+    route_top_k: int = ROUTE_TOP_K,
+    final_per_type: int = FINAL_PER_TYPE,
+    rrf_k: int = RRF_K,
+    file_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
     for route, query in queries.items():
-        result = embeddings.vector_search(query, top_k=ROUTE_TOP_K, content_type=content_type)
+        search_kwargs: dict[str, Any] = {
+            "top_k": route_top_k,
+            "content_type": content_type,
+        }
+        if file_ids is not None:
+            search_kwargs["file_ids"] = file_ids
+        result = embeddings.vector_search(query, **search_kwargs)
         for rank, hit in enumerate(result["hits"], start=1):
             candidate = merged.setdefault(hit["chunk_id"], {
                 **hit,
@@ -216,12 +126,12 @@ def _merge_hits(queries: dict[str, str], content_type: str) -> list[dict[str, An
             })
             candidate["route_ranks"][route] = rank
             candidate["route_scores"][route] = hit["score"]
-            candidate["rrf_score"] += 1 / (RRF_K + rank)
+            candidate["rrf_score"] += 1 / (rrf_k + rank)
     ranked = sorted(
         merged.values(),
         key=lambda item: (item["rrf_score"], max(item["route_scores"].values())),
         reverse=True,
-    )[:FINAL_PER_TYPE]
+    )[:final_per_type]
     for rank, candidate in enumerate(ranked, start=1):
         candidate["type_rank"] = rank
     return ranked

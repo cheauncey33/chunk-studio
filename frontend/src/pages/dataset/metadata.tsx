@@ -1,6 +1,8 @@
 import { useNavigate, useParams } from 'react-router-dom'
 import { MetadataSuggestionsPage } from '@/MetadataSuggestionsPage'
+import { Explain } from '@/components/explain'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { helpText } from '@/lib/help-text'
 
 export default function DatasetMetadataPage() {
   const { id } = useParams()
@@ -9,9 +11,11 @@ export default function DatasetMetadataPage() {
   return (
     <Card className="min-h-full border-0 bg-transparent shadow-none">
       <CardHeader className="px-0 pt-2">
-        <CardTitle>元数据审核</CardTitle>
+        <Explain text={helpText.kbNav.metadata} title="AI 建议审核">
+          <CardTitle>AI 建议审核</CardTitle>
+        </Explain>
         <CardDescription>
-          审核 LLM 生成的切片元数据建议。知识库范围：{id}
+          AI 给内容片段写的关键词、问题等建议。点「采纳」后才会真正写进业务信息；点条目可跳到编辑器核对原文。
         </CardDescription>
       </CardHeader>
       <CardContent className="metadata-embed px-0">

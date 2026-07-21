@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
+  CircleHelp,
   MoreHorizontal,
   Save,
 } from 'lucide-react'
@@ -13,6 +14,8 @@ import { api, type Chunk, type CSFile } from '@/api'
 import { PageViewer } from '@/PageViewer'
 import { ChunkList, type ChunkKind } from '@/ChunkList'
 import { ChunkEditor } from '@/ChunkEditor'
+import { Explain, HelpModeBanner } from '@/components/explain'
+import { useHelpMode } from '@/components/help-mode'
 import { Button } from '@/components/ui/button'
 import {
   Breadcrumb,
@@ -31,6 +34,7 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { queryKeys, useFields, useKnowledgeBase } from '@/hooks/use-knowledge-request'
+import { helpText } from '@/lib/help-text'
 import { cn } from '@/lib/utils'
 
 export default function ChunkPage() {
@@ -38,6 +42,7 @@ export default function ChunkPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const client = useQueryClient()
+  const { enabled: helpEnabled, toggle: toggleHelp } = useHelpMode()
   const kbId = searchParams.get('kb') || ''
   const { data: kb } = useKnowledgeBase(kbId || undefined)
   const { data: fields = [] } = useFields()
@@ -206,10 +211,13 @@ export default function ChunkPage() {
 
   return (
     <div className="flex h-screen flex-col bg-bg-canvas text-text-primary">
+      <HelpModeBanner />
       <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border-button bg-bg-base px-4">
-        <Button variant="ghost" size="icon" onClick={() => navigate(backTo)} title="返回">
-          <ArrowLeft />
-        </Button>
+        <Explain text={helpText.chunkStudio.back} title="返回">
+          <Button variant="ghost" size="icon" onClick={() => navigate(backTo)} title="返回">
+            <ArrowLeft />
+          </Button>
+        </Explain>
         <Breadcrumb className="min-w-0 flex-1">
           <BreadcrumbList>
             <BreadcrumbItem>
@@ -230,7 +238,7 @@ export default function ChunkPage() {
             <BreadcrumbSeparator />
             <BreadcrumbItem>
               <BreadcrumbPage className="truncate max-w-[280px]">
-                {currentFile?.name || '切片工作台'}
+                {currentFile?.name || '内容工作台'}
               </BreadcrumbPage>
             </BreadcrumbItem>
           </BreadcrumbList>
@@ -238,47 +246,60 @@ export default function ChunkPage() {
 
         <div className="inline-flex rounded-md bg-bg-card p-1">
           {([
-            ['preview', '解析预览'],
-            ['list', '切片列表'],
-            ['edit', '编辑'],
-          ] as const).map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              className={cn(
-                'rounded px-3 py-1.5 text-sm transition',
-                view === key ? 'bg-bg-base text-text-primary shadow-sm' : 'text-text-secondary',
-              )}
-              onClick={() => setView(key)}
-            >
-              {label}
-            </button>
+            ['preview', '看原文', helpText.chunkStudio.viewPreview],
+            ['list', '看列表', helpText.chunkStudio.viewList],
+            ['edit', '编辑', helpText.chunkStudio.viewEdit],
+          ] as const).map(([key, label, help]) => (
+            <Explain key={key} text={help} title={label}>
+              <button
+                type="button"
+                className={cn(
+                  'rounded px-3 py-1.5 text-sm transition',
+                  view === key ? 'bg-bg-base text-text-primary shadow-sm' : 'text-text-secondary',
+                )}
+                onClick={() => setView(key)}
+              >
+                {label}
+              </button>
+            </Explain>
           ))}
         </div>
 
         <div className="flex items-center gap-2">
+          <Explain text={helpText.nav.helpMode} title="说明模式">
+            <Button
+              variant={helpEnabled ? 'default' : 'ghost'}
+              size="icon"
+              onClick={toggleHelp}
+              title="说明模式"
+            >
+              <CircleHelp />
+            </Button>
+          </Explain>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon"><MoreHorizontal /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => setAutoOcr(v => !v)}>
-                {autoOcr ? '关闭' : '开启'}新建后自动 OCR
+                {autoOcr ? '关闭' : '开启'}新建后自动识别文字
               </DropdownMenuItem>
               <DropdownMenuItem disabled={bulkQueuing} onClick={enqueuePendingOcr}>
-                {bulkQueuing ? '提交中…' : '解析待处理切片'}
+                {bulkQueuing ? '提交中…' : '识别待处理段落'}
               </DropdownMenuItem>
               {kbId && (
                 <DropdownMenuItem onClick={() => navigate(`/kb/${kbId}/metadata`)}>
-                  元数据审核
+                  AI 建议审核
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button size="sm" disabled={!selectedChunk} onClick={() => setView('edit')}>
-            <Save />
-            编辑选中
-          </Button>
+          <Explain text={helpText.chunkStudio.viewEdit} title="编辑选中">
+            <Button size="sm" disabled={!selectedChunk} onClick={() => setView('edit')}>
+              <Save />
+              编辑选中
+            </Button>
+          </Explain>
         </div>
       </header>
 
@@ -296,12 +317,14 @@ export default function ChunkPage() {
           <aside className="flex shrink-0 flex-col border-r border-border-button bg-bg-base p-4" style={{ width: leftW }}>
             <h2 className="truncate text-sm font-semibold" title={currentFile.name}>{currentFile.name}</h2>
             <p className="mt-1 text-xs text-text-secondary">
-              {currentFile.page_count} 页 · {chunks.length} 切片
+              {currentFile.page_count} 页 · {chunks.length} 段内容
             </p>
             <div className="mt-4 flex items-center gap-2">
-              <Button variant="outline" size="icon" onClick={goPrev} disabled={page <= 1}>
-                <ChevronLeft />
-              </Button>
+              <Explain text={helpText.chunkStudio.pageNav} title="翻页">
+                <Button variant="outline" size="icon" onClick={goPrev} disabled={page <= 1}>
+                  <ChevronLeft />
+                </Button>
+              </Explain>
               <div className="flex flex-1 items-center justify-center gap-1 text-sm">
                 <input
                   className="w-12 rounded border border-border-button bg-bg-input px-1 py-1 text-center"
@@ -318,19 +341,23 @@ export default function ChunkPage() {
                 <ChevronRight />
               </Button>
             </div>
-            <label className="mt-4 flex items-center gap-2 text-xs text-text-secondary">
-              <input type="checkbox" checked={autoOcr} onChange={e => setAutoOcr(e.target.checked)} />
-              新建切片后自动解析
-            </label>
-            <p className="mt-auto text-xs text-text-secondary">
-              拖拽框选建立切片；方向键翻页。
-            </p>
+            <Explain text={helpText.chunkStudio.autoOcr} title="新建后自动识别" className="mt-4">
+              <label className="flex items-center gap-2 text-xs text-text-secondary">
+                <input type="checkbox" checked={autoOcr} onChange={e => setAutoOcr(e.target.checked)} />
+                新建后自动识别文字
+              </label>
+            </Explain>
+            <Explain text={helpText.chunkStudio.drawHint} title="如何新建" className="mt-auto">
+              <p className="text-xs text-text-secondary">
+                在 PDF 上按住拖出方框即可新建；方向键可翻页。
+              </p>
+            </Explain>
           </aside>
 
           <div className="w-1 cursor-col-resize bg-transparent hover:bg-accent-primary/30" onMouseDown={startResize('left')} />
 
           <main className={cn('min-w-0 flex-1 bg-bg-canvas p-3', view === 'list' && 'hidden')}>
-            <div className="chunk-studio-viewer h-full overflow-hidden rounded-xl border border-border-button bg-bg-base">
+            <div className="legacy-surface chunk-studio-viewer h-full overflow-hidden rounded-xl border border-border-button bg-bg-base">
               <PageViewer
                 fileId={currentFile.id}
                 page={page}
@@ -360,8 +387,8 @@ export default function ChunkPage() {
             <Tabs defaultValue="list" className="flex min-h-0 flex-1 flex-col">
               <div className="border-b border-border-button px-3 pt-3">
                 <TabsList>
-                  <TabsTrigger value="list">切片列表</TabsTrigger>
-                  <TabsTrigger value="edit">切片编辑</TabsTrigger>
+                  <TabsTrigger value="list">内容列表</TabsTrigger>
+                  <TabsTrigger value="edit">编辑</TabsTrigger>
                 </TabsList>
               </div>
               <TabsContent value="list" className="mt-0 min-h-0 flex-1 overflow-hidden p-0">
@@ -384,7 +411,7 @@ export default function ChunkPage() {
                 </ScrollArea>
               </TabsContent>
               <TabsContent value="edit" className="mt-0 min-h-0 flex-1 overflow-auto p-3">
-                <div className="chunk-studio-editor">
+                <div className="chunk-studio-editor h-full min-h-0 p-3">
                   <ChunkEditor
                     chunk={selectedChunk}
                     fields={fields}
@@ -402,8 +429,8 @@ export default function ChunkPage() {
       {deleteChunkId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-sm rounded-xl border border-border-button bg-bg-base p-5 shadow-lg">
-            <h3 className="text-base font-semibold">删除切片？</h3>
-            <p className="mt-2 text-sm text-text-secondary">此操作不可撤销。</p>
+            <h3 className="text-base font-semibold">删除这段内容？</h3>
+            <p className="mt-2 text-sm text-text-secondary">删除后不能恢复，请确认。</p>
             <div className="mt-4 flex justify-end gap-2">
               <Button variant="outline" onClick={() => setDeleteChunkId(null)}>取消</Button>
               <Button variant="destructive" onClick={confirmDelete}>删除</Button>

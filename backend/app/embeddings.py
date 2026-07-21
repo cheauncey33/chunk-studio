@@ -154,6 +154,7 @@ def vector_search(
     *,
     top_k: int = 10,
     content_type: str | None = None,
+    file_ids: list[str] | None = None,
     model: str = DEFAULT_MODEL,
     dimension: int = DEFAULT_DIMENSION,
     query_embedder: Callable[..., list[float]] = embed_query_with_dashscope,
@@ -167,6 +168,7 @@ def vector_search(
         query_vector,
         top_k=top_k,
         content_type=content_type,
+        file_ids=file_ids,
         model=model,
         dimension=dimension,
     )
@@ -178,6 +180,7 @@ def vector_search_by_vector(
     *,
     top_k: int = 10,
     content_type: str | None = None,
+    file_ids: list[str] | None = None,
     model: str = DEFAULT_MODEL,
     dimension: int = DEFAULT_DIMENSION,
 ) -> dict[str, Any]:
@@ -195,13 +198,27 @@ def vector_search_by_vector(
     if content_type is not None:
         content_type_clause = " AND json_extract(c.business_metadata, '$.content_type')=?"
         params.append(content_type)
+    file_clause = ""
+    if file_ids is not None:
+        if not file_ids:
+            return {
+                "query": query,
+                "model": model,
+                "dimension": dimension,
+                "content_type": content_type,
+                "total_candidates": 0,
+                "hits": [],
+            }
+        file_clause = f" AND c.file_id IN ({','.join('?' for _ in file_ids)})"
+        params.extend(file_ids)
     rows = db.get_conn().execute(
         f"""SELECT c.id, c.file_id, f.name AS file_name, c.page, c.crop_path,
                   c.text, c.business_metadata, c.source_trace, e.embedding
            FROM chunk_embeddings e
            JOIN chunks c ON c.id=e.chunk_id
            JOIN files f ON f.id=c.file_id
-           WHERE c.status='approved' AND e.model=? AND e.dimension=?{content_type_clause}""",
+           WHERE c.status='approved' AND e.model=? AND e.dimension=?
+                 {content_type_clause}{file_clause}""",
         params,
     ).fetchall()
     scored: list[tuple[float, int, Any]] = []

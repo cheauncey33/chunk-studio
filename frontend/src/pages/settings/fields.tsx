@@ -1,9 +1,11 @@
 import { Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { FieldConfigPanel } from '@/FieldConfigPanel'
+import { Explain } from '@/components/explain'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { queryKeys, useFields } from '@/hooks/use-knowledge-request'
+import { helpText } from '@/lib/help-text'
 
 export default function FieldsSettingsPage() {
   const { data: fields = [], isLoading } = useFields()
@@ -18,8 +20,12 @@ export default function FieldsSettingsPage() {
       </div>
       <Card className="border-border-button bg-bg-base">
         <CardHeader>
-          <CardTitle>字段配置</CardTitle>
-          <CardDescription>系统级元数据 schema，影响切片编辑器中的业务字段。</CardDescription>
+          <Explain text={helpText.settings.fields} title="字段配置">
+            <CardTitle>字段配置</CardTitle>
+          </Explain>
+          <CardDescription>
+            决定「内容编辑器」里能填哪些业务信息（例如标准号、条款号）。改的是模板，不是某一篇 PDF。
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {isLoading ? (

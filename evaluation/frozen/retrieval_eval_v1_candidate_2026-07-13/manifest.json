@@ -1,0 +1,164 @@
+{
+  "freeze_id": "retrieval_eval_v1_candidate_2026-07-13",
+  "frozen_at": "2026-07-13",
+  "status": "candidate_gold_frozen_pending_domain_review",
+  "scope": "40-case retrieval evidence evaluation candidate snapshot",
+  "quality_gate": {
+    "intended_use": [
+      "debug retrieval changes",
+      "compare candidate retrieval/query strategies on a fixed snapshot",
+      "preserve current generated artifacts before further gold refinement"
+    ],
+    "not_intended_use": [
+      "final benchmark claims",
+      "domain-approved correctness claims",
+      "training or tuning against test split without a separate holdout"
+    ]
+  },
+  "summary": {
+    "case_pool_status": "candidate_pool_pending_evidence_review",
+    "case_count": 40,
+    "by_report": {
+      "EZC": 10,
+      "HBJC": 10,
+      "WHC": 10,
+      "XYC": 10
+    },
+    "by_split": {
+      "development": 10,
+      "validation": 10,
+      "test": 20
+    },
+    "by_class": {
+      "insulation_voltage": 8,
+      "numeric_parameter_table": 12,
+      "repeat_routine": 2,
+      "report_specific": 10,
+      "rule_formula": 8
+    },
+    "by_evidence_type": {
+      "table": 10,
+      "section": 10,
+      "mixed": 20
+    },
+    "query_model": "qwen3.6-27b",
+    "query_route_counts": {
+      "production": 40,
+      "semantic": 40,
+      "keyword": 40,
+      "table_target": 29,
+      "section_target": 35
+    },
+    "gold_status": "candidate_gold_pending_domain_review",
+    "gold_status_counts": {
+      "candidate_gold_recovered_pending_domain_review": 16,
+      "candidate_model_reviewed_pending_domain_review": 22,
+      "candidate_gold_missing_direct_evidence": 2
+    },
+    "selected_evidence": 139,
+    "evidence_label_counts": {
+      "supporting_candidate": 84,
+      "direct_candidate": 43,
+      "uncertain": 12
+    },
+    "direct_cases": 38,
+    "missing_direct_cases": 2,
+    "locator_validation": {
+      "checked_locators": 139,
+      "invalid_locators": 0
+    },
+    "quote_verified_true": 45,
+    "quote_verified_false": 94
+  },
+  "known_open_items": [
+    "Gold remains candidate-level and pending domain review.",
+    "2 of 40 cases still lack direct_candidate evidence.",
+    "quote_verified is an exact-string check only, not human approval; false values need cleanup or an explicit reason.",
+    "expected_answer/report-value anchoring has not yet been added to the retrieval case schema.",
+    "Missing-direct cases still need gap classification: query, corpus, parser, or scope."
+  ],
+  "source_files": [
+    {
+      "path": "prompts/gold_evidence_recovery_query_v1.md",
+      "bytes": 882,
+      "sha256": "09e013fe3c2741a0dccec83fc1803990bc552362ee1afc85fe8b51937daf41fe"
+    },
+    {
+      "path": "prompts/retrieval_evidence_adversarial_audit_v1.md",
+      "bytes": 1453,
+      "sha256": "873caac881d5191661bc976a3b68c9834c9bad1b9b35c9bfde86503adb324e3d"
+    },
+    {
+      "path": "prompts/retrieval_evidence_judge_v1.md",
+      "bytes": 1692,
+      "sha256": "aa93f0291c4caab59c62876bda055e22c745e8d9f3cedcf5751099247a381ecf"
+    },
+    {
+      "path": "prompts/retrieval_query_planner_v1.md",
+      "bytes": 1254,
+      "sha256": "c9ab48426d95c612aa5e7dd0a3249eb659187d524e4e5757b6d6142a225edf3b"
+    },
+    {
+      "path": "reports/gold_recovery_candidates_v1.json",
+      "bytes": 3852659,
+      "sha256": "f5b22b2366c2d33599d4fc39e260a0ee4370d8c5937c1fee28ef827e03d74c1a"
+    },
+    {
+      "path": "reports/gold_recovery_queries_v1.json",
+      "bytes": 8834,
+      "sha256": "69649b31d8e03174d49a3a20bf9bf243ac3427aecc434f496d0ac95cb78d9ac5"
+    },
+    {
+      "path": "reports/gold_recovery_reviews_v1.json",
+      "bytes": 39604,
+      "sha256": "0dc5ab820cd0a607a5546f97dc4e8f2148dd46647e3b1cc4c418d436d3d0d93e"
+    },
+    {
+      "path": "reports/retrieval_candidates_40_v1.json",
+      "bytes": 4364388,
+      "sha256": "a40042490c0775f7ed5dd598ebdfe71d3a5557968de13590fe85b7e60293ef16"
+    },
+    {
+      "path": "reports/retrieval_label_audit_40_v1.json",
+      "bytes": 49386,
+      "sha256": "cef90fb5d5294297dcf061f8404bb056757994842401925db617e7e165a1cf0a"
+    },
+    {
+      "path": "reports/retrieval_labels_40_v1.json",
+      "bytes": 96787,
+      "sha256": "48deb34a7ec34f97c86753bc4fbbb12210832bbabf3634d3ea83828d39aeeba9"
+    },
+    {
+      "path": "reports/retrieval_queries_40_v1.json",
+      "bytes": 22589,
+      "sha256": "54a8ae59543205ddf55b56f37ba622457baa4226339ae70376c1edcf07ad6a7d"
+    },
+    {
+      "path": "retrieval_candidate_review_v1.json",
+      "bytes": 15716,
+      "sha256": "3edeaf539df06d18444047e874bc2ea4924c7bfe6a6aef2bab4c7d2b9a73b392"
+    },
+    {
+      "path": "retrieval_case_pool_v1.json",
+      "bytes": 46273,
+      "sha256": "ceb168916df4c3b9aac7fdb7d4dd259aa460f6ec62882f130d5a59857da595ac"
+    },
+    {
+      "path": "retrieval_evidence_candidates_v1.json",
+      "bytes": 125926,
+      "sha256": "ef7feb5efa8aaa4b23f21a1930fc915c0c01c40fdb53f1c2109188e5a812924b"
+    },
+    {
+      "path": "retrieval_gold_candidates_v1.json",
+      "bytes": 181743,
+      "sha256": "7e4061715a34938438959e1964b88784ca433d165f25febff550ce305351a0ce"
+    }
+  ],
+  "script_references": [
+    "scripts/build_retrieval_evidence_reviews.py",
+    "scripts/recover_retrieval_gold_evidence.py",
+    "scripts/audit_retrieval_evidence_reviews.py",
+    "backend/app/evidence_locator.py",
+    "tests/test_retrieval_gold_candidates.py"
+  ]
+}

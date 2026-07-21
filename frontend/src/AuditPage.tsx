@@ -15,21 +15,21 @@ type JsonRecord = Record<string, unknown>
 type ReportFilter = 'all' | 'end_to_end_audit' | 'retrieval_group_eval' | 'retrieval'
 
 const REPORT_FILTERS: Array<{ key: ReportFilter; label: string; hint: string }> = [
-  { key: 'all', label: '全部报告', hint: '显示所有评测产物' },
+  { key: 'all', label: '全部报告', hint: '显示所有审查/评测报告' },
   {
     key: 'end_to_end_audit',
     label: '完整审查',
-    hint: '一次完整跑通：抽参 → 检索 → 判定对错（原先叫「端到端」）',
+    hint: '从头到尾跑一遍：抽参 → 找证据 → 判定对不对',
   },
   {
     key: 'retrieval_group_eval',
     label: '证据召回',
-    hint: '只评测「证据有没有召回来」，不跑最终判定（原先叫「证据组」）',
+    hint: '只检查「该找的证据有没有找回来」，不做最终判定',
   },
   {
     key: 'retrieval',
     label: '检索命中',
-    hint: '只看检索结果列表命中情况',
+    hint: '只看检索结果列表里有没有命中',
   },
 ]
 
@@ -162,7 +162,7 @@ export function AuditPage({ embedded = false }: { embedded?: boolean } = {}) {
   }, [report, selectedCaseId])
 
   return (
-    <main className={`audit-page${embedded ? ' embedded' : ''}`}>
+    <main className={`legacy-surface audit-page${embedded ? ' embedded' : ''}`}>
       <div className="audit-shell">
         {!embedded && (
           <header className="audit-heading">
@@ -260,7 +260,7 @@ export function AuditPage({ embedded = false }: { embedded?: boolean } = {}) {
                       >
                         <span className="audit-report-name">{item.name}</span>
                         <span className="audit-report-meta">
-                          {kindLabel(item.kind)} · {item.case_count ?? '—'} cases · {formatTime(item.modified_at)}
+                          {kindLabel(item.kind)} · {item.case_count ?? '—'} 条 · {formatTime(item.modified_at)}
                         </span>
                         {item.parse_error && <span className="audit-report-error">JSON 解析失败</span>}
                       </button>

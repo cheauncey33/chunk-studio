@@ -6,15 +6,17 @@ import {
   TextSearch,
   Layers,
 } from 'lucide-react'
+import { Explain } from '@/components/explain'
 import { useKnowledgeBase } from '@/hooks/use-knowledge-request'
+import { helpText } from '@/lib/help-text'
 import { cn, formatDate } from '@/lib/utils'
 
 const ITEMS = [
-  { to: 'files', label: '文件', icon: FolderOpen },
-  { to: 'chunks', label: '切片', icon: Layers },
-  { to: 'retrieval', label: '检索测试', icon: TextSearch },
-  { to: 'metadata', label: '元数据审核', icon: Sparkles },
-  { to: 'settings', label: '设置', icon: Settings },
+  { to: 'files', label: '文件', icon: FolderOpen, help: helpText.kbNav.files },
+  { to: 'chunks', label: '内容片段', icon: Layers, help: helpText.kbNav.chunks },
+  { to: 'retrieval', label: '试检索', icon: TextSearch, help: helpText.kbNav.retrieval },
+  { to: 'metadata', label: 'AI 建议审核', icon: Sparkles, help: helpText.kbNav.metadata },
+  { to: 'settings', label: '库设置', icon: Settings, help: helpText.kbNav.settings },
 ] as const
 
 export function KnowledgeLayout() {
@@ -29,13 +31,15 @@ export function KnowledgeLayout() {
             <FolderOpen className="size-7" />
           </div>
           <div className="min-w-0 self-center">
-            <h3 className="truncate text-lg font-semibold">
-              {isLoading ? '加载中…' : kb?.name || '知识库'}
-            </h3>
+            <Explain text={helpText.datasets.page} title="当前知识库">
+              <h3 className="truncate text-lg font-semibold">
+                {isLoading ? '加载中…' : kb?.name || '知识库'}
+              </h3>
+            </Explain>
             <div className="mt-1 space-y-0.5 text-xs text-text-secondary">
               <div className="flex justify-between gap-2">
                 <span>{kb?.file_count ?? 0} 个文件</span>
-                <span>{kb?.chunk_count ?? 0} 切片</span>
+                <span>{kb?.chunk_count ?? 0} 段内容</span>
               </div>
               <div>更新 {kb ? formatDate(kb.updated_at) : '—'}</div>
             </div>
@@ -46,18 +50,20 @@ export function KnowledgeLayout() {
           <ul className="space-y-2">
             {ITEMS.map(item => (
               <li key={item.to}>
-                <NavLink
-                  to={`/kb/${id}/${item.to}`}
-                  className={({ isActive }) =>
-                    cn(
-                      'flex h-10 items-center gap-2.5 rounded-lg px-3 text-base text-text-secondary transition hover:bg-bg-card hover:text-text-primary',
-                      isActive && 'bg-bg-card font-medium text-text-primary',
-                    )
-                  }
-                >
-                  <item.icon className="size-4" />
-                  <span>{item.label}</span>
-                </NavLink>
+                <Explain text={item.help} title={item.label} side="right" className="w-full">
+                  <NavLink
+                    to={`/kb/${id}/${item.to}`}
+                    className={({ isActive }) =>
+                      cn(
+                        'flex h-10 w-full items-center gap-2.5 rounded-lg px-3 text-base text-text-secondary transition hover:bg-bg-card hover:text-text-primary',
+                        isActive && 'bg-bg-card font-medium text-text-primary',
+                      )
+                    }
+                  >
+                    <item.icon className="size-4" />
+                    <span>{item.label}</span>
+                  </NavLink>
+                </Explain>
               </li>
             ))}
           </ul>

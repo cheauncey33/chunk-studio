@@ -109,19 +109,19 @@ export function MetadataSuggestionsPage({ onLocate }: Props) {
   const legacyCount = chunks.filter(chunk => !suggestionVersion(chunk)).length
 
   return (
-    <main className="metadata-review-page">
+    <main className="legacy-surface metadata-review-page">
       <div className="metadata-review-shell">
         <header className="metadata-review-heading">
           <div>
-            <h2>LLM 检索元数据</h2>
-            <p>查看 chunk 的关键词、可回答问题和生成来源；这里只读展示建议层。</p>
+            <h2>AI 建议审核</h2>
+            <p>查看 AI 给内容片段写的关键词、可回答问题。这里只看建议；点「定位」可去编辑器核对原文后再决定是否采纳。</p>
           </div>
           <button type="button" onClick={refresh} disabled={loading}>{loading ? '刷新中' : '刷新'}</button>
         </header>
 
         <div className="metadata-review-stats">
-          <div><strong>{chunks.length}</strong><span>含建议切片</span></div>
-          <div><strong>{completeCount}</strong><span>关键词 + 问题</span></div>
+          <div><strong>{chunks.length}</strong><span>含建议的段落</span></div>
+          <div><strong>{completeCount}</strong><span>关键词 + 问题都有</span></div>
           <div><strong>{filesWithSuggestions}</strong><span>覆盖文件</span></div>
           <div><strong>{legacyCount}</strong><span>旧版未标记</span></div>
         </div>

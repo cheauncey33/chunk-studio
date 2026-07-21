@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from http import HTTPStatus
 import json
-import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -14,28 +12,17 @@ ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 sys.path.insert(0, str(BACKEND))
 
-from app import db  # noqa: E402
+from app import db, llm  # noqa: E402
 
 
 DEFAULT_PROMPT = ROOT / "evaluation" / "prompts" / "report_test_item_extraction_v1.md"
 DEFAULT_OUTPUT = BACKEND / "data" / "reports" / "report_test_items_v1.json"
-DEFAULT_MODEL = "qwen3.6-27b"
+DEFAULT_MODEL = llm.DEFAULT_MODEL
 PHASES = {"initial", "repeat_routine"}
 
 
 def _parse_json_object(content: Any) -> dict[str, Any]:
-    if isinstance(content, list):
-        content = "".join(
-            str(item.get("text") or "") if isinstance(item, dict) else str(item)
-            for item in content
-        )
-    text = str(content or "").strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    parsed = json.loads(text)
-    if not isinstance(parsed, dict):
-        raise ValueError("model response must be a JSON object")
-    return parsed
+    return llm.parse_json_object(content)
 
 
 def _report_id(path: Path) -> str:
@@ -70,9 +57,6 @@ def _validate_report(result: dict[str, Any], expected_report_id: str) -> None:
 
 
 def extract_report(path: Path, *, prompt: str, model: str) -> dict[str, Any]:
-    api_key = os.environ.get("DASHSCOPE_API_KEY") or db.get_setting("llm.api_key")
-    if not api_key:
-        raise RuntimeError("DashScope API key is not configured")
     report_id = _report_id(path)
     payload = json.dumps(
         {
@@ -81,42 +65,14 @@ def extract_report(path: Path, *, prompt: str, model: str) -> dict[str, Any]:
         },
         ensure_ascii=False,
     )
-
-    if model == "qwen3.6-27b":
-        from dashscope import MultiModalConversation
-
-        response = MultiModalConversation.call(
-            api_key=api_key,
-            model=model,
-            messages=[
-                {"role": "system", "content": [{"text": prompt}]},
-                {"role": "user", "content": [{"text": payload}]},
-            ],
-            result_format="message",
-            enable_thinking=False,
-            temperature=0,
-        )
-    else:
-        from dashscope import Generation
-
-        response = Generation.call(
-            api_key=api_key,
-            model=model,
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": payload},
-            ],
-            result_format="message",
-            response_format={"type": "json_object"},
-            temperature=0,
-        )
-    if response.status_code != HTTPStatus.OK:
-        raise RuntimeError(
-            f"report extraction failed for {report_id}: status={response.status_code} "
-            f"code={response.code} message={response.message}"
-        )
-    content = response.output["choices"][0]["message"]["content"]
-    result = _parse_json_object(content)
+    result = llm.chat_json(
+        [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": payload},
+        ],
+        model=model,
+        temperature=0,
+    )
     _validate_report(result, report_id)
     result["source_file"] = path.name
     return result

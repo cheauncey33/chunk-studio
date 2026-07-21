@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { api, type FieldConfig } from './api'
+import { Explain } from '@/components/explain'
+import { helpText } from '@/lib/help-text'
 
 interface Props {
   fields: FieldConfig[]
@@ -29,7 +31,7 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
 
   const save = async () => {
     if (!draft || !draft.field_key || !draft.display_name) {
-      alert('field_key 和显示名必填')
+      alert('请填写字段标识和显示名')
       return
     }
     try {
@@ -42,7 +44,7 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
   }
 
   const del = async (key: string) => {
-    if (!confirm(`删除字段 ${key}?`)) return
+    if (!confirm(`确定删除字段「${key}」？`)) return
     await api.deleteField(key)
     onChanged()
   }
@@ -50,30 +52,54 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
   const editingExisting = !!draft && fields.some(f => f.field_key === draft.field_key)
 
   return (
-    <div className="field-config">
+    <div className="legacy-surface field-config">
       <section className="field-config-panel">
         <div className="section-head">
           <div>
-            <h3>元数据字段配置</h3>
+            <Explain text={helpText.settings.fields} title="业务字段">
+              <h3>业务字段列表</h3>
+            </Explain>
             <p className="muted">
-              定义 chunk 的人工字段和自动抽取字段。枚举字段会约束可选标签，便于后续 RAG 入库保持一致。
+              这里定义编辑内容时能填哪些信息。例如「标准号」「条款号」。有固定选项的字段可设为枚举，避免大家写法不一致。
             </p>
           </div>
-          <button onClick={() => setDraft(blank())}>+ 新增字段</button>
+          <Explain text="新增一个可在内容编辑器里填写的业务字段。" title="新增字段">
+            <button onClick={() => setDraft(blank())}>+ 新增字段</button>
+          </Explain>
         </div>
 
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>field_key</th>
-                <th>显示名</th>
-                <th>来源</th>
-                <th>约束</th>
+                <th>
+                  <Explain text="系统内部用的唯一标识，创建后尽量不要改。建议用英文小写加下划线，例如 standard_no。" title="字段标识">
+                    <span>字段标识</span>
+                  </Explain>
+                </th>
+                <th>
+                  <Explain text="界面上显示给使用者的名字，例如「标准号」。" title="显示名">
+                    <span>显示名</span>
+                  </Explain>
+                </th>
+                <th>
+                  <Explain text="manual=人工填写；auto=系统自动写入；llm=AI 建议后人工采纳。" title="来源">
+                    <span>来源</span>
+                  </Explain>
+                </th>
+                <th>
+                  <Explain text="free=随便填；enum=只能从给定选项里选。" title="约束">
+                    <span>约束</span>
+                  </Explain>
+                </th>
                 <th>类型</th>
-                <th>存储路径</th>
+                <th>
+                  <Explain text="数据存在哪一层。一般用默认即可，除非你清楚存储结构。" title="存储路径">
+                    <span>存储路径</span>
+                  </Explain>
+                </th>
                 <th>属性</th>
-                <th>标签</th>
+                <th>可选标签</th>
                 <th></th>
               </tr>
             </thead>
@@ -82,16 +108,18 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
                 <tr key={f.field_key}>
                   <td className="mono">{f.field_key}</td>
                   <td>{f.display_name}</td>
-                  <td><span className={`pill ${f.extract_source}`}>{f.extract_source}</span></td>
-                  <td>{f.value_constraint}</td>
-                  <td>{f.value_type}</td>
+                  <td><span className={`pill ${f.extract_source}`}>{
+                    f.extract_source === 'manual' ? '人工' : f.extract_source === 'auto' ? '自动' : 'AI 建议'
+                  }</span></td>
+                  <td>{f.value_constraint === 'enum' ? '枚举' : '自由填'}</td>
+                  <td>{f.value_type === 'list' ? '多值' : f.value_type === 'structured' ? '结构化' : '单值'}</td>
                   <td className="mono">{f.storage_path || 'business_metadata.' + f.field_key}</td>
                   <td className="labels-cell">
                     {[
-                      f.editable && 'editable',
-                      f.visible && 'visible',
-                      f.filterable && 'filterable',
-                      f.indexable && 'indexable',
+                      f.editable && '可编辑',
+                      f.visible && '可见',
+                      f.filterable && '可筛选',
+                      f.indexable && '可检索',
                     ].filter(Boolean).join(' / ') || '—'}
                   </td>
                   <td className="labels-cell">{f.value_constraint === 'enum' ? f.label_list.join(' / ') : '—'}</td>
@@ -114,7 +142,7 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
               <button className="ghost" onClick={() => setDraft(null)}>×</button>
             </div>
 
-            <label>field_key</label>
+            <label>字段标识</label>
             <input
               value={draft.field_key}
               onChange={e => setDraft({ ...draft, field_key: e.target.value })}
@@ -131,24 +159,24 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
 
             <div className="form-grid">
               <div>
-                <label>抽取来源</label>
+                <label>来源</label>
                 <select
                   value={draft.extract_source}
                   onChange={e => setDraft({ ...draft, extract_source: e.target.value as 'manual' | 'auto' | 'llm' })}
                 >
-                  <option value="manual">manual 手动</option>
-                  <option value="auto">auto 正则抽取</option>
-                  <option value="llm">llm 小模型抽取</option>
+                  <option value="manual">人工填写</option>
+                  <option value="auto">系统自动写入</option>
+                  <option value="llm">AI 建议后采纳</option>
                 </select>
               </div>
               <div>
-                <label>取值约束</label>
+                <label>填写方式</label>
                 <select
                   value={draft.value_constraint}
                   onChange={e => setDraft({ ...draft, value_constraint: e.target.value as 'free' | 'enum' })}
                 >
-                  <option value="free">free 自由文本</option>
-                  <option value="enum">enum 标签选择</option>
+                  <option value="free">自由文本</option>
+                  <option value="enum">从选项里选</option>
                 </select>
               </div>
               <div>
@@ -157,9 +185,9 @@ export function FieldConfigPanel({ fields, onChanged }: Props) {
                   value={draft.value_type}
                   onChange={e => setDraft({ ...draft, value_type: e.target.value as 'text' | 'list' | 'structured' })}
                 >
-                  <option value="text">text 单值</option>
-                  <option value="list">list 多值</option>
-                  <option value="structured">structured 结构化</option>
+                  <option value="text">单值</option>
+                  <option value="list">多值（列表）</option>
+                  <option value="structured">结构化</option>
                 </select>
               </div>
             </div>

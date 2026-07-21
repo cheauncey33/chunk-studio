@@ -12,10 +12,10 @@ from html.parser import HTMLParser
 from http import HTTPStatus
 from typing import Any
 
-from . import db, embeddings, lexical
+from . import embeddings, lexical, llm
 
 
-QUERY_REWRITE_MODEL = os.environ.get("RETRIEVAL_QUERY_MODEL", "qwen-flash")
+QUERY_REWRITE_MODEL = os.environ.get("RETRIEVAL_QUERY_MODEL", llm.DEFAULT_MODEL)
 RERANK_MODEL = os.environ.get("RETRIEVAL_RERANK_MODEL", "qwen3-rerank")
 CONTENT_TYPES = ("table", "section")
 ROUTE_TOP_K = 30
@@ -38,6 +38,8 @@ _STANDARD_RE = re.compile(
     r"(?:GB(?:/T)?|JB/T|DL/T|Q/GDW|IEC|ISO)\s*[0-9][0-9A-Z.\-/]*",
     re.IGNORECASE,
 )
+_CHINESE_ANCHOR_RE = re.compile(r"[\u4e00-\u9fff]{4,}")
+_GENERIC_DOMAIN_SUFFIX_RE = re.compile(r"(?:限值|测量|试验|要求|规定|标准|项目)+$")
 
 QueryPlanner = Callable[[str], dict[str, str]]
 QueryBatchEmbedder = Callable[..., list[list[float]]]
@@ -60,15 +62,7 @@ def plan_query_rewrites(query: str, *, model: str = QUERY_REWRITE_MODEL) -> dict
     planner_query = _normalize_query_for_rewrite(query)
     if not planner_query:
         raise ValueError("query must not be blank")
-    api_key = os.environ.get("DASHSCOPE_API_KEY") or db.get_setting("llm.api_key")
-    if not api_key:
-        raise RuntimeError("DashScope API key is not configured")
-
-    from dashscope import Generation
-
-    response = Generation.call(
-        api_key=api_key,
-        model=model,
+    parsed = llm.chat_json(
         messages=[
             {
                 "role": "system",
@@ -76,23 +70,17 @@ def plan_query_rewrites(query: str, *, model: str = QUERY_REWRITE_MODEL) -> dict
                     "你是电力标准证据检索的查询改写器。只根据用户原始查询改写，不得补充查询中"
                     "没有出现的标准号、型号含义、产品结构、参数值或答案。semantic应改写为寻找"
                     "适用标准证据的问题；keyword应压缩为原查询中已有的标准术语、型号、数值、"
-                    "单位和试验简称。严格返回JSON对象："
+                    "单位和试验简称。两个字段都必须使用中文，并逐字保留原查询中的设备类型、"
+                    "试验名称、参数名称及连续中文领域短语；不得翻译、替换或省略这些短语。"
+                    "严格返回JSON对象："
                     '{"semantic":"...","keyword":"..."}'
                 ),
             },
             {"role": "user", "content": planner_query},
         ],
-        result_format="message",
-        response_format={"type": "json_object"},
+        model=model,
         temperature=0,
     )
-    if response.status_code != HTTPStatus.OK:
-        raise RuntimeError(
-            f"query rewrite failed: status={response.status_code} "
-            f"code={response.code} message={response.message}"
-        )
-    content = response.output["choices"][0]["message"]["content"]
-    parsed = _parse_json_object(content)
     rewrites = {
         route: _validate_rewrite(planner_query, parsed.get(route), route=route)
         for route in ("semantic", "keyword")
@@ -109,9 +97,9 @@ def rerank_documents(
     *,
     model: str = RERANK_MODEL,
 ) -> list[tuple[int, float]]:
-    api_key = os.environ.get("DASHSCOPE_API_KEY") or db.get_setting("llm.api_key")
+    api_key = os.environ.get("DASHSCOPE_API_KEY")
     if not api_key:
-        raise RuntimeError("DashScope API key is not configured")
+        raise RuntimeError("DASHSCOPE_API_KEY is not configured for Qwen reranking")
     if not documents:
         return []
 
@@ -152,18 +140,37 @@ def hybrid_search(
     query: str,
     *,
     top_k: int = 10,
+    route_top_k: int = ROUTE_TOP_K,
+    candidates_per_type: int = CANDIDATES_PER_TYPE,
+    lexical_candidates_per_type: int | None = None,
+    rrf_k: int = RRF_K,
+    similarity_threshold: float | None = None,
     planner: QueryPlanner | None = None,
     batch_embedder: QueryBatchEmbedder | None = None,
     vector_searcher: VectorSearcher | None = None,
     reranker: TextReranker | None = None,
     lexical_searcher: LexicalSearcher | None = None,
     lexical_enabled: bool | None = None,
+    file_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     query = query.strip()
     if not query:
         raise ValueError("query must not be blank")
     if not 1 <= top_k <= 50:
         raise ValueError("top_k must be between 1 and 50")
+    if not 1 <= route_top_k <= 100:
+        raise ValueError("route_top_k must be between 1 and 100")
+    if not 1 <= candidates_per_type <= 100:
+        raise ValueError("candidates_per_type must be between 1 and 100")
+    if not 1 <= rrf_k <= 200:
+        raise ValueError("rrf_k must be between 1 and 200")
+    lexical_pool_size = (
+        LEXICAL_CANDIDATES_PER_TYPE
+        if lexical_candidates_per_type is None
+        else lexical_candidates_per_type
+    )
+    if not 1 <= lexical_pool_size <= 100:
+        raise ValueError("lexical_candidates_per_type must be between 1 and 100")
 
     planner = planner or plan_query_rewrites
     batch_embedder = batch_embedder or embeddings.embed_queries_with_dashscope
@@ -217,13 +224,18 @@ def hybrid_search(
         for route, route_query, route_vector in zip(
             route_names, route_queries, route_vectors, strict=True
         ):
+            vector_kwargs = {
+                "top_k": route_top_k,
+                "content_type": content_type,
+                "model": embeddings.DEFAULT_MODEL,
+                "dimension": embeddings.DEFAULT_DIMENSION,
+            }
+            if file_ids is not None:
+                vector_kwargs["file_ids"] = file_ids
             result = vector_searcher(
                 route_query,
                 route_vector,
-                top_k=ROUTE_TOP_K,
-                content_type=content_type,
-                model=embeddings.DEFAULT_MODEL,
-                dimension=embeddings.DEFAULT_DIMENSION,
+                **vector_kwargs,
             )
             total_by_type.setdefault(content_type, int(result["total_candidates"]))
             for rank, hit in enumerate(result["hits"], start=1):
@@ -235,9 +247,9 @@ def hybrid_search(
                 candidate["route_scores"][route] = float(hit["score"])
                 candidate["source_ranks"][f"dense:{route}"] = rank
                 candidate["source_scores"][f"dense:{route}"] = float(hit["score"])
-                candidate["rrf_score"] += 1 / (RRF_K + rank)
+                candidate["rrf_score"] += 1 / (rrf_k + rank)
 
-        dense_by_type[content_type] = _rank_candidates(merged.values())[:CANDIDATES_PER_TYPE]
+        dense_by_type[content_type] = _rank_candidates(merged.values())[:candidates_per_type]
 
     lexical_by_type: dict[str, list[dict[str, Any]]] = {}
     dual_active = False
@@ -252,11 +264,16 @@ def hybrid_search(
             for content_type in CONTENT_TYPES:
                 merged = {}
                 for route, route_query in lexical_routes:
+                    lexical_kwargs = {
+                        "content_type": content_type,
+                        "top_k": route_top_k,
+                        "sync": sync_index,
+                    }
+                    if file_ids is not None:
+                        lexical_kwargs["file_ids"] = file_ids
                     result = lexical_searcher(
                         route_query,
-                        content_type=content_type,
-                        top_k=ROUTE_TOP_K,
-                        sync=sync_index,
+                        **lexical_kwargs,
                     )
                     sync_index = False
                     for rank, hit in enumerate(result["hits"], start=1):
@@ -268,9 +285,9 @@ def hybrid_search(
                         candidate["route_scores"][route] = float(hit["score"])
                         candidate["source_ranks"][f"lexical:{route}"] = rank
                         candidate["source_scores"][f"lexical:{route}"] = float(hit["score"])
-                        candidate["rrf_score"] += 1 / (RRF_K + rank)
+                        candidate["rrf_score"] += 1 / (rrf_k + rank)
                 lexical_by_type[content_type] = _rank_candidates(merged.values())[
-                    :LEXICAL_CANDIDATES_PER_TYPE
+                    :lexical_pool_size
                 ]
             dual_active = True
         except (RuntimeError, sqlite3.Error):
@@ -318,6 +335,18 @@ def hybrid_search(
         ]
         retrieval_mode = f"{mode_prefix}_rrf_fallback"
         rerank_model = None
+
+    if similarity_threshold is not None:
+        selected = [
+            hit
+            for hit in selected
+            if float(
+                hit["rerank_score"]
+                if hit.get("rerank_score") is not None
+                else hit.get("score") or 0
+            )
+            >= similarity_threshold
+        ]
 
     return _response(
         query,
@@ -486,6 +515,11 @@ def _validate_rewrite(query: str, value: Any, *, route: str) -> str:
     extra_numbers = {Decimal(item) for item in _NUMBER_RE.findall(rewrite)} - query_numbers
     if extra_numbers:
         raise ValueError(f"query rewriter introduced numbers in {route}: {sorted(extra_numbers)}")
+    missing_anchors = [anchor for anchor in _query_domain_anchors(query) if anchor not in rewrite]
+    if missing_anchors:
+        raise ValueError(
+            f"query rewriter omitted domain terms in {route}: {missing_anchors}"
+        )
     return rewrite
 
 
@@ -493,13 +527,10 @@ def _normalize_reference(value: str) -> str:
     return re.sub(r"[^0-9A-Z]", "", value.upper())
 
 
-def _parse_json_object(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    text = str(value or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE)
-    parsed = json.loads(text)
-    if not isinstance(parsed, dict):
-        raise ValueError("query rewriter did not return a JSON object")
-    return parsed
+def _query_domain_anchors(query: str) -> list[str]:
+    anchors = []
+    for value in _CHINESE_ANCHOR_RE.findall(query):
+        anchor = _GENERIC_DOMAIN_SUFFIX_RE.sub("", value)
+        if len(anchor) >= 4 and anchor not in anchors:
+            anchors.append(anchor)
+    return anchors

@@ -316,6 +316,7 @@ def search(
     content_type: str,
     top_k: int = SHADOW_ROUTE_TOP_K,
     sync: bool = True,
+    file_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     if content_type not in CONTENT_TYPES:
         raise ValueError(f"unsupported lexical content type: {content_type}")
@@ -329,6 +330,19 @@ def search(
         return {"query": query, "query_tokens": [], "hits": [], "sync": sync_result}
     weights = [0.0, 0.0, *(FIELD_WEIGHTS[field] for field in INDEX_FIELDS)]
     placeholders = ",".join("?" for _ in weights)
+    if file_ids is not None and not file_ids:
+        return {
+            "query": query,
+            "query_tokens": tokens,
+            "content_type": content_type,
+            "hits": [],
+            "sync": sync_result,
+        }
+    file_clause = ""
+    file_params: list[str] = []
+    if file_ids is not None:
+        file_clause = f" AND c.file_id IN ({','.join('?' for _ in file_ids)})"
+        file_params = file_ids
     sql = f"""SELECT c.id, c.file_id, f.name AS file_name, c.page, c.crop_path,
                      c.text, c.business_metadata, c.source_trace,
                      bm25(chunk_fts, {placeholders}) AS rank_score
@@ -336,12 +350,12 @@ def search(
               JOIN chunks c ON c.id=chunk_fts.chunk_id
               JOIN files f ON f.id=c.file_id
               WHERE chunk_fts MATCH ? AND chunk_fts.content_type=?
-                AND c.status='approved'
+                AND c.status='approved'{file_clause}
               ORDER BY rank_score, c.id
               LIMIT ?"""
     rows = db.get_conn().execute(
         sql,
-        (*weights, _match_expression(tokens), content_type, top_k),
+        (*weights, _match_expression(tokens), content_type, *file_params, top_k),
     ).fetchall()
     hits = []
     for row in rows:

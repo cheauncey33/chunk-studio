@@ -2,20 +2,18 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from collections import defaultdict, deque
 from collections.abc import Callable
 from decimal import Decimal
-from http import HTTPStatus
 from typing import Any
 
-from . import chunk_schema, db
+from . import chunk_schema, db, llm
 from .evidence_locator import chunk_text_sha256
 
 
-DEFAULT_MODEL = "qwen-flash"
+DEFAULT_MODEL = llm.DEFAULT_MODEL
 DEFAULT_BATCH_SIZE = 8
 MAX_BATCH_SIZE = 12
 MAX_TEXT_CHARS = 12_000
@@ -58,7 +56,7 @@ def pending_chunks(
     return result
 
 
-def extract_with_qwen(
+def extract_with_llm(
     items: list[dict[str, str]],
     *,
     model: str = DEFAULT_MODEL,
@@ -66,16 +64,9 @@ def extract_with_qwen(
 ) -> SuggestionMap:
     if not 1 <= len(items) <= MAX_BATCH_SIZE:
         raise ValueError(f"batch size must be between 1 and {MAX_BATCH_SIZE}")
-    api_key = os.environ.get("DASHSCOPE_API_KEY") or db.get_setting("llm.api_key")
-    if not api_key:
-        raise RuntimeError("DASHSCOPE_API_KEY is not set")
-
-    from dashscope import Generation
 
     payload = json.dumps(items, ensure_ascii=False)
-    response = Generation.call(
-        api_key=api_key,
-        model=model,
+    parsed = llm.chat_json(
         messages=[
             {
                 "role": "system",
@@ -93,17 +84,9 @@ def extract_with_qwen(
             },
             {"role": "user", "content": payload},
         ],
-        result_format="message",
-        response_format={"type": "json_object"},
+        model=model,
         temperature=0,
     )
-    if response.status_code != HTTPStatus.OK:
-        raise RuntimeError(
-            f"Qwen metadata extraction failed: status={response.status_code} "
-            f"code={response.code} message={response.message}"
-        )
-    content = response.output["choices"][0]["message"]["content"]
-    parsed = _parse_json_object(content)
     items_by_id = {item["id"]: item for item in items}
     output: SuggestionMap = {}
     for item in parsed.get("items", []):
@@ -123,10 +106,10 @@ def extract_with_qwen(
     missing = set(items_by_id) - output.keys()
     if missing:
         if not _retry_missing:
-            raise RuntimeError(f"Qwen response omitted or invalidated {len(missing)} chunk ids")
+            raise RuntimeError(f"LLM response omitted or invalidated {len(missing)} chunk ids")
         for chunk_id in missing:
             output.update(
-                extract_with_qwen(
+                extract_with_llm(
                     [items_by_id[chunk_id]],
                     model=model,
                     _retry_missing=False,
@@ -143,7 +126,7 @@ def extract_suggestions(
     limit: int | None = None,
     sample_per_type: int | None = None,
     chunk_ids: list[str] | None = None,
-    extractor: SuggestionExtractor = extract_with_qwen,
+    extractor: SuggestionExtractor = extract_with_llm,
     on_batch: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     if not 1 <= batch_size <= MAX_BATCH_SIZE:
@@ -332,18 +315,3 @@ def _validate_grounded(prompt_item: dict[str, str], generated: list[str]) -> Non
 
 def _normalize_reference(value: str) -> str:
     return re.sub(r"[^0-9A-Z]", "", value.upper())
-
-
-def _parse_json_object(content: Any) -> dict[str, Any]:
-    if not isinstance(content, str):
-        raise RuntimeError("Qwen returned non-text content")
-    cleaned = content.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
-    try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Qwen returned invalid JSON") from exc
-    if not isinstance(parsed, dict):
-        raise RuntimeError("Qwen returned a non-object JSON value")
-    return parsed

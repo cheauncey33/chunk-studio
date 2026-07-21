@@ -1,0 +1,1322 @@
+{
+  "version": 1,
+  "status": "candidate_pool_pending_evidence_review",
+  "unit_of_evaluation": "one reported standard requirement",
+  "selection_policy": "stratified by retrieval class; not random",
+  "known_source_exclusions": [
+    {
+      "report_id": "EZC",
+      "item_no": "6",
+      "reason": "The source summary merged 60 s and 5 kV into '605/skV'; excluded rather than repaired from report body."
+    }
+  ],
+  "summary": {
+    "case_count": 40,
+    "by_report": {
+      "EZC": 10,
+      "HBJC": 10,
+      "WHC": 10,
+      "XYC": 10
+    },
+    "by_split": {
+      "development": 10,
+      "validation": 10,
+      "test": 20
+    },
+    "by_class": {
+      "insulation_voltage": 8,
+      "numeric_parameter_table": 12,
+      "repeat_routine": 2,
+      "report_specific": 10,
+      "rule_formula": 8
+    },
+    "repeat_routine_cases": 2,
+    "by_evidence_type": {
+      "table": 10,
+      "section": 10,
+      "mixed": 20
+    }
+  },
+  "cases": [
+    {
+      "case_id": "hbjc-4-r1",
+      "report_id": "HBJC",
+      "dataset_split": "development",
+      "source_file": "MinerU_markdown_HBJC-ZY-202509137_2069302335063818240.md",
+      "sample_context": {
+        "sample_name": "油浸式变压器",
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "4",
+        "project_name": "空载损耗和空载电流测量",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "空载损耗P0(kW):≤0.370",
+        "unit": "kW"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "4",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "71bbb69fe3a1a5657117f17d1f5804bc2f64df087cfc292f7b5901eea3826b5b"
+      },
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "table",
+      "selection_reason": "400 kVA S20-NX2空载损耗",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "hbjc-4-r2",
+      "report_id": "HBJC",
+      "dataset_split": "development",
+      "source_file": "MinerU_markdown_HBJC-ZY-202509137_2069302335063818240.md",
+      "sample_context": {
+        "sample_name": "油浸式变压器",
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "4",
+        "project_name": "空载损耗和空载电流测量",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "空载电流I0(%):≤0.16(1+30%)",
+        "unit": "%"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "4",
+        "phase": "initial",
+        "requirement_index": 1,
+        "text_sha256": "805ad199e2d4b184e933708f7cda68878dbbeda5c1098d63a3c64343fb636ff5"
+      },
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "空载电流基准值与允许偏差",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "hbjc-5-r1",
+      "report_id": "HBJC",
+      "dataset_split": "development",
+      "source_file": "MinerU_markdown_HBJC-ZY-202509137_2069302335063818240.md",
+      "sample_context": {
+        "sample_name": "油浸式变压器",
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "5",
+        "project_name": "短路阻抗和负载损耗测量",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "负载损耗Pk(kW):≤3.615",
+        "unit": "kW"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "5",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "93c58d0587cb29595c6c34befe838f1f0685cb35e74034c74b04f1a39be766d1"
+      },
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "table",
+      "selection_reason": "400 kVA S20-NX2负载损耗",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "hbjc-7-r1",
+      "report_id": "HBJC",
+      "dataset_split": "development",
+      "source_file": "MinerU_markdown_HBJC-ZY-202509137_2069302335063818240.md",
+      "sample_context": {
+        "sample_name": "油浸式变压器",
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "7",
+        "project_name": "外施耐压试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压对低压及地试验电压(kV):35",
+        "unit": "kV"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "7",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "2e9d14afd97a9e4c2541e2a9da51782c63cf035ee55de92fc2c1c4c56aa2776c"
+      },
+      "retrieval_class": "insulation_voltage",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "外施耐压试验电压",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "hbjc-14-r1",
+      "report_id": "HBJC",
+      "dataset_split": "development",
+      "source_file": "MinerU_markdown_HBJC-ZY-202509137_2069302335063818240.md",
+      "sample_context": {
+        "sample_name": "油浸式变压器",
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "14",
+        "project_name": "雷电冲击试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压线端全波电压(kV): -75(1±3%)波前时间: T1: 1.2μs±30%半峰值时间: T2: 50μs±20%",
+        "unit": "kV"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "14",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "3b2d0f00e0fa752b64a3fbefab30e4b63bc0c5f4b8ad0bdc47c2c8f9bdf5e085"
+      },
+      "retrieval_class": "insulation_voltage",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "雷电全波冲击电压与波形参数",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "hbjc-5-r3",
+      "report_id": "HBJC",
+      "dataset_split": "development",
+      "source_file": "MinerU_markdown_HBJC-ZY-202509137_2069302335063818240.md",
+      "sample_context": {
+        "sample_name": "油浸式变压器",
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "5",
+        "project_name": "短路阻抗和负载损耗测量",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "总损耗P总(kW):≤3.985",
+        "unit": "kW"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "5",
+        "phase": "initial",
+        "requirement_index": 2,
+        "text_sha256": "b0d62c4f8ef0f39f1b5ebf06749b634c47af0419c6f68008e988f3e5e068303a"
+      },
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "总损耗需要分量值与求和规则",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "hbjc-6-r4",
+      "report_id": "HBJC",
+      "dataset_split": "development",
+      "source_file": "MinerU_markdown_HBJC-ZY-202509137_2069302335063818240.md",
+      "sample_context": {
+        "sample_name": "油浸式变压器",
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "6",
+        "project_name": "感应耐压试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "持续时间(s):15≤t≤60",
+        "unit": "s"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "6",
+        "phase": "initial",
+        "requirement_index": 3,
+        "text_sha256": "1b1da7ae38269fe57565aa33de112d30027825124ca1fa952d42f6ab45e0e336"
+      },
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "section",
+      "selection_reason": "感应耐压持续时间规则",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "hbjc-15-5-r1",
+      "report_id": "HBJC",
+      "dataset_split": "development",
+      "source_file": "MinerU_markdown_HBJC-ZY-202509137_2069302335063818240.md",
+      "sample_context": {
+        "sample_name": "油浸式变压器",
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "15.5",
+        "project_name": "短路阻抗和负载损耗测量",
+        "phase": "repeat_routine"
+      },
+      "reported_requirement": {
+        "text": "负载损耗Pk(kW): ≤3.615",
+        "unit": "kW"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "15.5",
+        "phase": "repeat_routine",
+        "requirement_index": 0,
+        "text_sha256": "f1c09ff7e9a6e2b4c7bc14c03d668a39eef36a4c8141972c01a0d3c0ec7bc2fe"
+      },
+      "retrieval_class": "repeat_routine",
+      "expected_evidence_type": "table",
+      "selection_reason": "重复例行阶段的负载损耗",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "hbjc-13-r4",
+      "report_id": "HBJC",
+      "dataset_split": "development",
+      "source_file": "MinerU_markdown_HBJC-ZY-202509137_2069302335063818240.md",
+      "sample_context": {
+        "sample_name": "油浸式变压器",
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "13",
+        "project_name": "短路承受能力试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "试验后相电抗差(%):≤2%",
+        "unit": "%"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "13",
+        "phase": "initial",
+        "requirement_index": 3,
+        "text_sha256": "c2fdc947a57469a6050af3be7ce2c8252b6b44d3d3f0823c0e924424e53ef2d8"
+      },
+      "retrieval_class": "report_specific",
+      "expected_evidence_type": "section",
+      "selection_reason": "短路试验后相电抗差规则",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "hbjc-9-r3",
+      "report_id": "HBJC",
+      "dataset_split": "development",
+      "source_file": "MinerU_markdown_HBJC-ZY-202509137_2069302335063818240.md",
+      "sample_context": {
+        "sample_name": "油浸式变压器",
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "9",
+        "project_name": "压力密封试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "残余压力:不低于施压的70%",
+        "unit": "kPa"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "9",
+        "phase": "initial",
+        "requirement_index": 2,
+        "text_sha256": "6015ccdda621f3d1fb09cd8218834bd79f32f06dd584a7c258c2b923018bf1ee"
+      },
+      "retrieval_class": "report_specific",
+      "expected_evidence_type": "section",
+      "selection_reason": "压力密封残余压力规则",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "ezc-4-r1",
+      "report_id": "EZC",
+      "dataset_split": "validation",
+      "source_file": "MinerU_markdown_EZC-001-202509-1_2069333357063135232.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200kVA",
+        "rated_voltage": "10/0.4kV"
+      },
+      "test_item": {
+        "item_no": "4",
+        "project_name": "空载损耗和空载电流测量(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "空载损耗Po(kW): ≤0.215",
+        "unit": "kW"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "4",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "01602bedc15c8b63053d14f4f7ad41ae7f8cc53429713d74b8f1c90b7cab6c86"
+      },
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "table",
+      "selection_reason": "200 kVA S20-NX2空载损耗",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "ezc-4-r2",
+      "report_id": "EZC",
+      "dataset_split": "validation",
+      "source_file": "MinerU_markdown_EZC-001-202509-1_2069333357063135232.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200kVA",
+        "rated_voltage": "10/0.4kV"
+      },
+      "test_item": {
+        "item_no": "4",
+        "project_name": "空载损耗和空载电流测量(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "空载电流I0(%): ≤0.18(允许偏差+30%)",
+        "unit": "%"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "4",
+        "phase": "initial",
+        "requirement_index": 1,
+        "text_sha256": "7a08f10f95e9a3c7fe1f817968ec7d13290f36c9757d43f66bbedca5224ab46c"
+      },
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "200 kVA空载电流与允许偏差",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "ezc-5-r2",
+      "report_id": "EZC",
+      "dataset_split": "validation",
+      "source_file": "MinerU_markdown_EZC-001-202509-1_2069333357063135232.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200kVA",
+        "rated_voltage": "10/0.4kV"
+      },
+      "test_item": {
+        "item_no": "5",
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "负载损耗P☐(kW): ≤2.185",
+        "unit": "kW"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "5",
+        "phase": "initial",
+        "requirement_index": 1,
+        "text_sha256": "6773214de848a3501820a2f1274cefb84c1267e3a8ccf16e44adc611e448fc45"
+      },
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "table",
+      "selection_reason": "200 kVA S20-NX2负载损耗",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "ezc-10-r1",
+      "report_id": "EZC",
+      "dataset_split": "validation",
+      "source_file": "MinerU_markdown_EZC-001-202509-1_2069333357063135232.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200kVA",
+        "rated_voltage": "10/0.4kV"
+      },
+      "test_item": {
+        "item_no": "10",
+        "project_name": "线端雷电全波冲击试验(LI)(型式试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压线端全波电压(kV): 75kV",
+        "unit": "kV"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "10",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "19843e3fb08d474e8b0c7e6113a7da248d0179248d4b5779362a5e879e6ee0bc"
+      },
+      "retrieval_class": "insulation_voltage",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "雷电全波冲击电压",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "ezc-8-r1",
+      "report_id": "EZC",
+      "dataset_split": "validation",
+      "source_file": "MinerU_markdown_EZC-001-202509-1_2069333357063135232.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200kVA",
+        "rated_voltage": "10/0.4kV"
+      },
+      "test_item": {
+        "item_no": "8",
+        "project_name": "绝缘液试验(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "击穿电压(kV): ≥40",
+        "unit": "kV"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "8",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "f2e834c72ddc960ada680cc98636c3872e7a1bd5ce6e30ffadb50c3536bcf71b"
+      },
+      "retrieval_class": "insulation_voltage",
+      "expected_evidence_type": "section",
+      "selection_reason": "绝缘液击穿电压",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "ezc-5-r4",
+      "report_id": "EZC",
+      "dataset_split": "validation",
+      "source_file": "MinerU_markdown_EZC-001-202509-1_2069333357063135232.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200kVA",
+        "rated_voltage": "10/0.4kV"
+      },
+      "test_item": {
+        "item_no": "5",
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "总损耗P总(kW): ≤2.40",
+        "unit": "kW"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "5",
+        "phase": "initial",
+        "requirement_index": 3,
+        "text_sha256": "f1011a8ad7cc4e226eb6b02c89430d080f61c31ca8361bdd8397030dc28fa0ca"
+      },
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "总损耗分量与求和规则",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "ezc-7-r4",
+      "report_id": "EZC",
+      "dataset_split": "validation",
+      "source_file": "MinerU_markdown_EZC-001-202509-1_2069333357063135232.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200kVA",
+        "rated_voltage": "10/0.4kV"
+      },
+      "test_item": {
+        "item_no": "7",
+        "project_name": "感应耐压试验(IVW)(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "持续时间(s): 120*(额定频率/试验频率),但不少于15s",
+        "unit": "s"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "7",
+        "phase": "initial",
+        "requirement_index": 3,
+        "text_sha256": "97a19796c2387a9d58deca6204f7fe06c4b21af1c1c8682a6a419072c9217e62"
+      },
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "section",
+      "selection_reason": "频率相关的感应耐压持续时间公式",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "ezc-1-r1",
+      "report_id": "EZC",
+      "dataset_split": "validation",
+      "source_file": "MinerU_markdown_EZC-001-202509-1_2069333357063135232.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200kVA",
+        "rated_voltage": "10/0.4kV"
+      },
+      "test_item": {
+        "item_no": "1",
+        "project_name": "绕组对地及绕组间直流绝缘电阻测量(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压对低压及地绝缘电阻(MΩ): ≥1000MΩ",
+        "unit": "MΩ"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "1",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "6f7a8eed056a51167495350f5994e4c97f613cb2ad57532d55a3784347c2d56c"
+      },
+      "retrieval_class": "report_specific",
+      "expected_evidence_type": "section",
+      "selection_reason": "报告特有绝缘电阻下限",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "ezc-11-r2",
+      "report_id": "EZC",
+      "dataset_split": "validation",
+      "source_file": "MinerU_markdown_EZC-001-202509-1_2069333357063135232.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200kVA",
+        "rated_voltage": "10/0.4kV"
+      },
+      "test_item": {
+        "item_no": "11",
+        "project_name": "温升试验(型式试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压绕组平均温升(K): ≤65",
+        "unit": "K"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "11",
+        "phase": "initial",
+        "requirement_index": 1,
+        "text_sha256": "20fd8fd842fd811df79a8c80b11ad62a819d889c82240b0bcf1d88efd4abd106"
+      },
+      "retrieval_class": "report_specific",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "高压绕组平均温升65 K差异项",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "ezc-12-r4",
+      "report_id": "EZC",
+      "dataset_split": "validation",
+      "source_file": "MinerU_markdown_EZC-001-202509-1_2069333357063135232.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200kVA",
+        "rated_voltage": "10/0.4kV"
+      },
+      "test_item": {
+        "item_no": "12",
+        "project_name": "短时过负载能力试验(型式试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "油箱外壳最高温升(K): ≤85",
+        "unit": "K"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "12",
+        "phase": "initial",
+        "requirement_index": 3,
+        "text_sha256": "6afa9cac272d4be7c31da534e4680104ed7cadd134c005d8d6838d7a1c0b5666"
+      },
+      "retrieval_class": "report_specific",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "短时过负载油箱外壳温升",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "whc-4-r1",
+      "report_id": "WHC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_WHC-001-202509-0_2069333376239493120.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "4",
+        "project_name": "空载损耗和空载电流测量(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "空载损耗Po(kW): ≤0.215",
+        "unit": "kW"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "4",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "01602bedc15c8b63053d14f4f7ad41ae7f8cc53429713d74b8f1c90b7cab6c86"
+      },
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "table",
+      "selection_reason": "200 kVA S20-NX2空载损耗",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "whc-4-r2",
+      "report_id": "WHC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_WHC-001-202509-0_2069333376239493120.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "4",
+        "project_name": "空载损耗和空载电流测量(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "空载电流I0(%): ≤0.18(1+30%)",
+        "unit": "%"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "4",
+        "phase": "initial",
+        "requirement_index": 1,
+        "text_sha256": "98b3db095fb9290cb3495b403cfc778bd70feda4d7400d39b91b314a8b39d51b"
+      },
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "空载电流基准值与允许偏差",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "whc-5-r2",
+      "report_id": "WHC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_WHC-001-202509-0_2069333376239493120.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "5",
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "负载损耗P☐(kW): ≤2.185",
+        "unit": "kW"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "5",
+        "phase": "initial",
+        "requirement_index": 1,
+        "text_sha256": "6773214de848a3501820a2f1274cefb84c1267e3a8ccf16e44adc611e448fc45"
+      },
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "table",
+      "selection_reason": "200 kVA S20-NX2负载损耗",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "whc-6-r1",
+      "report_id": "WHC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_WHC-001-202509-0_2069333376239493120.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "6",
+        "project_name": "外施耐压试验(AV)(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压对低压及地试验电压(kV): 35",
+        "unit": "kV"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "6",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "534c3c8c84cb16d60e1c0df2f7778b75777e1f550a4dda9bd463224db5da7e14"
+      },
+      "retrieval_class": "insulation_voltage",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "外施耐压试验电压",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "whc-10-r1",
+      "report_id": "WHC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_WHC-001-202509-0_2069333376239493120.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "10",
+        "project_name": "线端雷电全波冲击试验(LI)(型式试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压线端全波电压(kV): -75(1±3%)波前时间:T1:1.2 μs±30% 半峰值时间:T2:50 μs±20%",
+        "unit": "kV"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "10",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "20baee7e3b4b9403a6b7962bcebfbbad8d399d45b03e3d6a92f08a89fac27e22"
+      },
+      "retrieval_class": "insulation_voltage",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "雷电全波冲击完整波形参数",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "whc-5-r4",
+      "report_id": "WHC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_WHC-001-202509-0_2069333376239493120.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "5",
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "总损耗P总(kW): ≤2.400",
+        "unit": "kW"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "5",
+        "phase": "initial",
+        "requirement_index": 3,
+        "text_sha256": "dbd04a4e30bce6cfe2a8ed8d295fd520cb4da5a1a39779a4cfef58b1397ddfa9"
+      },
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "总损耗分量与求和规则",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "whc-7-r4",
+      "report_id": "WHC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_WHC-001-202509-0_2069333376239493120.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "7",
+        "project_name": "感应耐压试验(IVW)(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "持续时间(s): <eq>15 \\leq t \\leq 6</eq>0",
+        "unit": "s"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "7",
+        "phase": "initial",
+        "requirement_index": 3,
+        "text_sha256": "5f015595972943cd15fd4c8ac232f807b26ef5e223a6b2b316827ced34b23498"
+      },
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "section",
+      "selection_reason": "感应耐压持续时间范围",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "whc-14-2-5-r2",
+      "report_id": "WHC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_WHC-001-202509-0_2069333376239493120.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "14.2.5",
+        "project_name": "短路阻抗和负载损耗测量(重复例行试验)",
+        "phase": "repeat_routine"
+      },
+      "reported_requirement": {
+        "text": "负载损耗P☐(kW): ≤2.185",
+        "unit": "kW"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "14.2.5",
+        "phase": "repeat_routine",
+        "requirement_index": 1,
+        "text_sha256": "6773214de848a3501820a2f1274cefb84c1267e3a8ccf16e44adc611e448fc45"
+      },
+      "retrieval_class": "repeat_routine",
+      "expected_evidence_type": "table",
+      "selection_reason": "重复例行阶段负载损耗",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "whc-13-r2",
+      "report_id": "WHC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_WHC-001-202509-0_2069333376239493120.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "13",
+        "project_name": "声级测定(特殊试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "声压级<eq>L\\Box_a</eq>[dB(A)]: ≤38",
+        "unit": "dB(A)"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "13",
+        "phase": "initial",
+        "requirement_index": 1,
+        "text_sha256": "4673225b0fe875483c2198edba90c62fab42631b74eef7ca358bc91ecd8151b2"
+      },
+      "retrieval_class": "report_specific",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "声压级限值",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "whc-14-1-r4",
+      "report_id": "WHC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_WHC-001-202509-0_2069333376239493120.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "14.1",
+        "project_name": "短路承受能力试验施加电流及相电抗测量",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "试验后最大相电抗差(%): ≤2%",
+        "unit": "%"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "14.1",
+        "phase": "initial",
+        "requirement_index": 3,
+        "text_sha256": "87ecd2a5ef66e3c9f87868b640a5266d06e528f872969ebfbe798f739d39ac20"
+      },
+      "retrieval_class": "report_specific",
+      "expected_evidence_type": "section",
+      "selection_reason": "短路试验后最大相电抗差",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "xyc-4-r1",
+      "report_id": "XYC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_XYC-001-202509-0_2069333399282999296.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "4",
+        "project_name": "空载损耗和空载电流测量(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "空载损耗Po(kW): ≤0.215",
+        "unit": "kW"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "4",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "01602bedc15c8b63053d14f4f7ad41ae7f8cc53429713d74b8f1c90b7cab6c86"
+      },
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "table",
+      "selection_reason": "200 kVA S20-NX2空载损耗",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "xyc-5-r2",
+      "report_id": "XYC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_XYC-001-202509-0_2069333399282999296.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "5",
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "负载损耗P☐(kW): ≤2.185",
+        "unit": "kW"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "5",
+        "phase": "initial",
+        "requirement_index": 1,
+        "text_sha256": "6773214de848a3501820a2f1274cefb84c1267e3a8ccf16e44adc611e448fc45"
+      },
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "table",
+      "selection_reason": "200 kVA S20-NX2负载损耗",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "xyc-5-r3",
+      "report_id": "XYC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_XYC-001-202509-0_2069333399282999296.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "5",
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "短路阻抗Z☐(%): 4.0(1±10%)",
+        "unit": "%"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "5",
+        "phase": "initial",
+        "requirement_index": 2,
+        "text_sha256": "e40ca9b7ac863a183c6a19df7d0ec9a710911da6bc9ebb30f9000437ce85dd20"
+      },
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "短路阻抗及允许偏差",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "xyc-6-r1",
+      "report_id": "XYC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_XYC-001-202509-0_2069333399282999296.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "6",
+        "project_name": "外施耐压试验(AV)(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压对低压及地试验电压(kV): 35(1±1%)",
+        "unit": "kV"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "6",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "be826a08f41e6631566f0ff129f19eba53a909d41c801b1d3f08e0c1d769835e"
+      },
+      "retrieval_class": "insulation_voltage",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "带±1%要求的外施耐压",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "xyc-10-r1",
+      "report_id": "XYC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_XYC-001-202509-0_2069333399282999296.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "10",
+        "project_name": "线端雷电全波冲击试验(LI)(型式试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压线端全波电压(kV): -75(1±3%)",
+        "unit": "kV"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "10",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "c16016940d210b3fdeb11fc035e04a5418968e9546d2a341b660ed1dfec18259"
+      },
+      "retrieval_class": "insulation_voltage",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "雷电全波冲击电压",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "xyc-5-r4",
+      "report_id": "XYC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_XYC-001-202509-0_2069333399282999296.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "5",
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "总损耗P总(kW): ≤2.400",
+        "unit": "kW"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "5",
+        "phase": "initial",
+        "requirement_index": 3,
+        "text_sha256": "dbd04a4e30bce6cfe2a8ed8d295fd520cb4da5a1a39779a4cfef58b1397ddfa9"
+      },
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "总损耗分量与求和规则",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "xyc-7-r4",
+      "report_id": "XYC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_XYC-001-202509-0_2069333399282999296.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "7",
+        "project_name": "感应耐压试验(IVW)(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "持续时间(s): 15≤t≤60",
+        "unit": "s"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "7",
+        "phase": "initial",
+        "requirement_index": 3,
+        "text_sha256": "e899d0ac11c1c1dc1646f41395c51643e903c1e253ad319217251da76c13f527"
+      },
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "section",
+      "selection_reason": "感应耐压持续时间范围",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "xyc-3-r1",
+      "report_id": "XYC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_XYC-001-202509-0_2069333399282999296.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "3",
+        "project_name": "电压比测量和联结组标号检定(例行试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "主分接电压比偏差: 规定电压比的±0.5%;与实际阻抗百分数的±1/10中的较低者",
+        "unit": "%"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "3",
+        "phase": "initial",
+        "requirement_index": 0,
+        "text_sha256": "2f78478c9e05f471f883a15a7b35a858ec557067abebc254d5cf53cd2affc70c"
+      },
+      "retrieval_class": "report_specific",
+      "expected_evidence_type": "section",
+      "selection_reason": "主分接电压比复合偏差规则",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "xyc-11-r2",
+      "report_id": "XYC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_XYC-001-202509-0_2069333399282999296.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "11",
+        "project_name": "温升试验(型式试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压绕组平均温升(K): ≤60",
+        "unit": "K"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "11",
+        "phase": "initial",
+        "requirement_index": 1,
+        "text_sha256": "6dca2117960eeedd35e9a3ea7f9d99b823d013bb98a08d3a95c4942ef7495fe7"
+      },
+      "retrieval_class": "report_specific",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "高压绕组平均温升",
+      "gold_status": "candidate_pending_evidence_review"
+    },
+    {
+      "case_id": "xyc-12-r4",
+      "report_id": "XYC",
+      "dataset_split": "test",
+      "source_file": "MinerU_markdown_XYC-001-202509-0_2069333399282999296.md",
+      "sample_context": {
+        "sample_name": "配电变压器",
+        "model": "S20-M.RL-200/10-NX2",
+        "rated_capacity": "200 kVA",
+        "rated_voltage": "10/0.4 kV"
+      },
+      "test_item": {
+        "item_no": "12",
+        "project_name": "短时过负载能力试验(型式试验)",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "油箱外壳最高温升(K): ≤85",
+        "unit": "K"
+      },
+      "source_locator": {
+        "section": "检测结果汇总",
+        "item_no": "12",
+        "phase": "initial",
+        "requirement_index": 3,
+        "text_sha256": "6afa9cac272d4be7c31da534e4680104ed7cadd134c005d8d6838d7a1c0b5666"
+      },
+      "retrieval_class": "report_specific",
+      "expected_evidence_type": "mixed",
+      "selection_reason": "短时过负载油箱外壳温升",
+      "gold_status": "candidate_pending_evidence_review"
+    }
+  ]
+}

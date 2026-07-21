@@ -13,7 +13,7 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 # Keys we recognize. The frontend renders known keys into forms; unknown keys
 # are still preserved round-trip.
 KNOWN_KEYS = [
-    "llm.base_url", "llm.api_key", "llm.model", "llm.response_format",
+    "llm.base_url", "llm.api_key", "llm.model",
     "mineru.token", "mineru.base_url", "mineru.model_version",
     "ocr.mode", "ocr.base_url", "ocr.token", "ocr.headers",
     "ocr.auto_on_create", "ocr.max_concurrency",
@@ -28,6 +28,8 @@ def get_settings():
     s = db.get_all_settings()
     # mask api_key / token for display
     masked = dict(s)
+    masked.setdefault("llm.base_url", "https://api.deepseek.com")
+    masked.setdefault("llm.model", "deepseek-v4-flash")
     masked.setdefault("retrieval.lexical_production_enabled", "true")
     masked.setdefault("retrieval.lexical_shadow_enabled", "true")
     for k in ("llm.api_key", "ocr.token"):
@@ -41,7 +43,11 @@ def get_settings():
 def update_settings(body: SettingsUpdate):
     for k, v in body.settings.items():
         # never persist the masked sentinel back
-        if k in ("llm.api_key", "ocr.token") and v.endswith("…"):
+        if k in ("llm.api_key", "ocr.token") and _is_masked_secret(v):
             continue
         db.set_setting(k, v)
     return get_settings()
+
+
+def _is_masked_secret(value: str) -> bool:
+    return "…" in value or value == "••••"

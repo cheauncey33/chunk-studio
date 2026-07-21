@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from http import HTTPStatus
 import json
-import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -14,12 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 sys.path.insert(0, str(BACKEND))
 
-from app import db, embeddings  # noqa: E402
+from app import embeddings, llm  # noqa: E402
 
 
 DEFAULT_CASES = ROOT / "evaluation" / "retrieval_seed_cases_v1.json"
 DEFAULT_OUTPUT = BACKEND / "data" / "reports" / "model_naming_rule_experiment_v1.json"
-DEFAULT_LLM_MODEL = "qwen-flash"
+DEFAULT_LLM_MODEL = llm.DEFAULT_MODEL
 CASE_ID = "hbjc-load-loss-pk"
 RAW_MODEL = "S20-M.RL-400/10-NX2"
 RRF_K = 60
@@ -56,24 +54,10 @@ SYSTEM_PROMPT = """你是产品型号命名规则解析器。你的输入只有�
 
 
 def _parse_json_object(content: Any) -> dict[str, Any]:
-    if isinstance(content, list):
-        content = "".join(
-            str(item.get("text") or "") if isinstance(item, dict) else str(item)
-            for item in content
-        )
-    text = str(content or "").strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    parsed = json.loads(text)
-    if not isinstance(parsed, dict):
-        raise ValueError("model response must be a JSON object")
-    return parsed
+    return llm.parse_json_object(content)
 
 
 def decode_model(markdown: str, *, llm_model: str) -> dict[str, Any]:
-    api_key = os.environ.get("DASHSCOPE_API_KEY") or db.get_setting("llm.api_key")
-    if not api_key:
-        raise RuntimeError("DashScope API key is not configured")
     user_content = json.dumps(
         {
             "report_context": {
@@ -89,41 +73,14 @@ def decode_model(markdown: str, *, llm_model: str) -> dict[str, Any]:
         },
         ensure_ascii=False,
     )
-    if llm_model == "qwen3.6-27b":
-        from dashscope import MultiModalConversation
-
-        response = MultiModalConversation.call(
-            api_key=api_key,
-            model=llm_model,
-            messages=[
-                {"role": "system", "content": [{"text": SYSTEM_PROMPT}]},
-                {"role": "user", "content": [{"text": user_content}]},
-            ],
-            result_format="message",
-            enable_thinking=False,
-            temperature=0,
-        )
-    else:
-        from dashscope import Generation
-
-        response = Generation.call(
-            api_key=api_key,
-            model=llm_model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            result_format="message",
-            response_format={"type": "json_object"},
-            temperature=0,
-        )
-    if response.status_code != HTTPStatus.OK:
-        raise RuntimeError(
-            f"model naming decode failed: status={response.status_code} "
-            f"code={response.code} message={response.message}"
-        )
-    content = response.output["choices"][0]["message"]["content"]
-    decoded = _parse_json_object(content)
+    decoded = llm.chat_json(
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        model=llm_model,
+        temperature=0,
+    )
     if decoded.get("raw_model") != RAW_MODEL:
         raise ValueError("model response changed the raw model")
     table_target = str(decoded.get("table_target") or "").strip()

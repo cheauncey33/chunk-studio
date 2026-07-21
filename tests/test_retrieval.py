@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from http import HTTPStatus
-from types import SimpleNamespace
 import sys
 
 import pytest
@@ -277,32 +275,44 @@ def test_query_rewrite_normalizes_split_ocr_equation_before_validation(monkeypat
     )
     captured: dict = {}
 
-    def generation_call(**kwargs):
+    def chat_json(messages, **kwargs):
+        captured["messages"] = messages
         captured.update(kwargs)
-        return SimpleNamespace(
-            status_code=HTTPStatus.OK,
-            output={
-                "choices": [{
-                    "message": {
-                        "content": {
-                            "semantic": "感应耐压试验持续时间 15 ≤ t ≤ 60 s 的标准证据",
-                            "keyword": "IVW 感应耐压 持续时间 15 ≤ t ≤ 60 s",
-                        }
-                    }
-                }]
-            },
-        )
+        return {
+            "semantic": "配电变压器感应耐压试验持续时间 15 ≤ t ≤ 60 s 的标准证据",
+            "keyword": "配电变压器 IVW 感应耐压试验 持续时间 15 ≤ t ≤ 60 s",
+        }
 
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
-    monkeypatch.setattr("dashscope.Generation.call", generation_call)
+    monkeypatch.setattr(retrieval.llm, "chat_json", chat_json)
 
     rewrites = retrieval.plan_query_rewrites(query)
 
     planner_query = captured["messages"][1]["content"]
+    assert captured["model"] == "deepseek-v4-flash"
     assert planner_query.endswith("持续时间(s): 15 ≤ t ≤ 60")
     assert "<eq>" not in planner_query
     assert "\\leq" not in planner_query
-    assert rewrites["semantic"] == "感应耐压试验持续时间 15 ≤ t ≤ 60 s 的标准证据"
+    assert rewrites["semantic"] == "配电变压器感应耐压试验持续时间 15 ≤ t ≤ 60 s 的标准证据"
+
+
+def test_qwen_reranker_does_not_fall_back_to_deepseek_key(monkeypatch) -> None:
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.setattr(retrieval.llm.db, "get_setting", lambda key, default="": "deepseek-key")
+
+    with pytest.raises(RuntimeError, match="DASHSCOPE_API_KEY"):
+        retrieval.rerank_documents("query", ["document"], 1)
+
+
+def test_query_rewrite_rejects_replaced_domain_term() -> None:
+    query = "配电变压器 空载电流限值 0.18%"
+
+    assert retrieval._query_domain_anchors(query) == ["配电变压器", "空载电流"]
+    with pytest.raises(ValueError, match="omitted domain terms"):
+        retrieval._validate_rewrite(
+            query,
+            "配电变压器短路阻抗限值0.18%的标准要求",
+            route="semantic",
+        )
 
 
 def test_query_rewrite_normalization_preserves_normal_text() -> None:
@@ -328,3 +338,104 @@ def test_rerank_document_strips_table_markup_before_truncation() -> None:
     assert "<td>" not in document
     assert "200 2 185" in document
     assert len(document) <= retrieval.MAX_RERANK_DOCUMENT_CHARS
+
+
+def test_hybrid_search_passes_knowledge_base_file_scope_to_dense_search() -> None:
+    seen_scopes: list[list[str]] = []
+
+    def vector_searcher(route_query: str, vector: list[float], **kwargs):
+        seen_scopes.append(kwargs["file_ids"])
+        content_type = kwargs["content_type"]
+        return {
+            "total_candidates": 1 if content_type == "table" else 0,
+            "hits": (
+                [_hit("inside", 0.9, content_type="table", text="scoped")]
+                if content_type == "table"
+                else []
+            ),
+        }
+
+    result = retrieval.hybrid_search(
+        "query",
+        top_k=1,
+        planner=lambda value: {"semantic": "semantic", "keyword": "keyword"},
+        batch_embedder=lambda queries, **kwargs: [
+            [0.1] * embeddings.DEFAULT_DIMENSION for _ in queries
+        ],
+        vector_searcher=vector_searcher,
+        reranker=lambda query, documents, top_n: [(0, 0.9)],
+        lexical_enabled=False,
+        file_ids=["file-in-kb"],
+    )
+
+    assert seen_scopes == [["file-in-kb"]] * 6
+    assert [hit["chunk_id"] for hit in result["hits"]] == ["inside"]
+
+
+def test_hybrid_search_honors_route_top_k_and_similarity_threshold() -> None:
+    seen_top_k: list[int] = []
+
+    def vector_searcher(route_query: str, vector: list[float], **kwargs):
+        seen_top_k.append(kwargs["top_k"])
+        content_type = kwargs["content_type"]
+        if content_type != "table":
+            return {"total_candidates": 0, "hits": []}
+        return {
+            "total_candidates": 2,
+            "hits": [
+                _hit("keep", 0.9, content_type="table", text="keep me"),
+                _hit("drop", 0.4, content_type="table", text="drop me"),
+            ],
+        }
+
+    def reranker(original_query: str, documents: list[str], top_n: int):
+        ranked = []
+        for index, text in enumerate(documents):
+            score = 0.95 if "keep" in text else 0.1
+            ranked.append((index, score))
+        return ranked[:top_n]
+
+    result = retrieval.hybrid_search(
+        "query",
+        top_k=5,
+        route_top_k=7,
+        candidates_per_type=5,
+        rrf_k=40,
+        similarity_threshold=0.5,
+        planner=lambda value: {"semantic": "semantic", "keyword": "keyword"},
+        batch_embedder=lambda queries, **kwargs: [
+            [0.1] * embeddings.DEFAULT_DIMENSION for _ in queries
+        ],
+        vector_searcher=vector_searcher,
+        reranker=reranker,
+        lexical_enabled=False,
+    )
+
+    assert seen_top_k
+    assert all(value == 7 for value in seen_top_k)
+    assert [hit["chunk_id"] for hit in result["hits"]] == ["keep"]
+
+
+def test_similarity_threshold_does_not_replace_zero_rerank_score_with_dense_score() -> None:
+    def vector_searcher(route_query: str, vector: list[float], **kwargs):
+        if kwargs["content_type"] != "table":
+            return {"total_candidates": 0, "hits": []}
+        return {
+            "total_candidates": 1,
+            "hits": [_hit("rejected", 0.9, content_type="table", text="candidate")],
+        }
+
+    result = retrieval.hybrid_search(
+        "query",
+        top_k=1,
+        similarity_threshold=0.5,
+        planner=lambda value: {"semantic": "semantic", "keyword": "keyword"},
+        batch_embedder=lambda queries, **kwargs: [
+            [0.1] * embeddings.DEFAULT_DIMENSION for _ in queries
+        ],
+        vector_searcher=vector_searcher,
+        reranker=lambda query, documents, top_n: [(0, 0.0)],
+        lexical_enabled=False,
+    )
+
+    assert result["hits"] == []

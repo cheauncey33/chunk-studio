@@ -13,9 +13,12 @@ BACKEND = ROOT / "backend"
 sys.path.insert(0, str(BACKEND))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from app import db  # noqa: E402
+from app import db, embeddings, llm  # noqa: E402
 from app.evidence_locator import chunk_text_sha256  # noqa: E402
 from build_retrieval_evidence_reviews import (  # noqa: E402
+    FINAL_PER_TYPE,
+    RRF_K,
+    ROUTE_TOP_K,
     _call_model,
     _merge_hits,
     _production_query,
@@ -23,12 +26,6 @@ from build_retrieval_evidence_reviews import (  # noqa: E402
 from extract_report_test_items import extract_report  # noqa: E402
 
 
-PARAMETER_PROMPT = ROOT / "evaluation" / "prompts" / "report_parameter_extraction_v1.md"
-ITEM_PROMPT = ROOT / "evaluation" / "prompts" / "report_test_item_extraction_v1.md"
-NAMING_PROMPT = ROOT / "evaluation" / "prompts" / "model_naming_decode_v1.md"
-QUERY_PROMPT = ROOT / "evaluation" / "prompts" / "retrieval_query_planner_v1.md"
-JUDGE_PROMPT = ROOT / "evaluation" / "prompts" / "standard_value_audit_judge_v1.md"
-MANUAL_KNOWLEDGE_RULES = ROOT / "evaluation" / "manual_knowledge_rules_v1.json"
 CASE_POOL = ROOT / "evaluation" / "retrieval_case_pool_v1.json"
 GOLD = ROOT / "evaluation" / "retrieval_gold_candidates_v1.json"
 DEFAULT_OUTPUT = BACKEND / "data" / "reports" / "hbjc_end_to_end_audit_v1.json"
@@ -48,19 +45,71 @@ PEER_CONTEXT_RULES = [
 ]
 
 
-def _extract_parameters(markdown: str) -> dict[str, str]:
-    result = _call_model(PARAMETER_PROMPT.read_text(encoding="utf-8"), {"report_markdown": markdown})
+def _load_assistant_version(assistant_id: str) -> dict[str, Any]:
+    row = db.get_conn().execute(
+        """SELECT v.*
+           FROM audit_assistants a
+           JOIN assistant_versions v ON v.id=a.active_version_id
+           WHERE a.id=? AND a.status='active'""",
+        (assistant_id,),
+    ).fetchone()
+    if not row:
+        raise ValueError(f"active assistant version not found: {assistant_id}")
+    payload = dict(row)
+    for key in ("model_config", "node_prompts", "rules", "retrieval_config"):
+        payload[key] = json.loads(payload[key] or "{}")
+    if payload["model_config"].get("provider") != "deepseek":
+        raise ValueError("only DeepSeek assistant versions can run this workflow")
+    return payload
+
+
+def _assistant_evidence_file_ids(
+    assistant_id: str,
+    *,
+    excluded_file_ids: set[str] | None = None,
+) -> list[str]:
+    excluded = excluded_file_ids or set()
+    file_ids = [
+        file_id
+        for file_id in db.assistant_scoped_file_ids(assistant_id)
+        if file_id not in excluded
+    ]
+    if not file_ids:
+        raise ValueError("assistant has no evidence files after excluding runtime inputs")
+    return file_ids
+
+
+def _prompt_content(profile: dict[str, Any], key: str) -> str:
+    prompt = profile["node_prompts"].get(key) or {}
+    content = str(prompt.get("content") or "")
+    if not content:
+        raise ValueError(f"assistant version omitted prompt: {key}")
+    return content
+
+
+def _extract_parameters(markdown: str, *, prompt: str, model: str) -> dict[str, str]:
+    result = _call_model(
+        prompt,
+        {"report_markdown": markdown},
+        model=model,
+    )
     if set(result) != PARAMETER_FIELDS:
         raise ValueError(f"parameter extraction fields mismatch: {sorted(result)}")
     return {key: str(result[key] or "").strip() for key in sorted(PARAMETER_FIELDS)}
 
 
-def _decode_model(parameters: dict[str, str], naming_markdown: str) -> dict[str, Any]:
-    result = _call_model(NAMING_PROMPT.read_text(encoding="utf-8"), {
+def _decode_model(
+    parameters: dict[str, str],
+    naming_markdown: str,
+    *,
+    prompt: str,
+    model: str,
+) -> dict[str, Any]:
+    result = _call_model(prompt, {
         "raw_model": parameters["model"],
         "report_parameters": parameters,
         "naming_rule_markdown": naming_markdown,
-    })
+    }, model=model)
     if result.get("raw_model") != parameters["model"]:
         raise ValueError("naming decoder changed the raw model")
     for feature in result.get("decoded_features") or []:
@@ -69,8 +118,14 @@ def _decode_model(parameters: dict[str, str], naming_markdown: str) -> dict[str,
     return result
 
 
-def _load_manual_knowledge_rules() -> dict[str, Any]:
-    payload = json.loads(MANUAL_KNOWLEDGE_RULES.read_text(encoding="utf-8"))
+def _load_manual_knowledge_rules(
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if payload is None:
+        db.init_db()
+        payload = _load_assistant_version(
+            "assistant_oil_transformer_audit"
+        )["rules"]
     if payload.get("scope") != "knowledge_base_manual_rules":
         raise ValueError("manual knowledge rule scope mismatch")
     if not isinstance(payload.get("rules"), list):
@@ -180,18 +235,83 @@ def _candidate_locator(candidate: dict[str, Any]) -> tuple[str, str, str]:
     return metadata.get("standard_no", ""), candidate["content_type"], chunk_text_sha256(candidate["text"])
 
 
+def _retrieval_runtime_config(profile: dict[str, Any]) -> dict[str, int | float]:
+    raw = profile["retrieval_config"]
+    values: dict[str, int | float] = {
+        "top_k": int(raw.get("top_k", 10)),
+        "route_top_k": int(raw.get("route_top_k", ROUTE_TOP_K)),
+        "candidate_count_per_type": int(
+            raw.get("candidate_count_per_type", FINAL_PER_TYPE)
+        ),
+        "rrf_k": int(raw.get("rrf_k", RRF_K)),
+        "similarity_threshold": float(raw.get("similarity_threshold", 0.2)),
+    }
+    bounds = {
+        "top_k": (1, 50),
+        "route_top_k": (1, 100),
+        "candidate_count_per_type": (1, 100),
+        "rrf_k": (1, 200),
+        "similarity_threshold": (-1, 1),
+    }
+    for key, value in values.items():
+        lower, upper = bounds[key]
+        if not lower <= value <= upper:
+            raise ValueError(f"assistant retrieval setting {key} must be between {lower} and {upper}")
+    return values
+
+
+def _select_retrieval_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    top_k: int,
+    similarity_threshold: float,
+) -> list[dict[str, Any]]:
+    eligible = [
+        candidate
+        for candidate in candidates
+        if max(candidate["route_scores"].values(), default=-1)
+        >= similarity_threshold
+    ]
+    eligible.sort(key=lambda item: item["rrf_score"], reverse=True)
+    return eligible[:top_k]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path)
     parser.add_argument("--naming-rule", type=Path, required=True)
     parser.add_argument("--report-id", default="HBJC")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--judge-provider", choices=("dashscope", "openai_compatible"), default="dashscope")
-    parser.add_argument("--judge-model", default="qwen3.6-27b")
-    parser.add_argument("--judge-base-url", default="")
+    parser.add_argument("--assistant-id", default="assistant_oil_transformer_audit")
+    parser.add_argument("--report-file-id")
+    parser.add_argument("--naming-rule-file-id")
+    parser.add_argument("--judge-model")
     args = parser.parse_args()
 
     db.init_db()
+    profile = _load_assistant_version(args.assistant_id)
+    excluded_file_ids = {
+        value for value in (args.report_file_id, args.naming_rule_file_id) if value
+    }
+    evidence_file_ids = _assistant_evidence_file_ids(
+        args.assistant_id,
+        excluded_file_ids=excluded_file_ids,
+    )
+    configured_model = str(profile["model_config"].get("model") or "deepseek-v4-flash")
+    judge_model = args.judge_model or configured_model
+    if not judge_model.lower().startswith("deepseek"):
+        raise ValueError("judge model must be a DeepSeek model")
+    retrieval_config = _retrieval_runtime_config(profile)
+    top_k = int(retrieval_config["top_k"])
+    route_top_k = int(retrieval_config["route_top_k"])
+    final_per_type = int(retrieval_config["candidate_count_per_type"])
+    rrf_k = int(retrieval_config["rrf_k"])
+    similarity_threshold = float(retrieval_config["similarity_threshold"])
+    parameter_prompt = _prompt_content(profile, "report_parameters")
+    item_prompt = _prompt_content(profile, "test_items")
+    naming_prompt = _prompt_content(profile, "model_decode")
+    query_prompt = _prompt_content(profile, "query_planner")
+    judge_prompt = _prompt_content(profile, "audit_judge")
     markdown = args.report.read_text(encoding="utf-8")
     checkpoint_path = args.output.with_suffix(".checkpoint.json")
     checkpoint = (
@@ -199,17 +319,24 @@ def main() -> None:
         if checkpoint_path.exists()
         else {"version": 1, "cases": []}
     )
-    parameters = checkpoint.get("parameters") or _extract_parameters(markdown)
+    parameters = checkpoint.get("parameters") or _extract_parameters(
+        markdown,
+        prompt=parameter_prompt,
+        model=judge_model,
+    )
     checkpoint["parameters"] = parameters
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
     extracted = checkpoint.get("extracted_report") or extract_report(
-        args.report, prompt=ITEM_PROMPT.read_text(encoding="utf-8"), model="qwen3.6-27b"
+        args.report, prompt=item_prompt, model=judge_model
     )
     checkpoint["extracted_report"] = extracted
     checkpoint_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
     decoded = checkpoint.get("model_decode") or _decode_model(
-        parameters, args.naming_rule.read_text(encoding="utf-8")
+        parameters,
+        args.naming_rule.read_text(encoding="utf-8"),
+        prompt=naming_prompt,
+        model=judge_model,
     )
     checkpoint["model_decode"] = decoded
     checkpoint_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -222,9 +349,7 @@ def main() -> None:
         case["case_id"]: case
         for case in json.loads(GOLD.read_text(encoding="utf-8"))["cases"]
     }
-    query_prompt = QUERY_PROMPT.read_text(encoding="utf-8")
-    judge_prompt = JUDGE_PROMPT.read_text(encoding="utf-8")
-    manual_knowledge_rules = _load_manual_knowledge_rules()
+    manual_knowledge_rules = _load_manual_knowledge_rules(profile["rules"])
     results = list(checkpoint.get("cases") or [])
     completed_ids = {item["case_id"] for item in results}
     for index, case in enumerate(cases, start=1):
@@ -245,23 +370,43 @@ def main() -> None:
             manual_knowledge_rules,
             runtime_case,
         )
-        planned = _call_model(query_prompt, {**runtime_case, "decoded_model": decoded})
+        planner_input = {**runtime_case, "decoded_model": decoded}
+        planned = _call_model(query_prompt, planner_input, model=judge_model)
         queries = {"production": _production_query(runtime_case)}
         for route in ("semantic", "keyword", "table_target", "section_target"):
             value = str(planned.get(route) or "").strip()
             if value:
                 queries[route] = value
-        candidates = _merge_hits(queries, "table") + _merge_hits(queries, "section")
-        candidates.sort(key=lambda item: item["rrf_score"], reverse=True)
+        candidates = _merge_hits(
+            queries,
+            "table",
+            route_top_k=route_top_k,
+            final_per_type=final_per_type,
+            rrf_k=rrf_k,
+            file_ids=evidence_file_ids,
+        ) + _merge_hits(
+            queries,
+            "section",
+            route_top_k=route_top_k,
+            final_per_type=final_per_type,
+            rrf_k=rrf_k,
+            file_ids=evidence_file_ids,
+        )
+        candidates = _select_retrieval_candidates(
+            candidates,
+            top_k=top_k,
+            similarity_threshold=similarity_threshold,
+        )
         for rank, candidate in enumerate(candidates, start=1):
             candidate["candidate_key"] = f"c{rank:02d}"
-        judgment = _call_model(judge_prompt, {
+        judge_input = {
             **runtime_case,
             "decoded_model": decoded,
             "peer_report_context": peer_report_context,
             "manual_knowledge_rules": selected_manual_knowledge_rules,
             "candidates": [_compact_candidate(candidate) for candidate in candidates],
-        }, model=args.judge_model, provider=args.judge_provider, base_url=args.judge_base_url or None)
+        }
+        judgment = _call_model(judge_prompt, judge_input, model=judge_model)
         selected = set(judgment.get("evidence_candidate_keys") or [])
         judgment["evidence"] = [
             _compact_candidate(candidate) for candidate in candidates
@@ -273,6 +418,7 @@ def main() -> None:
             if evidence["label"] == "direct_candidate"
         }
         hit_hashes = {chunk_text_sha256(candidate["text"]) for candidate in candidates}
+        compact_candidates = [_compact_candidate(candidate) for candidate in candidates]
         results.append({
             "case_id": case["case_id"],
             **runtime_case,
@@ -283,6 +429,36 @@ def main() -> None:
             "direct_gold_available": bool(gold_hashes),
             "direct_gold_recalled": bool(gold_hashes & hit_hashes),
             "judgment": judgment,
+            "workflow_trace": {
+                "query_planner": {
+                    "input": planner_input,
+                    "output": planned,
+                },
+                "retrieval": {
+                    "input": {"queries": queries},
+                    "output": {
+                        "candidate_counts": {
+                            kind: sum(c["content_type"] == kind for c in candidates)
+                            for kind in ("table", "section")
+                        },
+                        "candidates": compact_candidates,
+                    },
+                },
+                "audit_judge": {
+                    "input": judge_input,
+                    "output": judgment,
+                },
+                "gold_comparison": {
+                    "input": {
+                        "direct_gold_text_sha256": sorted(gold_hashes),
+                        "retrieved_text_sha256": sorted(hit_hashes),
+                    },
+                    "output": {
+                        "direct_gold_available": bool(gold_hashes),
+                        "direct_gold_recalled": bool(gold_hashes & hit_hashes),
+                    },
+                },
+            },
         })
         checkpoint["cases"] = results
         checkpoint_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -294,15 +470,66 @@ def main() -> None:
         "database_writes": False,
         "report": str(args.report),
         "naming_rule": str(args.naming_rule),
-        "manual_knowledge_rules": str(MANUAL_KNOWLEDGE_RULES),
+        "assistant_id": args.assistant_id,
+        "assistant_version_id": profile["id"],
+        "assistant_version": profile["version"],
+        "manual_knowledge_rules": "assistant_version.rules",
         "manual_knowledge_rule_summary": {
             "version": manual_knowledge_rules.get("version"),
             "status": manual_knowledge_rules.get("status"),
             "rule_ids": [rule.get("rule_id") for rule in manual_knowledge_rules.get("rules", [])],
         },
-        "judge_provider": args.judge_provider,
-        "judge_model": args.judge_model,
-        "judge_base_url": args.judge_base_url or None,
+        "judge_provider": "deepseek",
+        "judge_model": judge_model,
+        "workflow_definition": {
+            "version": 1,
+            "assistant_id": args.assistant_id,
+            "assistant_version_id": profile["id"],
+            "provider_config": llm.public_config(model=judge_model),
+            "retrieval_config": {
+                "embedding_model": embeddings.DEFAULT_MODEL,
+                "embedding_dimension": embeddings.DEFAULT_DIMENSION,
+                "top_k": top_k,
+                "route_top_k": route_top_k,
+                "final_per_type": final_per_type,
+                "rrf_k": rrf_k,
+                "similarity_threshold": similarity_threshold,
+                "content_types": ["table", "section"],
+                "scoped_file_count": len(evidence_file_ids),
+            },
+            "prompts": {
+                key: dict(value)
+                for key, value in profile["node_prompts"].items()
+                if key in {
+                    "report_parameters",
+                    "test_items",
+                    "model_decode",
+                    "query_planner",
+                    "audit_judge",
+                }
+            },
+            "global_trace": {
+                "report_parameters": {
+                    "input": {"report_markdown": markdown},
+                    "output": parameters,
+                },
+                "test_items": {
+                    "input": {
+                        "report_id": args.report_id,
+                        "report_markdown": markdown,
+                    },
+                    "output": extracted,
+                },
+                "model_decode": {
+                    "input": {
+                        "raw_model": parameters["model"],
+                        "report_parameters": parameters,
+                        "naming_rule_markdown": args.naming_rule.read_text(encoding="utf-8"),
+                    },
+                    "output": decoded,
+                },
+            },
+        },
         "parameters": parameters,
         "model_decode": decoded,
         "extraction_summary": {"items": len(extracted["items"]), "requirements": sum(len(item["requirements"]) for item in extracted["items"])},

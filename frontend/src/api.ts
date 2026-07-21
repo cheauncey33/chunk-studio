@@ -196,6 +196,10 @@ export interface KnowledgeBaseFile extends CSFile {
   role: 'source' | 'reference'
   enabled: boolean
   chunk_count: number
+  approved_count?: number
+  parse_status?: string | null
+  parse_error?: string
+  parse_ready?: boolean
 }
 
 export interface KnowledgeBaseChunk {
@@ -381,15 +385,20 @@ export const api = {
       query: string
       top_k: number
       similarity_threshold: number
-      keyword_weight?: number
-      content_type?: string
+      route_top_k?: number
+      candidates_per_type?: number
+      rrf_k?: number
     },
   ) =>
     fetch(`${API}/knowledge-bases/${id}/retrieval-test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }).then(j<VectorSearchResponse & { knowledge_base_id: string; scoped_file_count: number }>),
+    }).then(j<VectorSearchResponse & {
+      knowledge_base_id: string
+      scoped_file_count: number
+      retrieval_params?: Record<string, number>
+    }>),
 
   listAssistants: () => fetch(`${API}/assistants`).then(j<AuditAssistant[]>),
   createAssistant: (body: { name: string; description: string }) =>
@@ -398,6 +407,16 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }).then(j<AuditAssistant>),
+  startAssistantRun: (
+    id: string,
+    body: { report_file_id: string; naming_rule_file_id?: string | null; report_id?: string },
+  ) =>
+    fetch(`${API}/assistants/${id}/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<Job>),
+  getJob: (id: string) => fetch(`${API}/jobs/${id}`).then(j<Job>),
   getActiveAssistantVersion: (id: string) =>
     fetch(`${API}/assistants/${id}/versions/active`).then(j<AssistantVersion>),
   listAssistantVersions: (id: string) =>
@@ -419,10 +438,15 @@ export const api = {
     }).then(j<AuditAssistant>),
 
   listFiles: () => fetch(`${API}/files`).then(j<CSFile[]>),
-  uploadFile: (file: File, metadata: Record<string, unknown> = {}) => {
+  uploadFile: (
+    file: File,
+    metadata: Record<string, unknown> = {},
+    knowledgeBaseId?: string,
+  ) => {
     const fd = new FormData()
     fd.append('file', file)
     fd.append('metadata', JSON.stringify(metadata))
+    if (knowledgeBaseId) fd.append('knowledge_base_id', knowledgeBaseId)
     return fetch(`${API}/files`, { method: 'POST', body: fd }).then(j<CSFile>)
   },
   deleteFile: (id: string) => fetch(`${API}/files/${id}`, { method: 'DELETE' }).then(j),

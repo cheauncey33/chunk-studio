@@ -3,12 +3,13 @@ import { useParams } from 'react-router-dom'
 import { Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, type VectorSearchHit } from '@/api'
+import { Explain } from '@/components/explain'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Input, Label, Textarea, Badge } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { EmptyState } from '@/components/empty-state'
 import { useKnowledgeBase } from '@/hooks/use-knowledge-request'
+import { helpText } from '@/lib/help-text'
 
 export default function DatasetRetrievalPage() {
   const { id = '' } = useParams()
@@ -17,8 +18,7 @@ export default function DatasetRetrievalPage() {
   const [query, setQuery] = useState('变压器的空载损耗限值是什么？')
   const [topK, setTopK] = useState(Number(initial.top_k || 10))
   const [threshold, setThreshold] = useState(Number(initial.similarity_threshold || 0.2))
-  const [keywordWeight, setKeywordWeight] = useState(Number(initial.keyword_weight || 0.3))
-  const [contentType, setContentType] = useState('all')
+  const [routeTopK, setRouteTopK] = useState(Number(initial.route_top_k || 30))
   const [hits, setHits] = useState<VectorSearchHit[]>([])
   const [debug, setDebug] = useState<Record<string, unknown> | null>(null)
   const [mode, setMode] = useState<'result' | 'debug'>('result')
@@ -32,8 +32,7 @@ export default function DatasetRetrievalPage() {
         query: query.trim(),
         top_k: topK,
         similarity_threshold: threshold,
-        keyword_weight: keywordWeight,
-        content_type: contentType === 'all' ? undefined : contentType,
+        route_top_k: routeTopK,
       })
       setHits(result.hits)
       setDebug({
@@ -42,8 +41,7 @@ export default function DatasetRetrievalPage() {
         candidate_count: result.candidate_count,
         degraded: result.degraded,
         scoped_file_count: result.scoped_file_count,
-        keyword_weight: keywordWeight,
-        content_type: contentType,
+        retrieval_params: result.retrieval_params,
       })
     } catch (err) {
       toast.error((err as Error).message)
@@ -56,58 +54,50 @@ export default function DatasetRetrievalPage() {
     <div className="grid min-h-full grid-cols-1 gap-5 pt-2 xl:grid-cols-2">
       <Card className="border-border-button bg-bg-base">
         <CardHeader>
-          <CardTitle>检索参数</CardTitle>
+          <Explain text={helpText.retrieval.page} title="试检索">
+            <CardTitle>试检索参数</CardTitle>
+          </Explain>
           <CardDescription>
-            仅在当前知识库的 {knowledgeBase?.file_count ?? 0} 个文件中检索
+            只在本知识库的 {knowledgeBase?.file_count ?? 0} 个文件里找答案。这里是试跑，不会改正式审查设置。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <Label>测试问题</Label>
-            <Textarea value={query} onChange={e => setQuery(e.target.value)} rows={4} />
+            <Explain text={helpText.retrieval.query} title="测试问题">
+              <Label>测试问题</Label>
+            </Explain>
+            <Textarea value={query} onChange={e => setQuery(e.target.value)} rows={4} placeholder="用日常说法提问，例如：空载损耗限值是多少？" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <Label>返回数量</Label>
+              <Explain text={helpText.retrieval.topK} title="返回条数">
+                <Label>返回条数</Label>
+              </Explain>
               <Input type="number" min={1} max={50} value={topK} onChange={e => setTopK(Number(e.target.value))} />
             </div>
             <div className="space-y-2">
-              <Label>相似度阈值</Label>
+              <Explain text={helpText.retrieval.threshold} title="相似度门槛">
+                <Label>相似度门槛</Label>
+              </Explain>
               <Input type="number" min={-1} max={1} step={0.05} value={threshold} onChange={e => setThreshold(Number(e.target.value))} />
             </div>
-          </div>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <Label>关键词 / 向量权重</Label>
-              <span className="text-text-secondary">
-                {keywordWeight.toFixed(2)} / {(1 - keywordWeight).toFixed(2)}
-              </span>
+            <div className="space-y-2 col-span-2">
+              <Explain text="每一路检索先捞多少条候选，再合并排序。数字越大候选越多，试检索更慢也可能更全。" title="每路召回数量">
+                <Label>每路召回数量</Label>
+              </Explain>
+              <Input type="number" min={1} max={100} value={routeTopK} onChange={e => setRouteTopK(Number(e.target.value))} />
             </div>
-            <input
-              className="w-full accent-[rgb(var(--accent-primary))]"
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={keywordWeight}
-              onChange={e => setKeywordWeight(Number(e.target.value))}
-            />
           </div>
-          <div className="space-y-2">
-            <Label>内容类型</Label>
-            <Select value={contentType} onValueChange={setContentType}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部</SelectItem>
-                <SelectItem value="table">表格</SelectItem>
-                <SelectItem value="section">章节</SelectItem>
-                <SelectItem value="image">图片</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <p className="text-xs text-text-secondary">
+            正式审查时的松紧程度，请到「审查助手 → 检索参数」里配置并保存为新版本。
+          </p>
           <div className="flex gap-2">
-            <Button onClick={run} disabled={running}>{running ? '检索中…' : '开始检索'}</Button>
-            <Button variant="outline" onClick={() => { setHits([]); setDebug(null) }}>重置</Button>
+            <Explain text={helpText.retrieval.run} title="开始检索">
+              <Button onClick={run} disabled={running}>{running ? '检索中…' : '开始检索'}</Button>
+            </Explain>
+            <Explain text={helpText.retrieval.reset} title="重置">
+              <Button variant="outline" onClick={() => { setHits([]); setDebug(null) }}>重置</Button>
+            </Explain>
           </div>
         </CardContent>
       </Card>
@@ -115,28 +105,34 @@ export default function DatasetRetrievalPage() {
       <Card className="border-border-button bg-bg-base">
         <CardHeader className="flex-row items-start justify-between space-y-0">
           <div>
-            <CardTitle>检索结果</CardTitle>
-            <CardDescription>结果保留文件、页码和切片证据。</CardDescription>
+            <Explain text={helpText.retrieval.result} title="检索结果">
+              <CardTitle>检索结果</CardTitle>
+            </Explain>
+            <CardDescription>每条都带文件名、页码和原文，方便核对。</CardDescription>
           </div>
           <div className="inline-flex rounded-md bg-bg-card p-1">
-            <button
-              className={`rounded px-3 py-1 text-sm ${mode === 'result' ? 'bg-bg-base shadow-sm' : 'text-text-secondary'}`}
-              onClick={() => setMode('result')}
-            >
-              结果
-            </button>
-            <button
-              className={`rounded px-3 py-1 text-sm ${mode === 'debug' ? 'bg-bg-base shadow-sm' : 'text-text-secondary'}`}
-              onClick={() => setMode('debug')}
-            >
-              调试
-            </button>
+            <Explain text={helpText.retrieval.result} title="结果">
+              <button
+                className={`rounded px-3 py-1 text-sm ${mode === 'result' ? 'bg-bg-base shadow-sm' : 'text-text-secondary'}`}
+                onClick={() => setMode('result')}
+              >
+                结果
+              </button>
+            </Explain>
+            <Explain text={helpText.retrieval.debug} title="调试">
+              <button
+                className={`rounded px-3 py-1 text-sm ${mode === 'debug' ? 'bg-bg-base shadow-sm' : 'text-text-secondary'}`}
+                onClick={() => setMode('debug')}
+              >
+                调试
+              </button>
+            </Explain>
           </div>
         </CardHeader>
         <CardContent>
           {mode === 'debug' ? (
             <pre className="overflow-auto rounded-lg bg-bg-canvas p-3 text-xs">
-              {JSON.stringify(debug || { message: '运行一次检索后显示路由与降级信息' }, null, 2)}
+              {JSON.stringify(debug || { message: '先点「开始检索」，这里会出现技术细节' }, null, 2)}
             </pre>
           ) : hits.length ? (
             <div className="space-y-3">
@@ -148,7 +144,7 @@ export default function DatasetRetrievalPage() {
             <EmptyState
               icon={<Search />}
               title="输入问题开始检索"
-              description="这里不会跨越当前知识库取证。"
+              description="结果只来自当前知识库，不会串到其他库。"
             />
           )}
         </CardContent>
@@ -169,13 +165,13 @@ function RetrievalResult({ hit, index }: { hit: VectorSearchHit; index: number }
         <span className="min-w-0 flex-1">
           <strong className="block truncate text-sm">{hit.file_name}</strong>
           <small className="text-text-secondary">
-            p.{hit.page} · {String(hit.business_metadata.content_type || 'text')}
+            第 {hit.page} 页 · {String(hit.business_metadata.content_type || '正文')}
           </small>
           <p className="mt-1 line-clamp-3 text-sm text-text-secondary">
             {hit.text.replace(/<[^>]+>/g, ' ').slice(0, 280)}
           </p>
         </span>
-        <Badge variant="secondary">融合 {score.toFixed(3)}</Badge>
+        <Badge variant="secondary">相关度 {score.toFixed(3)}</Badge>
       </button>
       {open && (
         <pre className="border-t border-border-button bg-bg-canvas p-3 text-xs">

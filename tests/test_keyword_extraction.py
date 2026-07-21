@@ -65,6 +65,34 @@ def test_normalizes_question_suggestions() -> None:
     ) == ["负载损耗限值是多少？", "温升试验如何进行？"]
 
 
+def test_metadata_extraction_uses_deepseek_json_client(monkeypatch) -> None:
+    captured = {}
+    item = {
+        "id": "c",
+        "metadata": '{"standard_no":"GB/T 1094.1-2013"}',
+        "text": "高压侧试验电压为35 kV。",
+    }
+
+    def chat_json(messages, **kwargs):
+        captured["messages"] = messages
+        captured.update(kwargs)
+        return {
+            "items": [{
+                "id": "c",
+                "keywords": ["高压侧", "试验电压", "35 kV"],
+                "questions": ["高压侧试验电压是多少？"],
+            }]
+        }
+
+    monkeypatch.setattr(keyword_extraction.llm, "chat_json", chat_json)
+
+    result = keyword_extraction.extract_with_llm([item])
+
+    assert result["c"]["keywords"] == ["高压侧", "试验电压", "35 kV"]
+    assert captured["model"] == "deepseek-v4-flash"
+    assert "检索元数据生成器" in captured["messages"][0]["content"]
+
+
 def test_grounding_validation_rejects_new_numbers_and_standards() -> None:
     item = {
         "id": "c",

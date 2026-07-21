@@ -1,6 +1,13 @@
 import { useMemo } from 'react'
-import type { Chunk } from './api'
-import { chunkKind as schemaChunkKind, getBusinessMetadata, getRelations, isAutoChunk } from './chunkSchema'
+import { Trash2 } from 'lucide-react'
+import type { Chunk } from '@/api'
+import { chunkKind as schemaChunkKind, getBusinessMetadata, getRelations, isAutoChunk } from '@/chunkSchema'
+import { Explain } from '@/components/explain'
+import { Badge } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { helpText } from '@/lib/help-text'
+import { cn } from '@/lib/utils'
 
 export type ChunkKind = 'manual' | 'table' | 'image' | 'section'
 
@@ -20,6 +27,20 @@ const FILTERS: Array<{ key: ChunkKind; label: string }> = [
   { key: 'section', label: '标题' },
 ]
 
+const STATUS_VARIANT: Record<string, 'secondary' | 'success' | 'warning' | 'error'> = {
+  pending: 'warning',
+  reviewed: 'secondary',
+  approved: 'success',
+  rejected: 'error',
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  pending: '待处理',
+  reviewed: '已复核',
+  approved: '已批准',
+  rejected: '已驳回',
+}
+
 export function ChunkList({ chunks, selectedId, activeKind, onKindChange, onSelect, onDelete }: Props) {
   const counts = useMemo(() => {
     return chunks.reduce<Record<ChunkKind, number>>((acc, chunk) => {
@@ -30,54 +51,114 @@ export function ChunkList({ chunks, selectedId, activeKind, onKindChange, onSele
   const visibleChunks = chunks.filter(chunk => chunkKind(chunk) === activeKind)
 
   return (
-    <div className="chunk-list">
-      <h3>当前文件切片 ({visibleChunks.length}/{chunks.length})</h3>
-      <div className="chunk-type-tabs">
-        {FILTERS.map(item => (
-          <button
-            key={item.key}
-            className={activeKind === item.key ? 'on' : ''}
-            onClick={() => onKindChange(item.key)}
-          >
-            <span>{item.label}</span>
-            <b>{counts[item.key]}</b>
-          </button>
-        ))}
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2 px-0.5">
+        <Explain text={helpText.chunkStudio.list} title="内容列表">
+          <h3 className="text-sm font-semibold text-text-primary">
+            内容片段 <span className="font-normal text-text-secondary">{visibleChunks.length}/{chunks.length}</span>
+          </h3>
+        </Explain>
       </div>
-      {chunks.length === 0 && <div className="muted">在页面上拖拽框选，创建第一个切片</div>}
-      {chunks.length > 0 && visibleChunks.length === 0 && (
-        <div className="muted">当前类型还没有切片</div>
-      )}
-      {visibleChunks.map(chunk => (
-        <div
-          key={chunk.id}
-          className={`chunk-item ${chunk.id === selectedId ? 'selected' : ''}`}
-          onClick={() => onSelect(chunk.id)}
-        >
-          <div className="ci-head">
-            <span>P{chunk.page}</span>
-            <span className={`type-pill ${chunkKind(chunk)}`}>
-              {chunkTypeLabel(chunk)}
-            </span>
-            <span className={`src ${sourceLabel(chunk)}`}>{sourceLabel(chunk)}</span>
-            <span className={`review-status ${chunk.status}`}>{chunk.status}</span>
-            {!isAutoChunk(chunk) && chunk.ocr_status && (
-              <span className={`job-status ${chunk.ocr_status}`}>ocr:{chunk.ocr_status}</span>
-            )}
+
+      <Explain text={helpText.chunkStudio.filterKind} title="按类型筛选" className="w-full">
+        <div className="inline-flex rounded-lg bg-bg-card p-1">
+          {FILTERS.map(item => (
             <button
-              className="chunk-list-delete"
-              title="删除切片"
-              onClick={(e) => {
-                e.stopPropagation()
-                onDelete(chunk.id)
-              }}
+              key={item.key}
+              type="button"
+              className={cn(
+                'rounded-md px-2.5 py-1.5 text-xs font-medium transition',
+                activeKind === item.key
+                  ? 'bg-bg-base text-text-primary shadow-sm'
+                  : 'text-text-secondary hover:text-text-primary',
+              )}
+              onClick={() => onKindChange(item.key)}
             >
-              ×
+              {item.label}
+              <span className="ml-1 tabular-nums text-text-secondary">{counts[item.key]}</span>
             </button>
-          </div>
-          <div className="ci-text">{chunkSummary(chunk)}</div>
+          ))}
         </div>
-      ))}
+      </Explain>
+
+      {chunks.length === 0 && (
+        <p className="px-1 py-6 text-center text-sm text-text-secondary">在 PDF 上拖出方框，创建第一段内容</p>
+      )}
+      {chunks.length > 0 && visibleChunks.length === 0 && (
+        <p className="px-1 py-6 text-center text-sm text-text-secondary">当前类型还没有内容</p>
+      )}
+
+      <div className="space-y-2">
+        {visibleChunks.map(chunk => {
+          const selected = chunk.id === selectedId
+          const source = sourceLabel(chunk)
+          const ocr = !isAutoChunk(chunk) && chunk.ocr_status ? chunk.ocr_status : null
+          return (
+            <div
+              key={chunk.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => onSelect(chunk.id)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onSelect(chunk.id)
+                }
+              }}
+              className={cn(
+                'group cursor-pointer rounded-xl border px-3 py-2.5 text-left transition',
+                selected
+                  ? 'border-accent-primary bg-bg-accent shadow-[inset_3px_0_0_rgb(var(--accent-primary))]'
+                  : 'border-border-button bg-bg-base hover:border-accent-primary/40 hover:bg-bg-accent/50',
+              )}
+            >
+              <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs font-semibold tabular-nums text-text-secondary">第{chunk.page}页</span>
+                    <Badge variant="secondary">{chunkTypeLabel(chunk)}</Badge>
+                    <Badge variant={STATUS_VARIANT[chunk.status] || 'secondary'}>{STATUS_LABEL[chunk.status] || chunk.status}</Badge>
+                  </div>
+                  <p className="line-clamp-2 text-sm leading-snug text-text-primary">
+                    {chunkSummary(chunk)}
+                  </p>
+                  <div className="flex flex-wrap gap-2 text-[11px] text-text-secondary">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="cursor-default">来源 {source}</span>
+                      </TooltipTrigger>
+                      <TooltipContent>{isAutoChunk(chunk) ? '系统自动切出的段落' : `文字来源：${source}`}</TooltipContent>
+                    </Tooltip>
+                    {ocr && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="cursor-default">识别 {ocr}</span>
+                        </TooltipTrigger>
+                        <TooltipContent>{chunk.ocr_error || `文字识别状态：${ocr}`}</TooltipContent>
+                      </Tooltip>
+                    )}
+                  </div>
+                </div>
+                <Explain text={helpText.chunkStudio.deleteChunk} title="删除">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 shrink-0 opacity-0 transition group-hover:opacity-100"
+                    title="删除"
+                    onClick={e => {
+                      e.stopPropagation()
+                      onDelete(chunk.id)
+                    }}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </Explain>
+              </div>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -95,7 +176,11 @@ function chunkTypeLabel(chunk: Chunk): string {
 }
 
 function sourceLabel(chunk: Chunk): string {
-  return isAutoChunk(chunk) ? 'auto' : chunk.text_source
+  if (isAutoChunk(chunk)) return '自动'
+  if (chunk.text_source === 'digital') return 'PDF 文字'
+  if (chunk.text_source === 'manual') return '人工'
+  if (chunk.text_source === 'pending') return '待识别'
+  return chunk.text_source
 }
 
 function chunkSummary(chunk: Chunk): string {

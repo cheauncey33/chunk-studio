@@ -110,6 +110,67 @@ def enqueue_parse_file(file_id: str, *, priority: int = -10, force: bool = False
     return get_job(jid)
 
 
+def enqueue_assistant_audit(
+    assistant_id: str,
+    *,
+    report_file_id: str,
+    naming_rule_file_id: str | None = None,
+    report_id: str = "HBJC",
+    priority: int = 5,
+) -> dict[str, Any]:
+    """Queue an end-to-end assistant audit trial run."""
+    row = db.get_conn().execute(
+        "SELECT id, active_version_id FROM audit_assistants WHERE id=?",
+        (assistant_id,),
+    ).fetchone()
+    if not row:
+        raise KeyError("assistant not found")
+    if not row["active_version_id"]:
+        raise ValueError("assistant has no active version")
+
+    scoped_file_ids = set(db.assistant_scoped_file_ids(assistant_id))
+    if not scoped_file_ids:
+        raise ValueError("assistant has no enabled files in its knowledge bases")
+    if report_file_id not in scoped_file_ids:
+        raise ValueError("report file is outside the assistant knowledge-base scope")
+    if naming_rule_file_id and naming_rule_file_id not in scoped_file_ids:
+        raise ValueError("naming-rule file is outside the assistant knowledge-base scope")
+
+    existing = db.get_conn().execute(
+        """SELECT * FROM jobs
+           WHERE type='audit' AND target_type='assistant' AND target_id=?
+             AND status IN ('queued','running')
+           ORDER BY created_at DESC LIMIT 1""",
+        (assistant_id,),
+    ).fetchone()
+    if existing:
+        return get_job(existing["id"])
+
+    from . import audit_run
+
+    # Validate inputs early so the API can fail fast.
+    audit_run.resolve_markdown_path(report_file_id)
+    audit_run.resolve_naming_rule_path(naming_rule_file_id)
+
+    jid = uuid.uuid4().hex
+    created = now_iso()
+    payload = {
+        "assistant_id": assistant_id,
+        "report_file_id": report_file_id,
+        "naming_rule_file_id": naming_rule_file_id,
+        "report_id": report_id,
+    }
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO jobs
+               (id, type, target_type, target_id, status, priority, attempts,
+                max_attempts, error, result, created_at)
+               VALUES (?, 'audit', 'assistant', ?, 'queued', ?, 0, 1, '', ?, ?)""",
+            (jid, assistant_id, priority, json.dumps(payload, ensure_ascii=False), created),
+        )
+    return get_job(jid)
+
+
 def get_job(job_id: str) -> dict[str, Any]:
     row = db.get_conn().execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
     if not row:
@@ -163,6 +224,8 @@ async def worker_loop() -> None:
             await _run_ocr_job(job)
         elif job["type"] == "parse" and job["target_type"] == "file":
             await _run_parse_job(job)
+        elif job["type"] == "audit" and job["target_type"] == "assistant":
+            await _run_audit_job(job)
         else:
             _fail_job(job, f"unknown job type {job['type']}")
 
@@ -235,6 +298,44 @@ async def _run_parse_job(job: dict[str, Any]) -> None:
                 finished,
                 job["id"],
             ),
+        )
+
+
+async def _run_audit_job(job: dict[str, Any]) -> None:
+    from . import audit_run
+
+    payload = job.get("result") or {}
+    assistant_id = str(payload.get("assistant_id") or job["target_id"])
+    report_file_id = str(payload.get("report_file_id") or "")
+    naming_rule_file_id = payload.get("naming_rule_file_id") or None
+    report_id = str(payload.get("report_id") or "HBJC")
+    if not report_file_id:
+        _fail_job(job, "audit job missing report_file_id")
+        return
+
+    try:
+        outcome = await asyncio.to_thread(
+            audit_run.run_assistant_audit,
+            assistant_id=assistant_id,
+            report_file_id=report_file_id,
+            naming_rule_file_id=naming_rule_file_id,
+            report_id=report_id,
+        )
+    except (ValueError, RuntimeError, OSError) as exc:
+        _fail_job(job, str(exc))
+        return
+
+    finished = now_iso()
+    result = {
+        **payload,
+        **outcome,
+    }
+    with db.transaction() as conn:
+        conn.execute(
+            """UPDATE jobs
+               SET status='done', error='', result=?, finished_at=?
+               WHERE id=?""",
+            (json.dumps(result, ensure_ascii=False), finished, job["id"]),
         )
 
 

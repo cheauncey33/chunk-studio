@@ -1,0 +1,791 @@
+{
+  "version": 2,
+  "source": "baseline_current_retrieval all_routes direct misses",
+  "top_k": 100,
+  "missed_direct_evidence": [
+    {
+      "case_id": "hbjc-5-r1",
+      "direct_evidence_index": 1,
+      "split": "development",
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "table",
+      "requirement": "负载损耗Pk(kW):≤3.615",
+      "gold_standard_no": "Q/GDW 12126.4-2024",
+      "gold_content_type": "table",
+      "gold_table_no": "6",
+      "gold_section": null,
+      "gold_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数",
+      "gold_text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+      "gold_retrieval": {
+        "purpose": "manual_corpus_recovery",
+        "method": "stable_metadata_lookup"
+      },
+      "route_exact_ranks_top100": {
+        "production": 15,
+        "semantic": 33,
+        "keyword": 13,
+        "table_target": 74,
+        "section_target": null
+      },
+      "route_anchor_ranks_top100": {
+        "production": 15,
+        "semantic": 33,
+        "keyword": 13,
+        "table_target": 74,
+        "section_target": null
+      },
+      "best_exact_rank_top100": 13,
+      "best_anchor_rank_top100": 13,
+      "merged_type_rank_top100": 32,
+      "merged_route_ranks": {
+        "production": 15,
+        "semantic": 33,
+        "keyword": 13,
+        "table_target": 74
+      },
+      "merged_rrf_score": 0.045247338209526825,
+      "merged_type_rank_top20_routes": 25,
+      "merged_top20_route_ranks": {
+        "production": 15,
+        "keyword": 13
+      },
+      "merged_top20_rrf_score": 0.027031963470319637
+    },
+    {
+      "case_id": "hbjc-7-r1",
+      "direct_evidence_index": 1,
+      "split": "development",
+      "retrieval_class": "insulation_voltage",
+      "expected_evidence_type": "mixed",
+      "requirement": "高压对低压及地试验电压(kV):35",
+      "gold_standard_no": "GB/T 1094.3-2017",
+      "gold_content_type": "table",
+      "gold_table_no": "2",
+      "gold_section": null,
+      "gold_title": "绕组的试验电压水平",
+      "gold_text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+      "gold_retrieval": {
+        "purpose": "gold_discovery_only",
+        "type_rank": 7,
+        "route_ranks": {
+          "semantic": 5,
+          "table_target": 15,
+          "section_target": 12,
+          "gold_table_1": 11,
+          "gold_table_2": 6,
+          "gold_section_1": 8,
+          "gold_section_2": 5
+        }
+      },
+      "route_exact_ranks_top100": {
+        "production": null,
+        "semantic": 5,
+        "keyword": 46,
+        "table_target": 15,
+        "section_target": 12
+      },
+      "route_anchor_ranks_top100": {
+        "production": null,
+        "semantic": 5,
+        "keyword": 46,
+        "table_target": 15,
+        "section_target": 12
+      },
+      "best_exact_rank_top100": 5,
+      "best_anchor_rank_top100": 5,
+      "merged_type_rank_top100": 21,
+      "merged_route_ranks": {
+        "semantic": 5,
+        "keyword": 46,
+        "table_target": 15,
+        "section_target": 12
+      },
+      "merged_rrf_score": 0.05204079987098855,
+      "merged_type_rank_top20_routes": 13,
+      "merged_top20_route_ranks": {
+        "semantic": 5,
+        "table_target": 15,
+        "section_target": 12
+      },
+      "merged_top20_rrf_score": 0.04260683760683761
+    },
+    {
+      "case_id": "hbjc-5-r3",
+      "direct_evidence_index": 1,
+      "split": "development",
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "mixed",
+      "requirement": "总损耗P总(kW):≤3.985",
+      "gold_standard_no": "Q/GDW 12126.4-2024",
+      "gold_content_type": "table",
+      "gold_table_no": "6",
+      "gold_section": null,
+      "gold_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数",
+      "gold_text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+      "gold_retrieval": {
+        "purpose": "manual_corpus_recovery",
+        "method": "stable_metadata_lookup"
+      },
+      "route_exact_ranks_top100": {
+        "production": 10,
+        "semantic": 39,
+        "keyword": 12,
+        "table_target": 34,
+        "section_target": null
+      },
+      "route_anchor_ranks_top100": {
+        "production": 10,
+        "semantic": 39,
+        "keyword": 12,
+        "table_target": 34,
+        "section_target": null
+      },
+      "best_exact_rank_top100": 10,
+      "best_anchor_rank_top100": 10,
+      "merged_type_rank_top100": 26,
+      "merged_route_ranks": {
+        "production": 10,
+        "semantic": 39,
+        "keyword": 12,
+        "table_target": 34
+      },
+      "merged_rrf_score": 0.0489139111479537,
+      "merged_type_rank_top20_routes": 23,
+      "merged_top20_route_ranks": {
+        "production": 10,
+        "keyword": 12
+      },
+      "merged_top20_rrf_score": 0.02817460317460317
+    },
+    {
+      "case_id": "hbjc-5-r3",
+      "direct_evidence_index": 2,
+      "split": "development",
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "mixed",
+      "requirement": "总损耗P总(kW):≤3.985",
+      "gold_standard_no": "GB/T 1094.2-2013",
+      "gold_content_type": "section",
+      "gold_table_no": null,
+      "gold_section": "7.3",
+      "gold_title": "温升的试验方法",
+      "gold_text_sha256": "3df870ab4c5268fdcbf4d08b6336652225654dd7f843c99b450d0433ad3adfed",
+      "gold_retrieval": {
+        "purpose": "manual_corpus_recovery",
+        "method": "stable_metadata_lookup"
+      },
+      "route_exact_ranks_top100": {
+        "production": null,
+        "semantic": 64,
+        "keyword": null,
+        "table_target": null,
+        "section_target": 17
+      },
+      "route_anchor_ranks_top100": {
+        "production": null,
+        "semantic": 64,
+        "keyword": null,
+        "table_target": null,
+        "section_target": 17
+      },
+      "best_exact_rank_top100": 17,
+      "best_anchor_rank_top100": 17,
+      "merged_type_rank_top100": 91,
+      "merged_route_ranks": {
+        "semantic": 64,
+        "section_target": 17
+      },
+      "merged_rrf_score": 0.021051529116045246,
+      "merged_type_rank_top20_routes": 41,
+      "merged_top20_route_ranks": {
+        "section_target": 17
+      },
+      "merged_top20_rrf_score": 0.012987012987012988
+    },
+    {
+      "case_id": "hbjc-15-5-r1",
+      "direct_evidence_index": 1,
+      "split": "development",
+      "retrieval_class": "repeat_routine",
+      "expected_evidence_type": "table",
+      "requirement": "负载损耗Pk(kW): ≤3.615",
+      "gold_standard_no": "Q/GDW 12126.4-2024",
+      "gold_content_type": "table",
+      "gold_table_no": "6",
+      "gold_section": null,
+      "gold_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数",
+      "gold_text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+      "gold_retrieval": {
+        "purpose": "manual_corpus_recovery",
+        "method": "stable_metadata_lookup"
+      },
+      "route_exact_ranks_top100": {
+        "production": 14,
+        "semantic": 38,
+        "keyword": 13,
+        "table_target": 69,
+        "section_target": null
+      },
+      "route_anchor_ranks_top100": {
+        "production": 14,
+        "semantic": 38,
+        "keyword": 13,
+        "table_target": 69,
+        "section_target": null
+      },
+      "best_exact_rank_top100": 13,
+      "best_anchor_rank_top100": 13,
+      "merged_type_rank_top100": 34,
+      "merged_route_ranks": {
+        "production": 14,
+        "semantic": 38,
+        "keyword": 13,
+        "table_target": 69
+      },
+      "merged_rrf_score": 0.045168163267649,
+      "merged_type_rank_top20_routes": 27,
+      "merged_top20_route_ranks": {
+        "production": 14,
+        "keyword": 13
+      },
+      "merged_top20_rrf_score": 0.027212143650499815
+    },
+    {
+      "case_id": "ezc-5-r2",
+      "direct_evidence_index": 1,
+      "split": "validation",
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "table",
+      "requirement": "负载损耗P☐(kW): ≤2.185",
+      "gold_standard_no": "GB 20052-2024",
+      "gold_content_type": "table",
+      "gold_table_no": "1",
+      "gold_section": null,
+      "gold_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级",
+      "gold_text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+      "gold_retrieval": {
+        "purpose": "gold_discovery_only",
+        "type_rank": 6,
+        "route_ranks": {
+          "keyword": 11,
+          "table_target": 11,
+          "gold_table_1": 1,
+          "gold_section_1": 2,
+          "gold_section_2": 18
+        }
+      },
+      "route_exact_ranks_top100": {
+        "production": 22,
+        "semantic": 23,
+        "keyword": 11,
+        "table_target": 11,
+        "section_target": null
+      },
+      "route_anchor_ranks_top100": {
+        "production": 22,
+        "semantic": 23,
+        "keyword": 11,
+        "table_target": 11,
+        "section_target": null
+      },
+      "best_exact_rank_top100": 11,
+      "best_anchor_rank_top100": 11,
+      "merged_type_rank_top100": 20,
+      "merged_route_ranks": {
+        "production": 22,
+        "semantic": 23,
+        "keyword": 11,
+        "table_target": 11
+      },
+      "merged_rrf_score": 0.0524123288068109,
+      "merged_type_rank_top20_routes": 19,
+      "merged_top20_route_ranks": {
+        "keyword": 11,
+        "table_target": 11
+      },
+      "merged_top20_rrf_score": 0.028169014084507043
+    },
+    {
+      "case_id": "ezc-10-r1",
+      "direct_evidence_index": 1,
+      "split": "validation",
+      "retrieval_class": "insulation_voltage",
+      "expected_evidence_type": "mixed",
+      "requirement": "高压线端全波电压(kV): 75kV",
+      "gold_standard_no": "GB/T 1094.3-2017",
+      "gold_content_type": "table",
+      "gold_table_no": "2",
+      "gold_section": null,
+      "gold_title": "绕组的试验电压水平",
+      "gold_text_sha256": "e05945ebd9f4e0ea171b6b0d9f0c992228bfe2aba0bb1c264db1dd4372fcabe8",
+      "gold_retrieval": {
+        "purpose": "gold_discovery_only",
+        "type_rank": 10,
+        "route_ranks": {
+          "semantic": 12,
+          "keyword": 14,
+          "table_target": 16,
+          "section_target": 17,
+          "gold_table_1": 11,
+          "gold_table_2": 11,
+          "gold_section_1": 9,
+          "gold_section_2": 13
+        }
+      },
+      "route_exact_ranks_top100": {
+        "production": 90,
+        "semantic": 12,
+        "keyword": 14,
+        "table_target": 16,
+        "section_target": 17
+      },
+      "route_anchor_ranks_top100": {
+        "production": 90,
+        "semantic": 12,
+        "keyword": 14,
+        "table_target": 16,
+        "section_target": 17
+      },
+      "best_exact_rank_top100": 12,
+      "best_anchor_rank_top100": 12,
+      "merged_type_rank_top100": 13,
+      "merged_route_ranks": {
+        "production": 90,
+        "semantic": 12,
+        "keyword": 14,
+        "table_target": 16,
+        "section_target": 17
+      },
+      "merged_rrf_score": 0.06021397679292416,
+      "merged_type_rank_top20_routes": 14,
+      "merged_top20_route_ranks": {
+        "semantic": 12,
+        "keyword": 14,
+        "table_target": 16,
+        "section_target": 17
+      },
+      "merged_top20_rrf_score": 0.05354731012625749
+    },
+    {
+      "case_id": "ezc-5-r4",
+      "direct_evidence_index": 1,
+      "split": "validation",
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "mixed",
+      "requirement": "总损耗P总(kW): ≤2.40",
+      "gold_standard_no": "Q/GDW 12126.4-2024",
+      "gold_content_type": "table",
+      "gold_table_no": "6",
+      "gold_section": null,
+      "gold_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数",
+      "gold_text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+      "gold_retrieval": {
+        "purpose": "manual_corpus_recovery",
+        "method": "stable_metadata_lookup"
+      },
+      "route_exact_ranks_top100": {
+        "production": 31,
+        "semantic": 48,
+        "keyword": 50,
+        "table_target": 48,
+        "section_target": 59
+      },
+      "route_anchor_ranks_top100": {
+        "production": 31,
+        "semantic": 48,
+        "keyword": 50,
+        "table_target": 48,
+        "section_target": 59
+      },
+      "best_exact_rank_top100": 31,
+      "best_anchor_rank_top100": 31,
+      "merged_type_rank_top100": 37,
+      "merged_route_ranks": {
+        "production": 31,
+        "semantic": 48,
+        "keyword": 50,
+        "table_target": 48,
+        "section_target": 59
+      },
+      "merged_rrf_score": 0.047001799942976416,
+      "merged_type_rank_top20_routes": null,
+      "merged_top20_route_ranks": {},
+      "merged_top20_rrf_score": null
+    },
+    {
+      "case_id": "ezc-5-r4",
+      "direct_evidence_index": 2,
+      "split": "validation",
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "mixed",
+      "requirement": "总损耗P总(kW): ≤2.40",
+      "gold_standard_no": "GB/T 1094.2-2013",
+      "gold_content_type": "section",
+      "gold_table_no": null,
+      "gold_section": "7.3",
+      "gold_title": "温升的试验方法",
+      "gold_text_sha256": "3df870ab4c5268fdcbf4d08b6336652225654dd7f843c99b450d0433ad3adfed",
+      "gold_retrieval": {
+        "purpose": "manual_corpus_recovery",
+        "method": "stable_metadata_lookup"
+      },
+      "route_exact_ranks_top100": {
+        "production": 98,
+        "semantic": null,
+        "keyword": null,
+        "table_target": null,
+        "section_target": 13
+      },
+      "route_anchor_ranks_top100": {
+        "production": 98,
+        "semantic": null,
+        "keyword": null,
+        "table_target": null,
+        "section_target": 13
+      },
+      "best_exact_rank_top100": 13,
+      "best_anchor_rank_top100": 13,
+      "merged_type_rank_top100": 96,
+      "merged_route_ranks": {
+        "production": 98,
+        "section_target": 13
+      },
+      "merged_rrf_score": 0.020027744061036933,
+      "merged_type_rank_top20_routes": 36,
+      "merged_top20_route_ranks": {
+        "section_target": 13
+      },
+      "merged_top20_rrf_score": 0.0136986301369863
+    },
+    {
+      "case_id": "whc-5-r2",
+      "direct_evidence_index": 1,
+      "split": "test",
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "table",
+      "requirement": "负载损耗P☐(kW): ≤2.185",
+      "gold_standard_no": "GB 20052-2024",
+      "gold_content_type": "table",
+      "gold_table_no": "1",
+      "gold_section": null,
+      "gold_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级",
+      "gold_text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+      "gold_retrieval": {
+        "purpose": "gold_discovery_only",
+        "type_rank": 8,
+        "route_ranks": {
+          "semantic": 5,
+          "table_target": 11,
+          "gold_table_1": 1,
+          "gold_section_1": 17
+        }
+      },
+      "route_exact_ranks_top100": {
+        "production": 21,
+        "semantic": 5,
+        "keyword": 23,
+        "table_target": 11
+      },
+      "route_anchor_ranks_top100": {
+        "production": 21,
+        "semantic": 5,
+        "keyword": 23,
+        "table_target": 11
+      },
+      "best_exact_rank_top100": 5,
+      "best_anchor_rank_top100": 5,
+      "merged_type_rank_top100": 9,
+      "merged_route_ranks": {
+        "production": 21,
+        "semantic": 5,
+        "keyword": 23,
+        "table_target": 11
+      },
+      "merged_rrf_score": 0.05386299421029892,
+      "merged_type_rank_top20_routes": 15,
+      "merged_top20_route_ranks": {
+        "semantic": 5,
+        "table_target": 11
+      },
+      "merged_top20_rrf_score": 0.02946912242686891
+    },
+    {
+      "case_id": "whc-5-r4",
+      "direct_evidence_index": 1,
+      "split": "test",
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "mixed",
+      "requirement": "总损耗P总(kW): ≤2.400",
+      "gold_standard_no": "Q/GDW 12126.4-2024",
+      "gold_content_type": "table",
+      "gold_table_no": "6",
+      "gold_section": null,
+      "gold_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数",
+      "gold_text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+      "gold_retrieval": {
+        "purpose": "manual_corpus_recovery",
+        "method": "stable_metadata_lookup"
+      },
+      "route_exact_ranks_top100": {
+        "production": 31,
+        "semantic": 48,
+        "keyword": 29,
+        "table_target": 48,
+        "section_target": 67
+      },
+      "route_anchor_ranks_top100": {
+        "production": 31,
+        "semantic": 48,
+        "keyword": 29,
+        "table_target": 48,
+        "section_target": 67
+      },
+      "best_exact_rank_top100": 29,
+      "best_anchor_rank_top100": 29,
+      "merged_type_rank_top100": 32,
+      "merged_route_ranks": {
+        "production": 31,
+        "semantic": 48,
+        "keyword": 29,
+        "table_target": 48,
+        "section_target": 67
+      },
+      "merged_rrf_score": 0.04861750031174078,
+      "merged_type_rank_top20_routes": null,
+      "merged_top20_route_ranks": {},
+      "merged_top20_rrf_score": null
+    },
+    {
+      "case_id": "whc-5-r4",
+      "direct_evidence_index": 2,
+      "split": "test",
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "mixed",
+      "requirement": "总损耗P总(kW): ≤2.400",
+      "gold_standard_no": "GB/T 1094.2-2013",
+      "gold_content_type": "section",
+      "gold_table_no": null,
+      "gold_section": "7.3",
+      "gold_title": "温升的试验方法",
+      "gold_text_sha256": "3df870ab4c5268fdcbf4d08b6336652225654dd7f843c99b450d0433ad3adfed",
+      "gold_retrieval": {
+        "purpose": "manual_corpus_recovery",
+        "method": "stable_metadata_lookup"
+      },
+      "route_exact_ranks_top100": {
+        "production": null,
+        "semantic": null,
+        "keyword": null,
+        "table_target": null,
+        "section_target": 9
+      },
+      "route_anchor_ranks_top100": {
+        "production": null,
+        "semantic": null,
+        "keyword": null,
+        "table_target": null,
+        "section_target": 9
+      },
+      "best_exact_rank_top100": 9,
+      "best_anchor_rank_top100": 9,
+      "merged_type_rank_top100": 112,
+      "merged_route_ranks": {
+        "section_target": 9
+      },
+      "merged_rrf_score": 0.014492753623188406,
+      "merged_type_rank_top20_routes": 30,
+      "merged_top20_route_ranks": {
+        "section_target": 9
+      },
+      "merged_top20_rrf_score": 0.014492753623188406
+    },
+    {
+      "case_id": "whc-14-2-5-r2",
+      "direct_evidence_index": 1,
+      "split": "test",
+      "retrieval_class": "repeat_routine",
+      "expected_evidence_type": "table",
+      "requirement": "负载损耗P☐(kW): ≤2.185",
+      "gold_standard_no": "GB 20052-2024",
+      "gold_content_type": "table",
+      "gold_table_no": "1",
+      "gold_section": null,
+      "gold_title": "10 kV 油浸式三相双绕组无励磁调压配电变压器能效等级",
+      "gold_text_sha256": "9c986dc1c0006eaf9bb304e9b75b58444fb63496818cb6dac2eef0b96ba572dc",
+      "gold_retrieval": {
+        "purpose": "gold_discovery_only",
+        "type_rank": 10,
+        "route_ranks": {
+          "semantic": 8,
+          "table_target": 11,
+          "gold_table_1": 2,
+          "gold_section_1": 16
+        }
+      },
+      "route_exact_ranks_top100": {
+        "production": 23,
+        "semantic": 8,
+        "keyword": 82,
+        "table_target": 11,
+        "section_target": null
+      },
+      "route_anchor_ranks_top100": {
+        "production": 23,
+        "semantic": 8,
+        "keyword": 82,
+        "table_target": 11,
+        "section_target": null
+      },
+      "best_exact_rank_top100": 8,
+      "best_anchor_rank_top100": 8,
+      "merged_type_rank_top100": 26,
+      "merged_route_ranks": {
+        "production": 23,
+        "semantic": 8,
+        "keyword": 82,
+        "table_target": 11
+      },
+      "merged_rrf_score": 0.047880835687405796,
+      "merged_type_rank_top20_routes": 20,
+      "merged_top20_route_ranks": {
+        "semantic": 8,
+        "table_target": 11
+      },
+      "merged_top20_rrf_score": 0.028790389395194696
+    },
+    {
+      "case_id": "xyc-4-r1",
+      "direct_evidence_index": 1,
+      "split": "test",
+      "retrieval_class": "numeric_parameter_table",
+      "expected_evidence_type": "table",
+      "requirement": "空载损耗Po(kW): ≤0.215",
+      "gold_standard_no": "Q/GDW 12126.4-2024",
+      "gold_content_type": "table",
+      "gold_table_no": "6",
+      "gold_section": null,
+      "gold_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数",
+      "gold_text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+      "gold_retrieval": {
+        "purpose": "manual_corpus_recovery",
+        "method": "stable_metadata_lookup"
+      },
+      "route_exact_ranks_top100": {
+        "production": 18,
+        "semantic": 24,
+        "keyword": 24,
+        "table_target": 23
+      },
+      "route_anchor_ranks_top100": {
+        "production": 18,
+        "semantic": 24,
+        "keyword": 24,
+        "table_target": 23
+      },
+      "best_exact_rank_top100": 18,
+      "best_anchor_rank_top100": 18,
+      "merged_type_rank_top100": 20,
+      "merged_route_ranks": {
+        "production": 18,
+        "semantic": 24,
+        "keyword": 24,
+        "table_target": 23
+      },
+      "merged_rrf_score": 0.04867822940112096,
+      "merged_type_rank_top20_routes": 27,
+      "merged_top20_route_ranks": {
+        "production": 18
+      },
+      "merged_top20_rrf_score": 0.01282051282051282
+    },
+    {
+      "case_id": "xyc-5-r4",
+      "direct_evidence_index": 1,
+      "split": "test",
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "mixed",
+      "requirement": "总损耗P总(kW): ≤2.400",
+      "gold_standard_no": "Q/GDW 12126.4-2024",
+      "gold_content_type": "table",
+      "gold_table_no": "6",
+      "gold_section": null,
+      "gold_title": "10 kV 三相油浸式无励磁调压电工钢闭口立体卷铁心配电变压器性能参数",
+      "gold_text_sha256": "2e78c1734e20190b0b4791ae4dcaa88a599007295cbfe9580892c69e84ea4ddd",
+      "gold_retrieval": {
+        "purpose": "manual_corpus_recovery",
+        "method": "stable_metadata_lookup"
+      },
+      "route_exact_ranks_top100": {
+        "production": 31,
+        "semantic": 47,
+        "keyword": 29,
+        "table_target": 48,
+        "section_target": null
+      },
+      "route_anchor_ranks_top100": {
+        "production": 31,
+        "semantic": 47,
+        "keyword": 29,
+        "table_target": 48,
+        "section_target": null
+      },
+      "best_exact_rank_top100": 29,
+      "best_anchor_rank_top100": 29,
+      "merged_type_rank_top100": 42,
+      "merged_route_ranks": {
+        "production": 31,
+        "semantic": 47,
+        "keyword": 29,
+        "table_target": 48
+      },
+      "merged_rrf_score": 0.04083001969697339,
+      "merged_type_rank_top20_routes": null,
+      "merged_top20_route_ranks": {},
+      "merged_top20_rrf_score": null
+    },
+    {
+      "case_id": "xyc-5-r4",
+      "direct_evidence_index": 2,
+      "split": "test",
+      "retrieval_class": "rule_formula",
+      "expected_evidence_type": "mixed",
+      "requirement": "总损耗P总(kW): ≤2.400",
+      "gold_standard_no": "GB/T 1094.2-2013",
+      "gold_content_type": "section",
+      "gold_table_no": null,
+      "gold_section": "7.3",
+      "gold_title": "温升的试验方法",
+      "gold_text_sha256": "3df870ab4c5268fdcbf4d08b6336652225654dd7f843c99b450d0433ad3adfed",
+      "gold_retrieval": {
+        "purpose": "manual_corpus_recovery",
+        "method": "stable_metadata_lookup"
+      },
+      "route_exact_ranks_top100": {
+        "production": null,
+        "semantic": null,
+        "keyword": null,
+        "table_target": null,
+        "section_target": 17
+      },
+      "route_anchor_ranks_top100": {
+        "production": null,
+        "semantic": null,
+        "keyword": null,
+        "table_target": null,
+        "section_target": 17
+      },
+      "best_exact_rank_top100": 17,
+      "best_anchor_rank_top100": 17,
+      "merged_type_rank_top100": 125,
+      "merged_route_ranks": {
+        "section_target": 17
+      },
+      "merged_rrf_score": 0.012987012987012988,
+      "merged_type_rank_top20_routes": 46,
+      "merged_top20_route_ranks": {
+        "section_target": 17
+      },
+      "merged_top20_rrf_score": 0.012987012987012988
+    }
+  ]
+}
