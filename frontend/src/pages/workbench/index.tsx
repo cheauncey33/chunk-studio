@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { FileUp, Loader2, Play, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
-import { api, type Job, type KnowledgeBaseFile } from '@/api'
+import { api, type CSFile, type Job } from '@/api'
 import { Badge } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -36,11 +36,13 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 /** Files meant to be audited (factory/test reports), not standards in the KB. */
-function isAuditReportFile(file: KnowledgeBaseFile): boolean {
+function isAuditReportFile(file: Pick<CSFile, 'name' | 'metadata'>): boolean {
   const meta = isRecord(file.metadata) ? file.metadata : {}
   const kind = String(meta.doc_role || meta.doc_type || '').toLowerCase()
   if (kind === 'report') return true
-  if (kind === 'standard' || kind === 'naming' || kind === 'reference') return false
+  if (kind === 'standard' || kind === 'spec' || kind === 'naming' || kind === 'reference') {
+    return false
+  }
 
   const name = file.name || ''
   if (/报告|出厂|检测报告|试验报告|检验报告|型式试验|HBJC/i.test(name)) return true
@@ -68,18 +70,16 @@ async function pollJob(jobId: string, maxAttempts = 180): Promise<Job> {
   throw new Error('审查超时，请稍后到「结果详情」查看')
 }
 
-async function waitUntilParsed(knowledgeBaseId: string, fileId: string, maxAttempts = 90): Promise<KnowledgeBaseFile> {
+async function waitUntilParsed(fileId: string, maxAttempts = 90): Promise<CSFile> {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const files = await api.listKnowledgeBaseFiles(knowledgeBaseId)
-    const hit = files.find(file => file.id === fileId)
-    if (!hit) throw new Error('上传的文件不在知识库中')
+    const hit = await api.getFile(fileId)
     if (hit.parse_ready || hit.parse_status === 'done') return hit
     if (hit.parse_status === 'failed') {
-      throw new Error(hit.parse_error || '报告解析失败，请到知识库文件页重试')
+      throw new Error(hit.parse_error || '报告解析失败，请重新上传')
     }
     await sleep(2000)
   }
-  throw new Error('报告解析超时，请到知识库文件页查看进度')
+  throw new Error('报告解析超时，请稍后重试')
 }
 
 export default function WorkbenchPage() {
@@ -104,16 +104,19 @@ export default function WorkbenchPage() {
     return knowledgeBases[0]?.id || ''
   }, [assistant, knowledgeBases])
 
-  const { data: files = [], refetch: refetchFiles, isLoading: filesLoading } = useKbFiles(knowledgeBaseId || undefined)
+  const { data: files = [], isLoading: filesLoading } = useKbFiles(knowledgeBaseId || undefined)
 
   const readyFiles = useMemo(
     () => files.filter(file => file.parse_ready || file.parse_status === 'done'),
     [files],
   )
-  const reportFiles = useMemo(
-    () => readyFiles.filter(isAuditReportFile),
-    [readyFiles],
-  )
+  // Session-local reports: history list comes later. Keep current pick + uploads here.
+  const [sessionReports, setSessionReports] = useState<CSFile[]>([])
+  const reportFiles = useMemo(() => {
+    const byId = new Map<string, CSFile>()
+    for (const file of sessionReports) byId.set(file.id, file)
+    return [...byId.values()]
+  }, [sessionReports])
   const evidenceReadyCount = useMemo(
     () => readyFiles.filter(file => !isAuditReportFile(file)).length,
     [readyFiles],
@@ -173,7 +176,7 @@ export default function WorkbenchPage() {
   }
 
   const onUpload = async (file: File | null) => {
-    if (!file || !knowledgeBaseId) return
+    if (!file) return
     if (!file.name.toLowerCase().endsWith('.pdf')) {
       toast.error('请上传 PDF 报告')
       return
@@ -184,16 +187,14 @@ export default function WorkbenchPage() {
     setResultCases([])
     setReportName('')
     try {
-      const uploaded = await api.uploadFile(
-        file,
-        { doc_role: 'report', doc_type: 'report' },
-        knowledgeBaseId,
-      )
+      // Reports are audit inputs only — do not attach to a knowledge base.
+      const uploaded = await api.uploadFile(file, { doc_role: 'report', doc_type: 'report' })
       setReportFileId(uploaded.id)
+      setSessionReports(prev => [uploaded, ...prev.filter(item => item.id !== uploaded.id)])
       setPhase('parsing')
       setStatusText('正在解析报告，请稍候…')
-      const parsed = await waitUntilParsed(knowledgeBaseId, uploaded.id)
-      await refetchFiles()
+      const parsed = await waitUntilParsed(uploaded.id)
+      setSessionReports(prev => [parsed, ...prev.filter(item => item.id !== parsed.id)])
       setReportFileId(parsed.id)
       setPhase('ready')
       setStatusText('报告已就绪，可以开始审查')
@@ -297,7 +298,7 @@ export default function WorkbenchPage() {
               />
               <button
                 type="button"
-                disabled={busy || !knowledgeBaseId}
+                disabled={busy}
                 onClick={() => uploadRef.current?.click()}
                 className={cn(
                   'flex w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border-button bg-bg-canvas px-4 py-8 text-[15px] transition hover:border-accent-primary/50 hover:bg-bg-accent',
@@ -307,12 +308,12 @@ export default function WorkbenchPage() {
                 <FileUp className="size-6 text-accent-primary" />
                 <span className="font-medium">上传检测报告 PDF</span>
                 <span className="text-sm text-text-secondary">
-                  出厂报告 / 检测报告。标准文件请放到知识库，不要当报告上传。
+                  报告只用于本次审查，不会进入知识库语料。标准 / 规范书请放到知识库。
                 </span>
               </button>
 
               <div className="space-y-2">
-                <label className="text-[15px] font-medium">或选择已上传的检测报告</label>
+                <label className="text-[15px] font-medium">本次已上传的报告</label>
                 <select
                   className="flex h-11 w-full rounded-lg border border-border-button bg-bg-base px-3 text-[15px]"
                   value={reportFileId}
@@ -329,13 +330,13 @@ export default function WorkbenchPage() {
                     </option>
                   ))}
                 </select>
-                {!reportFiles.length && !filesLoading && (
+                {!reportFiles.length && (
                   <p className="text-sm text-text-secondary">
-                    还没有检测报告。请上传出厂/检测报告（不是 GB/T、Q/GDW 这类标准文件）。标准请放到
+                    还没有本次会话报告。历史记录稍后支持；标准证据请到
                     <Link className="mx-1 text-accent-primary hover:underline" to={knowledgeBaseId ? `/kb/${knowledgeBaseId}/files` : '/knowledge-bases'}>
                       知识库
                     </Link>
-                    。
+                    准备。
                   </p>
                 )}
               </div>
@@ -381,7 +382,7 @@ export default function WorkbenchPage() {
                 </Link>
                 。流程细节在
                 <Link className="mx-1 text-accent-primary hover:underline" to="/assistants">
-                  高级设置
+                  助手
                 </Link>
                 。
               </p>

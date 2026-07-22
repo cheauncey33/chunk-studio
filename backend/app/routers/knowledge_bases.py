@@ -34,6 +34,7 @@ class KnowledgeBaseUpdate(BaseModel):
 class KnowledgeBaseFileUpdate(BaseModel):
     enabled: bool | None = None
     role: Literal["source", "reference"] | None = None
+    corpus_kind: Literal["standard", "spec"] | None = None
 
 
 class RetrievalTestRequest(BaseModel):
@@ -46,6 +47,9 @@ class RetrievalTestRequest(BaseModel):
     file_ids: list[str] | None = None
 
 
+_NON_CORPUS_ROLES = frozenset({"report", "naming"})
+
+
 def _loads(value: str | None, fallback: Any) -> Any:
     try:
         return json.loads(value or "")
@@ -53,8 +57,34 @@ def _loads(value: str | None, fallback: Any) -> Any:
         return fallback
 
 
+def _normalize_corpus_kind(value: str | None, role: str | None = None) -> str:
+    kind = str(value or "").strip().lower()
+    if kind in {"standard", "spec"}:
+        return kind
+    if str(role or "").strip().lower() == "reference":
+        return "spec"
+    return "standard"
+
+
+def _is_non_corpus_metadata(metadata: dict[str, Any]) -> bool:
+    role = str(metadata.get("doc_role") or metadata.get("doc_type") or "").strip().lower()
+    return role in _NON_CORPUS_ROLES
+
+
 def _kb_out(row: Any) -> dict[str, Any]:
     keys = set(row.keys()) if hasattr(row, "keys") else set()
+    naming_file_id = (
+        row["default_naming_file_id"] if "default_naming_file_id" in keys else None
+    )
+    naming_file_name = None
+    if naming_file_id and "default_naming_file_name" in keys:
+        naming_file_name = row["default_naming_file_name"]
+    elif naming_file_id:
+        name_row = db.get_conn().execute(
+            "SELECT name FROM files WHERE id=?",
+            (naming_file_id,),
+        ).fetchone()
+        naming_file_name = name_row["name"] if name_row else None
     return {
         "id": row["id"],
         "name": row["name"],
@@ -65,9 +95,8 @@ def _kb_out(row: Any) -> dict[str, Any]:
         "retrieval_config": _loads(row["retrieval_config"], {}),
         "manual_rules": _loads(row["manual_rules"] if "manual_rules" in keys else "{}", {}),
         "few_shot_rules": _loads(row["few_shot_rules"] if "few_shot_rules" in keys else "{}", {}),
-        "default_naming_file_id": (
-            row["default_naming_file_id"] if "default_naming_file_id" in keys else None
-        ),
+        "default_naming_file_id": naming_file_id,
+        "default_naming_file_name": naming_file_name,
         "file_count": int(row["file_count"]),
         "chunk_count": int(row["chunk_count"]),
         "created_at": row["created_at"],
@@ -78,9 +107,11 @@ def _kb_out(row: Any) -> dict[str, Any]:
 def _get_kb(knowledge_base_id: str) -> Any:
     row = db.get_conn().execute(
         """SELECT kb.*,
+                  nf.name AS default_naming_file_name,
                   COUNT(DISTINCT kbf.file_id) AS file_count,
                   COUNT(DISTINCT c.id) AS chunk_count
            FROM knowledge_bases kb
+           LEFT JOIN files nf ON nf.id=kb.default_naming_file_id
            LEFT JOIN knowledge_base_files kbf
              ON kbf.knowledge_base_id=kb.id AND kbf.enabled=1
            LEFT JOIN chunks c ON c.file_id=kbf.file_id
@@ -97,9 +128,11 @@ def _get_kb(knowledge_base_id: str) -> Any:
 def list_knowledge_bases():
     rows = db.get_conn().execute(
         """SELECT kb.*,
+                  nf.name AS default_naming_file_name,
                   COUNT(DISTINCT kbf.file_id) AS file_count,
                   COUNT(DISTINCT c.id) AS chunk_count
            FROM knowledge_bases kb
+           LEFT JOIN files nf ON nf.id=kb.default_naming_file_id
            LEFT JOIN knowledge_base_files kbf
              ON kbf.knowledge_base_id=kb.id AND kbf.enabled=1
            LEFT JOIN chunks c ON c.file_id=kbf.file_id
@@ -231,38 +264,46 @@ def update_knowledge_base(knowledge_base_id: str, body: KnowledgeBaseUpdate):
         if value is not None:
             updates.append(f"{key}=?")
             params.append(json.dumps(value, ensure_ascii=False))
+    naming_file_to_detach: str | None = None
     if body.clear_default_naming_file:
         updates.append("default_naming_file_id=?")
         params.append(None)
     elif body.default_naming_file_id is not None:
         file_id = body.default_naming_file_id.strip()
         if file_id:
-            owned = db.get_conn().execute(
-                """SELECT 1 FROM knowledge_base_files
-                   WHERE knowledge_base_id=? AND file_id=?""",
-                (knowledge_base_id, file_id),
+            exists = db.get_conn().execute(
+                "SELECT 1 FROM files WHERE id=?",
+                (file_id,),
             ).fetchone()
-            if not owned:
-                raise HTTPException(400, "naming-rule file is not in this knowledge base")
+            if not exists:
+                raise HTTPException(400, "naming-rule file not found")
             updates.append("default_naming_file_id=?")
             params.append(file_id)
+            naming_file_to_detach = file_id
         else:
             updates.append("default_naming_file_id=?")
             params.append(None)
-    if updates:
-        updates.append("updated_at=?")
-        params.append(time.strftime("%Y-%m-%dT%H:%M:%S"))
-        params.append(knowledge_base_id)
+    if updates or naming_file_to_detach:
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
         with db.transaction() as conn:
-            conn.execute(
-                f"UPDATE knowledge_bases SET {', '.join(updates)} WHERE id=?",
-                params,
-            )
+            if naming_file_to_detach:
+                conn.execute(
+                    "DELETE FROM knowledge_base_files WHERE file_id=?",
+                    (naming_file_to_detach,),
+                )
+            if updates:
+                updates.append("updated_at=?")
+                params.append(now)
+                params.append(knowledge_base_id)
+                conn.execute(
+                    f"UPDATE knowledge_bases SET {', '.join(updates)} WHERE id=?",
+                    params,
+                )
     return _kb_out(_get_kb(knowledge_base_id))
 
 
 _KB_FILE_SELECT = """SELECT f.id, f.name, f.page_count, f.metadata, f.created_at,
-                              kbf.role, kbf.enabled,
+                              kbf.role, kbf.corpus_kind, kbf.enabled,
                               COUNT(c.id) AS chunk_count,
                               SUM(CASE WHEN c.status='approved' THEN 1 ELSE 0 END)
                                   AS approved_count,
@@ -284,10 +325,24 @@ _KB_FILE_SELECT = """SELECT f.id, f.name, f.page_count, f.metadata, f.created_at
                        FROM knowledge_base_files kbf
                        JOIN files f ON f.id=kbf.file_id
                        LEFT JOIN chunks c ON c.file_id=f.id
-                       WHERE kbf.knowledge_base_id=?"""
+                       WHERE kbf.knowledge_base_id=?
+                         AND (
+                           SELECT kb.default_naming_file_id
+                           FROM knowledge_bases kb
+                           WHERE kb.id=kbf.knowledge_base_id
+                         ) IS NOT f.id
+                         AND LOWER(COALESCE(json_extract(f.metadata, '$.doc_role'), ''))
+                             NOT IN ('report', 'naming')
+                         AND LOWER(COALESCE(json_extract(f.metadata, '$.doc_type'), ''))
+                             NOT IN ('report', 'naming')"""
 
 
 def _kb_file_out(row: Any) -> dict[str, Any]:
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    corpus_kind = _normalize_corpus_kind(
+        row["corpus_kind"] if "corpus_kind" in keys else None,
+        row["role"] if "role" in keys else None,
+    )
     return {
         "id": row["id"],
         "name": row["name"],
@@ -295,6 +350,7 @@ def _kb_file_out(row: Any) -> dict[str, Any]:
         "metadata": _loads(row["metadata"], {}),
         "created_at": row["created_at"],
         "role": row["role"],
+        "corpus_kind": corpus_kind,
         "enabled": bool(row["enabled"]),
         "chunk_count": int(row["chunk_count"] or 0),
         "approved_count": int(row["approved_count"] or 0),
@@ -333,17 +389,27 @@ def list_knowledge_base_files(knowledge_base_id: str):
 @router.put("/{knowledge_base_id}/files/{file_id}")
 def add_file_to_knowledge_base(knowledge_base_id: str, file_id: str):
     _get_kb(knowledge_base_id)
-    if not db.get_conn().execute("SELECT 1 FROM files WHERE id=?", (file_id,)).fetchone():
+    file_row = db.get_conn().execute(
+        "SELECT metadata FROM files WHERE id=?",
+        (file_id,),
+    ).fetchone()
+    if not file_row:
         raise HTTPException(404, "file not found")
+    metadata = _loads(file_row["metadata"], {})
+    if _is_non_corpus_metadata(metadata if isinstance(metadata, dict) else {}):
+        raise HTTPException(400, "report/naming files cannot join a knowledge base corpus")
+    corpus_kind = _normalize_corpus_kind(
+        str((metadata or {}).get("corpus_kind") or "") if isinstance(metadata, dict) else "",
+    )
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO knowledge_base_files
-               (knowledge_base_id,file_id,role,enabled,created_at)
-               VALUES (?,?,'source',1,?)
+               (knowledge_base_id,file_id,role,corpus_kind,enabled,created_at)
+               VALUES (?,?,'source',?,1,?)
                ON CONFLICT(knowledge_base_id,file_id)
-               DO UPDATE SET enabled=1""",
-            (knowledge_base_id, file_id, now),
+               DO UPDATE SET enabled=1, corpus_kind=excluded.corpus_kind""",
+            (knowledge_base_id, file_id, corpus_kind, now),
         )
         conn.execute(
             "UPDATE knowledge_bases SET updated_at=? WHERE id=?",
@@ -370,7 +436,13 @@ def update_knowledge_base_file(
     if body.enabled is not None:
         updates.append("enabled=?")
         params.append(1 if body.enabled else 0)
-    if body.role is not None:
+    if body.corpus_kind is not None:
+        updates.append("corpus_kind=?")
+        params.append(body.corpus_kind)
+    elif body.role is not None:
+        # Legacy: reference → spec, source → standard
+        updates.append("corpus_kind=?")
+        params.append("spec" if body.role == "reference" else "standard")
         updates.append("role=?")
         params.append(body.role)
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -408,8 +480,8 @@ def remove_file_from_knowledge_base(knowledge_base_id: str, file_id: str):
         ).fetchone():
             conn.execute(
                 """INSERT INTO knowledge_base_files
-                   (knowledge_base_id,file_id,role,enabled,created_at)
-                   VALUES (?,?,'source',1,?)""",
+                   (knowledge_base_id,file_id,role,corpus_kind,enabled,created_at)
+                   VALUES (?,?,'source','standard',1,?)""",
                 (fallback["id"], file_id, time.strftime("%Y-%m-%dT%H:%M:%S")),
             )
     return {"ok": True}

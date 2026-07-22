@@ -1,8 +1,6 @@
 import { NavLink, Outlet, useParams } from 'react-router-dom'
 import {
   FolderOpen,
-  LayoutDashboard,
-  ListChecks,
   Settings,
   TextSearch,
 } from 'lucide-react'
@@ -12,10 +10,8 @@ import { helpText } from '@/lib/help-text'
 import { cn, formatDate } from '@/lib/utils'
 
 const ITEMS = [
-  { to: 'files', label: '文件', icon: FolderOpen, help: helpText.kbNav.files },
+  { to: 'files', label: '文件概览', icon: FolderOpen, help: helpText.kbNav.files },
   { to: 'retrieval', label: '检索测试', icon: TextSearch, help: helpText.kbNav.retrieval },
-  { to: 'rules', label: '审查补充', icon: ListChecks, help: helpText.kbNav.rules },
-  { to: 'overview', label: '概览', icon: LayoutDashboard, help: helpText.kbNav.overview },
   { to: 'settings', label: '配置', icon: Settings, help: helpText.kbNav.settings },
 ] as const
 

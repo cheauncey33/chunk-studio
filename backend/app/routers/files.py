@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from .. import config, db, jobs, pdf
@@ -20,10 +20,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/files", tags=["files"])
 
 _PDF_MAGIC = b"%PDF-"
+_CORPUS_KINDS = frozenset({"standard", "spec"})
+_NON_CORPUS_ROLES = frozenset({"report", "naming"})
 
 
 class FileUpdate(BaseModel):
     metadata: dict[str, Any] | None = None
+
+
+def _normalize_doc_role(file_meta: dict[str, Any]) -> str:
+    role = str(file_meta.get("doc_role") or file_meta.get("doc_type") or "").strip().lower()
+    return role
+
+
+def _resolve_corpus_kind(file_meta: dict[str, Any]) -> str:
+    raw = str(file_meta.get("corpus_kind") or "").strip().lower()
+    if raw in _CORPUS_KINDS:
+        return raw
+    role = _normalize_doc_role(file_meta)
+    if role == "spec":
+        return "spec"
+    if role in {"standard", "source", "reference"}:
+        return "standard" if role != "reference" else "spec"
+    return "standard"
 
 
 @router.post("")
@@ -32,7 +51,11 @@ async def upload(
     metadata: str = Form("{}"),
     knowledge_base_id: str | None = Form(None),
 ):
-    """Upload a PDF. Validates magic bytes, content-addressed copy into data/files."""
+    """Upload a PDF. Validates magic bytes, content-addressed copy into data/files.
+
+    Corpus files (standard/spec) attach to a knowledge base. Report and naming
+    uploads stay outside knowledge_base_files; naming updates default_naming_file_id.
+    """
     target_kb = None
     if knowledge_base_id:
         target_kb = db.get_conn().execute(
@@ -52,6 +75,16 @@ async def upload(
     if not isinstance(file_meta, dict):
         raise HTTPException(422, "metadata must be a JSON object")
     file_meta = {k: v for k, v in file_meta.items() if v not in ("", None, [], {})}
+    doc_role = _normalize_doc_role(file_meta)
+    if doc_role in _NON_CORPUS_ROLES:
+        file_meta["doc_role"] = doc_role
+        file_meta.setdefault("doc_type", doc_role)
+    elif doc_role not in _NON_CORPUS_ROLES:
+        corpus_kind = _resolve_corpus_kind(file_meta)
+        file_meta["corpus_kind"] = corpus_kind
+        file_meta.setdefault("doc_role", corpus_kind)
+        file_meta.setdefault("doc_type", corpus_kind)
+
     sha = hashlib.sha256(raw).hexdigest()[:16]
     safe_name = Path(file.filename or "upload.pdf").name
     stored = f"{sha}_{safe_name}"
@@ -60,7 +93,6 @@ async def upload(
         dest.write_bytes(raw)
     file_id = uuid.uuid4().hex
     file_rel = config.to_rel(dest)
-    # page count in a thread
     n_pages = await asyncio.to_thread(pdf.page_count, file_rel)
     created = time.strftime("%Y-%m-%dT%H:%M:%S")
     with db.transaction() as conn:
@@ -71,16 +103,30 @@ async def upload(
                 json.dumps(file_meta, ensure_ascii=False), created,
             ),
         )
-        relation_kb = target_kb or conn.execute(
-            "SELECT id FROM knowledge_bases WHERE is_default=1 ORDER BY created_at LIMIT 1"
-        ).fetchone()
-        if relation_kb:
+        if doc_role == "naming":
+            if not target_kb:
+                raise HTTPException(400, "naming upload requires knowledge_base_id")
             conn.execute(
-                """INSERT OR IGNORE INTO knowledge_base_files
-                   (knowledge_base_id, file_id, role, enabled, created_at)
-                   VALUES (?,?, 'source', 1, ?)""",
-                (relation_kb["id"], file_id, created),
+                """UPDATE knowledge_bases
+                   SET default_naming_file_id=?, updated_at=?
+                   WHERE id=?""",
+                (file_id, created, target_kb["id"]),
             )
+        elif doc_role == "report":
+            # Reports are audit inputs only; do not attach to a knowledge base.
+            pass
+        else:
+            relation_kb = target_kb or conn.execute(
+                "SELECT id FROM knowledge_bases WHERE is_default=1 ORDER BY created_at LIMIT 1"
+            ).fetchone()
+            if relation_kb:
+                corpus_kind = _resolve_corpus_kind(file_meta)
+                conn.execute(
+                    """INSERT OR IGNORE INTO knowledge_base_files
+                       (knowledge_base_id, file_id, role, corpus_kind, enabled, created_at)
+                       VALUES (?,?, 'source', ?, 1, ?)""",
+                    (relation_kb["id"], file_id, corpus_kind, created),
+                )
     try:
         jobs.enqueue_parse_file(file_id)
     except Exception:
@@ -107,7 +153,22 @@ def get_file(file_id: str):
     row = db.get_conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
     if not row:
         raise HTTPException(404, "file not found")
-    return _file_out(dict(row))
+    return _file_out(dict(row), include_parse=True)
+
+
+@router.get("/{file_id}/content")
+def get_file_content(file_id: str):
+    """Serve the stored PDF for inline viewing in a new browser tab."""
+    row = _get_file(file_id)
+    path = config.from_rel(row["path"])
+    if not path.is_file():
+        raise HTTPException(404, "stored file missing")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=row["name"],
+        content_disposition_type="inline",
+    )
 
 
 @router.patch("/{file_id}")
@@ -123,7 +184,7 @@ def update_file(file_id: str, body: FileUpdate):
                 (json.dumps(metadata, ensure_ascii=False), file_id),
             )
     updated = db.get_conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
-    return _file_out(dict(updated))
+    return _file_out(dict(updated), include_parse=True)
 
 
 @router.get("/{file_id}/parses")
@@ -238,9 +299,14 @@ async def page_image(file_id: str, page_no: int):
 def delete_file(file_id: str):
     f = _get_file(file_id)
     with db.transaction() as conn:
+        conn.execute(
+            """UPDATE knowledge_bases
+               SET default_naming_file_id=NULL, updated_at=?
+               WHERE default_naming_file_id=?""",
+            (time.strftime("%Y-%m-%dT%H:%M:%S"), file_id),
+        )
         conn.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
         conn.execute("DELETE FROM files WHERE id=?", (file_id,))
-    # best-effort delete the stored PDF
     try:
         config.from_rel(f["path"]).unlink(missing_ok=True)
     except Exception:
@@ -255,15 +321,33 @@ def _get_file(file_id: str):
     return dict(row)
 
 
-def _file_out(row: dict):
+def _latest_parse(file_id: str) -> dict[str, Any] | None:
+    row = db.get_conn().execute(
+        """SELECT status, error, markdown_path FROM document_parses
+           WHERE file_id=?
+           ORDER BY created_at DESC LIMIT 1""",
+        (file_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _file_out(row: dict, *, include_parse: bool = False):
     try:
         metadata = json.loads(row.get("metadata") or "{}")
     except Exception:
         metadata = {}
-    return {
+    out: dict[str, Any] = {
         "id": row["id"],
         "name": row["name"],
         "page_count": row["page_count"],
         "metadata": metadata,
         "created_at": row["created_at"],
     }
+    if include_parse:
+        parse = _latest_parse(row["id"])
+        out["parse_status"] = parse["status"] if parse else None
+        out["parse_error"] = (parse.get("error") or "") if parse else ""
+        out["parse_ready"] = bool(
+            parse and parse.get("status") == "done" and parse.get("markdown_path")
+        )
+    return out

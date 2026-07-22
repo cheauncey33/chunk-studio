@@ -9,10 +9,16 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import db, jobs
+from .. import db, jobs, llm, retrieval
 
 
 router = APIRouter(prefix="/assistants", tags=["assistants"])
+
+_CHAT_SYSTEM = """你是知识库问答助手。只能依据下方「检索证据」回答用户问题。
+要求：
+1. 证据充足时，用简洁中文直接回答，可引用标准号、条款或表号。
+2. 证据不足或不相关时，明确说「知识库中未找到足够依据」，不要编造。
+3. 不要输出审查判定流程，不要假装在做合规审查工作流。"""
 
 
 class AssistantCreate(BaseModel):
@@ -42,6 +48,16 @@ class AssistantRunRequest(BaseModel):
     report_file_id: str = Field(min_length=1)
     naming_rule_file_id: str | None = None
     report_id: str = Field(default="HBJC", min_length=1, max_length=64)
+
+
+class ChatMessage(BaseModel):
+    role: str = Field(pattern="^(user|assistant)$")
+    content: str = Field(min_length=1, max_length=8000)
+
+
+class AssistantChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=20)
 
 
 def _loads(value: str | None) -> dict[str, Any]:
@@ -298,3 +314,127 @@ def start_assistant_run(assistant_id: str, body: AssistantRunRequest):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return job
+
+
+def _format_evidence(hits: list[dict[str, Any]]) -> str:
+    blocks: list[str] = []
+    for index, hit in enumerate(hits, start=1):
+        name = str(hit.get("file_name") or hit.get("doc_id") or "未知文件")
+        page = hit.get("page")
+        page_label = f" p.{page}" if page not in (None, "") else ""
+        text = str(hit.get("text") or hit.get("content") or "").strip()
+        if len(text) > 1200:
+            text = text[:1200] + "…"
+        blocks.append(f"[{index}] {name}{page_label}\n{text}")
+    return "\n\n".join(blocks) if blocks else "（无检索命中）"
+
+
+def _hit_score(hit: dict[str, Any]) -> float:
+    value = hit.get("rerank_score")
+    if value is None:
+        value = hit.get("score")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("-inf")
+
+
+def _citations_from_hits(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One citation per file+page (keep highest-scoring chunk)."""
+    best: dict[tuple[str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str]] = []
+    for hit in hits:
+        file_key = str(hit.get("file_id") or hit.get("doc_id") or hit.get("file_name") or "")
+        page_key = "" if hit.get("page") in (None, "") else str(hit.get("page"))
+        key = (file_key, page_key)
+        citation = {
+            "chunk_id": hit.get("chunk_id"),
+            "file_id": hit.get("file_id") or hit.get("doc_id"),
+            "file_name": hit.get("file_name") or hit.get("doc_id"),
+            "page": hit.get("page"),
+            "score": hit.get("rerank_score") if hit.get("rerank_score") is not None else hit.get("score"),
+            "snippet": str(hit.get("text") or hit.get("content") or "")[:240],
+        }
+        current = best.get(key)
+        if current is None:
+            best[key] = citation
+            order.append(key)
+            continue
+        if _hit_score(hit) > _hit_score(current):
+            best[key] = citation
+    return [best[key] for key in order]
+
+
+@router.post("/{assistant_id}/chat")
+def assistant_chat(assistant_id: str, body: AssistantChatRequest):
+    """Simple RAG Q&A — not the audit workflow."""
+    assistant = _assistant_row(assistant_id)
+    if not assistant["active_version_id"]:
+        raise HTTPException(400, "assistant has no active version")
+    version = db.get_conn().execute(
+        "SELECT * FROM assistant_versions WHERE id=?",
+        (assistant["active_version_id"],),
+    ).fetchone()
+    if not version:
+        raise HTTPException(404, "active version not found")
+
+    model_config = _loads(version["model_config"])
+    retrieval_config = _loads(version["retrieval_config"])
+    file_ids = db.assistant_scoped_file_ids(assistant_id)
+    if not file_ids:
+        raise HTTPException(400, "请先绑定知识库，并确保库内有已启用的文件")
+
+    top_k = int(retrieval_config.get("top_k") or 10)
+    route_top_k = int(retrieval_config.get("route_top_k") or 30)
+    candidates_per_type = int(retrieval_config.get("candidate_count_per_type") or 20)
+    similarity_threshold = retrieval_config.get("similarity_threshold")
+    threshold = float(similarity_threshold) if similarity_threshold is not None else 0.2
+
+    try:
+        search = retrieval.hybrid_search(
+            body.message.strip(),
+            top_k=max(1, min(top_k, 50)),
+            route_top_k=max(1, min(route_top_k, 100)),
+            candidates_per_type=max(1, min(candidates_per_type, 100)),
+            similarity_threshold=threshold,
+            file_ids=file_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    hits = list(search.get("hits") or [])
+    evidence = _format_evidence(hits)
+    model = str(model_config.get("model") or llm.DEFAULT_MODEL)
+    temperature = float(model_config.get("temperature") or 0)
+
+    messages: list[dict[str, str]] = [
+        {
+            "role": "system",
+            "content": f"{_CHAT_SYSTEM}\n\n【检索证据】\n{evidence}",
+        },
+    ]
+    for item in body.history[-12:]:
+        messages.append({"role": item.role, "content": item.content.strip()})
+    messages.append({"role": "user", "content": body.message.strip()})
+
+    try:
+        answer = llm.chat_text(messages, model=model, temperature=temperature)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    citations = _citations_from_hits(hits)
+
+    return {
+        "answer": answer,
+        "citations": citations,
+        "model": model,
+        "retrieval": {
+            "hit_count": len(hits),
+            "scoped_file_count": len(file_ids),
+            "top_k": top_k,
+            "similarity_threshold": threshold,
+            "degraded": search.get("degraded") or [],
+        },
+    }

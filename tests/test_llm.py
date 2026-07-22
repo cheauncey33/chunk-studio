@@ -47,6 +47,34 @@ def test_chat_json_uses_deepseek_settings(monkeypatch) -> None:
     assert captured["json"]["thinking"] == {"type": "disabled"}
 
 
+def test_chat_text_omits_json_response_format(monkeypatch) -> None:
+    settings = {
+        "llm.api_key": "deepseek-key",
+        "llm.base_url": "https://deepseek.example/v1",
+        "llm.model": "deepseek-v4-flash",
+    }
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_MODEL", raising=False)
+    monkeypatch.setattr(llm.db, "get_setting", lambda key, default="": settings.get(key, default))
+    captured = {}
+
+    def post(url, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            status_code=200,
+            text="",
+            json=lambda: {"choices": [{"message": {"content": "普通文本回答"}}]},
+        )
+
+    monkeypatch.setattr(llm.httpx, "post", post)
+
+    result = llm.chat_text([{"role": "user", "content": "hi"}])
+
+    assert result == "普通文本回答"
+    assert "response_format" not in captured["json"]
+
+
 def test_chat_json_requires_deepseek_key(monkeypatch) -> None:
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setattr(llm.db, "get_setting", lambda key, default="": default)

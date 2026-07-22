@@ -8,14 +8,13 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Input, Label, Textarea, Badge } from '@/components/ui/input'
 import { EmptyState } from '@/components/empty-state'
-import { useKbFiles, useKnowledgeBase } from '@/hooks/use-knowledge-request'
+import { useKbFiles } from '@/hooks/use-knowledge-request'
 import { helpText } from '@/lib/help-text'
 import { renderChunkText } from '@/lib/render-chunk-text'
 import { cn } from '@/lib/utils'
 
 export default function DatasetRetrievalPage() {
   const { id = '' } = useParams()
-  const { data: knowledgeBase } = useKnowledgeBase(id)
   const { data: files = [], isLoading: filesLoading } = useKbFiles(id)
   const [query, setQuery] = useState('变压器的空载损耗限值是什么？')
   const [topK, setTopK] = useState(10)
@@ -27,14 +26,6 @@ export default function DatasetRetrievalPage() {
   const [searched, setSearched] = useState(false)
   const [scopedFileCount, setScopedFileCount] = useState(0)
   const [running, setRunning] = useState(false)
-
-  useEffect(() => {
-    if (!knowledgeBase) return
-    const config = knowledgeBase.retrieval_config || {}
-    setTopK(Number(config.top_k ?? 10))
-    setThreshold(Number(config.similarity_threshold ?? 0.2))
-    setRouteTopK(Number(config.route_top_k ?? 30))
-  }, [knowledgeBase])
 
   useEffect(() => {
     setSelectionReady(false)

@@ -208,6 +208,12 @@ def test_patch_knowledge_base_corpus_rules(monkeypatch, tmp_path) -> None:
     assert updated["few_shot_rules"]["items"][0]["id"] == "fs1"
     assert updated["parser_config"]["chunk_method"] == "general"
     assert updated["default_naming_file_id"] == "f_name"
+    assert updated["default_naming_file_name"] == "naming.pdf"
+    membership = db.get_conn().execute(
+        """SELECT COUNT(*) AS n FROM knowledge_base_files
+           WHERE file_id='f_name'"""
+    ).fetchone()["n"]
+    assert membership == 0
 
     cleared = knowledge_bases.update_knowledge_base(
         "kb_uncategorized",
@@ -456,4 +462,124 @@ def test_delete_knowledge_base_removes_exclusive_files(monkeypatch, tmp_path) ->
     except HTTPException as exc:
         assert exc.status_code == 400
 
+    _close_temp_db(monkeypatch)
+
+
+def test_report_upload_does_not_join_knowledge_base(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    monkeypatch.setattr(files.config, "FILES_DIR", tmp_path / "files")
+    files.config.FILES_DIR.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(files.pdf, "page_count", lambda path: 1)
+    monkeypatch.setattr(files.jobs, "enqueue_parse_file", lambda file_id: {})
+
+    uploaded = UploadFile(filename="HBJC-report.pdf", file=BytesIO(b"%PDF-1.4\n%%EOF"))
+    result = asyncio.run(
+        files.upload(
+            uploaded,
+            metadata='{"doc_role":"report","doc_type":"report"}',
+            knowledge_base_id=None,
+        )
+    )
+    membership = db.get_conn().execute(
+        "SELECT COUNT(*) AS n FROM knowledge_base_files WHERE file_id=?",
+        (result["id"],),
+    ).fetchone()["n"]
+    assert membership == 0
+    assert result["metadata"]["doc_role"] == "report"
+    _close_temp_db(monkeypatch)
+
+
+def test_naming_upload_sets_kb_attribute_without_corpus_membership(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO knowledge_bases
+               (id,name,description,status,is_default,parser_config,
+                retrieval_config,created_at,updated_at)
+               VALUES ('kb_named','命名库','','active',0,'{}','{}','now','now')"""
+        )
+    monkeypatch.setattr(files.config, "FILES_DIR", tmp_path / "files")
+    files.config.FILES_DIR.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(files.pdf, "page_count", lambda path: 1)
+    monkeypatch.setattr(files.jobs, "enqueue_parse_file", lambda file_id: {})
+
+    uploaded = UploadFile(filename="naming.pdf", file=BytesIO(b"%PDF-1.4\n%%EOF"))
+    result = asyncio.run(
+        files.upload(
+            uploaded,
+            metadata='{"doc_role":"naming"}',
+            knowledge_base_id="kb_named",
+        )
+    )
+    kb = knowledge_bases.get_knowledge_base("kb_named")
+    assert kb["default_naming_file_id"] == result["id"]
+    assert kb["default_naming_file_name"] == "naming.pdf"
+    membership = db.get_conn().execute(
+        "SELECT COUNT(*) AS n FROM knowledge_base_files WHERE file_id=?",
+        (result["id"],),
+    ).fetchone()["n"]
+    assert membership == 0
+    listed = knowledge_bases.list_knowledge_base_files("kb_named")
+    assert listed == []
+    _close_temp_db(monkeypatch)
+
+
+def test_patch_knowledge_base_file_corpus_kind(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO knowledge_bases
+               (id,name,description,status,is_default,parser_config,
+                retrieval_config,created_at,updated_at)
+               VALUES ('kb_kind','分类库','','active',0,'{}','{}','now','now')"""
+        )
+        conn.execute(
+            """INSERT INTO files(id,name,path,metadata,created_at)
+               VALUES ('f_kind','spec.pdf','files/spec.pdf','{}','now')"""
+        )
+        conn.execute(
+            """INSERT INTO knowledge_base_files
+               (knowledge_base_id,file_id,role,corpus_kind,enabled,created_at)
+               VALUES ('kb_kind','f_kind','source','standard',1,'now')"""
+        )
+
+    updated = knowledge_bases.update_knowledge_base_file(
+        "kb_kind",
+        "f_kind",
+        knowledge_bases.KnowledgeBaseFileUpdate(corpus_kind="spec"),
+    )
+    assert updated["corpus_kind"] == "spec"
+    listed = knowledge_bases.list_knowledge_base_files("kb_kind")
+    assert listed[0]["corpus_kind"] == "spec"
+    _close_temp_db(monkeypatch)
+
+
+def test_seed_skips_report_and_naming_files(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO files(id,name,path,metadata,created_at) VALUES
+               ('f_report','report.pdf','files/report.pdf',
+                '{"doc_role":"report"}','now'),
+               ('f_naming','naming.pdf','files/naming.pdf',
+                '{"doc_role":"naming"}','now'),
+               ('f_std','GB.pdf','files/GB.pdf','{"doc_type":"standard"}','now')"""
+        )
+        conn.execute("DELETE FROM knowledge_base_files")
+
+    db._seed_knowledge_base_and_assistant()
+    db.get_conn().commit()
+
+    attached = {
+        row["file_id"]
+        for row in db.get_conn().execute(
+            "SELECT file_id FROM knowledge_base_files WHERE knowledge_base_id='kb_uncategorized'"
+        ).fetchall()
+    }
+    assert "f_std" in attached
+    assert "f_report" not in attached
+    assert "f_naming" not in attached
     _close_temp_db(monkeypatch)

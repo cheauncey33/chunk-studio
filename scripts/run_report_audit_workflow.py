@@ -129,19 +129,21 @@ def _load_manual_knowledge_rules(
 
 def _select_manual_knowledge_rules(
     rules_payload: dict[str, Any],
-    runtime_case: dict[str, Any],
+    runtime_case: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    requirement_text = str(runtime_case["reported_requirement"].get("text") or "")
-    project_name = str(runtime_case["test_item"].get("project_name") or "")
-    source = f"{project_name} {requirement_text}"
-    selected = []
-    for rule in rules_payload.get("rules", []):
-        rule_id = str(rule.get("rule_id") or "")
-        if rule_id == "transformer_total_loss_sum_v1" and (
-            "总损耗" in source or "P总" in source
-        ):
-            selected.append(rule)
-    return {**rules_payload, "rules": selected}
+    """Pass KB manual rules straight into audit_judge.
+
+    Selection used to hard-code a single total-loss rule_id. Rules are few and
+    the judge prompt already constrains allowed_use, so the full set is injected.
+    ``runtime_case`` is kept for call-site compatibility.
+    """
+    del runtime_case  # unused; kept so callers need not change
+    rules = [
+        rule
+        for rule in (rules_payload.get("rules") or [])
+        if isinstance(rule, dict) and str(rule.get("rule_text") or "").strip()
+    ]
+    return {**rules_payload, "rules": rules}
 
 
 def _find_requirement(extracted: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
@@ -237,6 +239,8 @@ def _retrieval_runtime_config(profile: dict[str, Any]) -> dict[str, int | float]
         "candidate_count_per_type": int(
             raw.get("candidate_count_per_type", FINAL_PER_TYPE)
         ),
+        "final_per_type": int(raw.get("final_per_type", 15)),
+        "special_route_reserve": int(raw.get("special_route_reserve", 3)),
         "rrf_k": int(raw.get("rrf_k", RRF_K)),
         "similarity_threshold": float(raw.get("similarity_threshold", 0.2)),
     }
@@ -244,6 +248,8 @@ def _retrieval_runtime_config(profile: dict[str, Any]) -> dict[str, int | float]
         "top_k": (1, 50),
         "route_top_k": (1, 100),
         "candidate_count_per_type": (1, 100),
+        "final_per_type": (1, 50),
+        "special_route_reserve": (0, 20),
         "rrf_k": (1, 200),
         "similarity_threshold": (-1, 1),
     }
@@ -273,23 +279,29 @@ def _select_retrieval_candidates(
 def _retrieve_hybrid_candidates(
     query: str,
     *,
+    query_routes: dict[str, str] | None = None,
     file_ids: list[str],
     top_k: int,
     route_top_k: int,
     candidates_per_type: int,
+    final_per_type: int,
+    special_route_reserve: int,
     rrf_k: int,
     similarity_threshold: float,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Run production hybrid_search and map hits into workflow candidate shape."""
+    """Run hybrid_search with planner routes when provided."""
     from app import retrieval
 
     result = retrieval.hybrid_search(
         query,
-        top_k=top_k,
+        top_k=max(top_k, final_per_type * 2),
         route_top_k=route_top_k,
         candidates_per_type=candidates_per_type,
         rrf_k=rrf_k,
         similarity_threshold=similarity_threshold,
+        query_routes=query_routes,
+        special_route_reserve=special_route_reserve,
+        final_per_type=final_per_type,
         file_ids=file_ids,
     )
     candidates: list[dict[str, Any]] = []
@@ -310,6 +322,9 @@ def _retrieve_hybrid_candidates(
     debug = {
         "retrieval_mode": result.get("retrieval_mode"),
         "query_routes": result.get("query_routes"),
+        "routes_injected": result.get("routes_injected"),
+        "special_route_reserve": result.get("special_route_reserve"),
+        "final_per_type": result.get("final_per_type"),
         "candidate_count": result.get("candidate_count"),
         "degraded": result.get("degraded") or [],
     }
@@ -344,7 +359,9 @@ def main() -> None:
     retrieval_config = _retrieval_runtime_config(profile)
     top_k = int(retrieval_config["top_k"])
     route_top_k = int(retrieval_config["route_top_k"])
-    final_per_type = int(retrieval_config["candidate_count_per_type"])
+    candidates_per_type = int(retrieval_config["candidate_count_per_type"])
+    final_per_type = int(retrieval_config["final_per_type"])
+    special_route_reserve = int(retrieval_config["special_route_reserve"])
     rrf_k = int(retrieval_config["rrf_k"])
     similarity_threshold = float(retrieval_config["similarity_threshold"])
     parameter_prompt = _prompt_content(profile, "report_parameters")
@@ -423,14 +440,16 @@ def main() -> None:
             value = str(planned.get(route) or "").strip()
             if value:
                 queries[route] = value
-        # Hybrid search does its own constrained rewrite from the production query,
-        # matching knowledge-base 试检索 / production retrieval.
+        # Pass full planner routes into hybrid_search (no second rewrite).
         candidates, retrieval_debug = _retrieve_hybrid_candidates(
             queries["production"],
+            query_routes=queries,
             file_ids=evidence_file_ids,
             top_k=top_k,
             route_top_k=route_top_k,
-            candidates_per_type=final_per_type,
+            candidates_per_type=candidates_per_type,
+            final_per_type=final_per_type,
+            special_route_reserve=special_route_reserve,
             rrf_k=rrf_k,
             similarity_threshold=similarity_threshold,
         )
@@ -479,7 +498,9 @@ def main() -> None:
                         "retrieval_backend": "hybrid_search",
                         "top_k": top_k,
                         "route_top_k": route_top_k,
-                        "candidates_per_type": final_per_type,
+                        "candidates_per_type": candidates_per_type,
+                        "final_per_type": final_per_type,
+                        "special_route_reserve": special_route_reserve,
                         "rrf_k": rrf_k,
                         "similarity_threshold": similarity_threshold,
                     },
@@ -544,11 +565,14 @@ def main() -> None:
                 "embedding_dimension": embeddings.DEFAULT_DIMENSION,
                 "top_k": top_k,
                 "route_top_k": route_top_k,
-                "candidates_per_type": final_per_type,
+                "candidates_per_type": candidates_per_type,
+                "final_per_type": final_per_type,
+                "special_route_reserve": special_route_reserve,
                 "rrf_k": rrf_k,
                 "similarity_threshold": similarity_threshold,
                 "content_types": ["table", "section"],
                 "scoped_file_count": len(evidence_file_ids),
+                "planner_routes_enabled": True,
             },
             "prompts": {
                 key: dict(value)

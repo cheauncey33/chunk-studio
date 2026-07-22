@@ -8,10 +8,8 @@ const DatasetsPage = lazy(() => import('@/pages/datasets'))
 const DatasetFilesPage = lazy(() => import('@/pages/dataset/files'))
 const DatasetChunksPage = lazy(() => import('@/pages/dataset/chunks'))
 const DatasetRetrievalPage = lazy(() => import('@/pages/dataset/retrieval'))
-const DatasetOverviewPage = lazy(() => import('@/pages/dataset/overview'))
 const DatasetMetadataPage = lazy(() => import('@/pages/dataset/metadata'))
 const DatasetSettingsPage = lazy(() => import('@/pages/dataset/settings'))
-const DatasetRulesPage = lazy(() => import('@/pages/dataset/rules'))
 const ChunkPage = lazy(() => import('@/pages/chunk'))
 const AssistantsPage = lazy(() => import('@/pages/assistants'))
 const RunsPage = lazy(() => import('@/pages/runs'))
@@ -46,9 +44,9 @@ export const router = createBrowserRouter([
           { index: true, element: <Navigate to="files" replace /> },
           { path: 'files', element: withSuspense(<DatasetFilesPage />) },
           { path: 'retrieval', element: withSuspense(<DatasetRetrievalPage />) },
-          { path: 'overview', element: withSuspense(<DatasetOverviewPage />) },
+          { path: 'overview', element: <Navigate to="../files" replace /> },
           { path: 'settings', element: withSuspense(<DatasetSettingsPage />) },
-          { path: 'rules', element: withSuspense(<DatasetRulesPage />) },
+          { path: 'rules', element: <Navigate to="../settings" replace /> },
           // Not in the sidebar; kept routeable for deep links and file-row overflow actions.
           { path: 'chunks', element: withSuspense(<DatasetChunksPage />) },
           { path: 'metadata', element: withSuspense(<DatasetMetadataPage />) },

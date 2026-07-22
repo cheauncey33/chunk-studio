@@ -37,7 +37,8 @@ def test_manual_knowledge_rules_are_valid_json() -> None:
     assert isinstance(payload["rules"], list)
 
 
-def test_total_loss_rule_is_selected_only_for_total_loss_cases() -> None:
+def test_manual_knowledge_rules_pass_through_to_judge() -> None:
+    """All non-empty rules are injected into audit_judge (no per-case filter)."""
     rules = _load_manual_knowledge_rules()
     total_loss_case = {
         "test_item": {"project_name": "短路阻抗和负载损耗测量"},
@@ -48,8 +49,28 @@ def test_total_loss_rule_is_selected_only_for_total_loss_cases() -> None:
         "reported_requirement": {"text": "空载电流I0(%):≤0.16(1+30%)"},
     }
 
-    assert [
-        rule["rule_id"]
-        for rule in _select_manual_knowledge_rules(rules, total_loss_case)["rules"]
-    ] == ["transformer_total_loss_sum_v1"]
-    assert _select_manual_knowledge_rules(rules, no_load_case)["rules"] == []
+    selected_total = _select_manual_knowledge_rules(rules, total_loss_case)
+    selected_other = _select_manual_knowledge_rules(rules, no_load_case)
+
+    assert [rule["rule_id"] for rule in selected_total["rules"]] == [
+        rule["rule_id"] for rule in rules["rules"]
+    ]
+    assert [rule["rule_id"] for rule in selected_other["rules"]] == [
+        rule["rule_id"] for rule in rules["rules"]
+    ]
+    assert "transformer_total_loss_sum_v1" in {
+        rule["rule_id"] for rule in selected_other["rules"]
+    }
+
+
+def test_select_drops_empty_rule_text() -> None:
+    payload = {
+        "version": 1,
+        "scope": "knowledge_base_manual_rules",
+        "rules": [
+            {"rule_id": "keep", "rule_text": "P总 = P0 + Pk"},
+            {"rule_id": "drop", "rule_text": "  "},
+        ],
+    }
+    selected = _select_manual_knowledge_rules(payload, None)
+    assert [rule["rule_id"] for rule in selected["rules"]] == ["keep"]

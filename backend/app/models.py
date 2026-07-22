@@ -139,6 +139,9 @@ class VectorSearchResponse(BaseModel):
     candidate_count: int = 0
     retrieval_mode: str = "dense"
     query_routes: dict[str, str] = Field(default_factory=dict)
+    routes_injected: bool = False
+    special_route_reserve: int = 0
+    final_per_type: int | None = None
     rerank_model: str | None = None
     degraded: list[str] = Field(default_factory=list)
     hits: list[VectorSearchHit]

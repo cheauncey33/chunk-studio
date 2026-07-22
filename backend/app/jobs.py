@@ -160,7 +160,12 @@ def enqueue_assistant_audit(
     report_id: str = "HBJC",
     priority: int = 5,
 ) -> dict[str, Any]:
-    """Queue an end-to-end assistant audit trial run."""
+    """Queue an end-to-end assistant audit trial run.
+
+    The report is an audit input (not KB corpus). Naming PDF is a KB attribute
+    and also need not appear in knowledge_base_files. Evidence still comes from
+    enabled files in the assistant's bound knowledge bases.
+    """
     row = db.get_conn().execute(
         "SELECT id, active_version_id FROM audit_assistants WHERE id=?",
         (assistant_id,),
@@ -170,23 +175,34 @@ def enqueue_assistant_audit(
     if not row["active_version_id"]:
         raise ValueError("assistant has no active version")
 
+    report_row = db.get_conn().execute(
+        "SELECT id FROM files WHERE id=?",
+        (report_file_id,),
+    ).fetchone()
+    if not report_row:
+        raise ValueError("report file not found")
+
     scoped_file_ids = set(db.assistant_scoped_file_ids(assistant_id))
     if not scoped_file_ids:
         raise ValueError("assistant has no enabled files in its knowledge bases")
-    if report_file_id not in scoped_file_ids:
-        raise ValueError("report file is outside the assistant knowledge-base scope")
 
     from . import audit_run
 
     resolved_naming_id = audit_run.resolve_naming_rule_file_id(
         assistant_id, naming_rule_file_id
     )
-    if resolved_naming_id and resolved_naming_id not in scoped_file_ids:
-        raise ValueError("naming-rule file is outside the assistant knowledge-base scope")
+    if resolved_naming_id:
+        naming_row = db.get_conn().execute(
+            "SELECT id FROM files WHERE id=?",
+            (resolved_naming_id,),
+        ).fetchone()
+        if not naming_row:
+            raise ValueError("naming-rule file not found")
+
     excluded = {report_file_id}
     if resolved_naming_id:
         excluded.add(resolved_naming_id)
-    # Fail fast: after excluding the report/naming inputs, evidence must remain.
+    # Fail fast: after excluding runtime inputs, corpus evidence must remain.
     db.assistant_evidence_file_ids(assistant_id, excluded_file_ids=excluded)
 
     existing = db.get_conn().execute(

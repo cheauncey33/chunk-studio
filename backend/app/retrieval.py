@@ -22,6 +22,13 @@ ROUTE_TOP_K = 30
 CANDIDATES_PER_TYPE = 20
 LEXICAL_CANDIDATES_PER_TYPE = 20
 RRF_K = 60
+SPECIAL_ROUTE_RESERVE = 3
+FINAL_PER_TYPE = 15
+GENERAL_DENSE_ROUTES = ("production", "semantic", "keyword")
+SPECIAL_ROUTE_CONTENT_TYPES = {
+    "table_target": "table",
+    "section_target": "section",
+}
 MAX_RERANK_DOCUMENT_CHARS = 2400
 RERANK_INSTRUCTION = (
     "Given a standards compliance query, retrieve passages that directly provide "
@@ -145,6 +152,9 @@ def hybrid_search(
     lexical_candidates_per_type: int | None = None,
     rrf_k: int = RRF_K,
     similarity_threshold: float | None = None,
+    query_routes: dict[str, str] | None = None,
+    special_route_reserve: int = 0,
+    final_per_type: int | None = None,
     planner: QueryPlanner | None = None,
     batch_embedder: QueryBatchEmbedder | None = None,
     vector_searcher: VectorSearcher | None = None,
@@ -164,6 +174,10 @@ def hybrid_search(
         raise ValueError("candidates_per_type must be between 1 and 100")
     if not 1 <= rrf_k <= 200:
         raise ValueError("rrf_k must be between 1 and 200")
+    if not 0 <= special_route_reserve <= 20:
+        raise ValueError("special_route_reserve must be between 0 and 20")
+    if final_per_type is not None and not 1 <= final_per_type <= 50:
+        raise ValueError("final_per_type must be between 1 and 50")
     lexical_pool_size = (
         LEXICAL_CANDIDATES_PER_TYPE
         if lexical_candidates_per_type is None
@@ -181,18 +195,12 @@ def hybrid_search(
         lexical_enabled = lexical.production_enabled()
 
     degraded: list[str] = []
-    routes = {"production": query}
-    try:
-        planned = planner(query)
-        for route in ("semantic", "keyword"):
-            value = str(planned.get(route) or "").strip()
-            if value and value not in routes.values():
-                routes[route] = value
-        if len(routes) != 3:
-            raise ValueError("query rewriter omitted or duplicated a route")
-    except (RuntimeError, ValueError, json.JSONDecodeError, KeyError, TypeError):
-        degraded.append("query_rewrite_failed")
-        routes = {"production": query}
+    routes, routes_injected = _resolve_query_routes(
+        query,
+        query_routes=query_routes,
+        planner=planner,
+        degraded=degraded,
+    )
 
     route_names = list(routes)
     route_queries = list(routes.values())
@@ -217,13 +225,16 @@ def hybrid_search(
     if len(route_vectors) != len(routes):
         raise RuntimeError("query embedder returned an unexpected vector count")
 
+    route_vector_by_name = dict(zip(route_names, route_vectors, strict=True))
     dense_by_type: dict[str, list[dict[str, Any]]] = {}
     total_by_type: dict[str, int] = {}
+    reserved_by_type: dict[str, list[dict[str, Any]]] = {kind: [] for kind in CONTENT_TYPES}
+
     for content_type in CONTENT_TYPES:
         merged: dict[str, dict[str, Any]] = {}
-        for route, route_query, route_vector in zip(
-            route_names, route_queries, route_vectors, strict=True
-        ):
+        for route, route_query in routes.items():
+            if not _route_applies_to_content_type(route, content_type):
+                continue
             vector_kwargs = {
                 "top_k": route_top_k,
                 "content_type": content_type,
@@ -234,7 +245,7 @@ def hybrid_search(
                 vector_kwargs["file_ids"] = file_ids
             result = vector_searcher(
                 route_query,
-                route_vector,
+                route_vector_by_name[route],
                 **vector_kwargs,
             )
             total_by_type.setdefault(content_type, int(result["total_candidates"]))
@@ -249,7 +260,14 @@ def hybrid_search(
                 candidate["source_scores"][f"dense:{route}"] = float(hit["score"])
                 candidate["rrf_score"] += 1 / (rrf_k + rank)
 
-        dense_by_type[content_type] = _rank_candidates(merged.values())[:candidates_per_type]
+        ranked = _rank_candidates(merged.values())
+        dense_by_type[content_type] = ranked[:candidates_per_type]
+        if special_route_reserve > 0:
+            reserved_by_type[content_type] = _special_route_reserves(
+                ranked,
+                content_type=content_type,
+                reserve=special_route_reserve,
+            )
 
     lexical_by_type: dict[str, list[dict[str, Any]]] = {}
     dual_active = False
@@ -296,12 +314,16 @@ def hybrid_search(
 
     candidate_pool: list[dict[str, Any]] = []
     for content_type in CONTENT_TYPES:
-        candidate_pool.extend(
-            _merge_candidate_lists(
-                dense_by_type[content_type],
-                lexical_by_type.get(content_type, []),
-            )
+        merged_type = _merge_candidate_lists(
+            dense_by_type[content_type],
+            lexical_by_type.get(content_type, []),
         )
+        if reserved_by_type[content_type]:
+            merged_type = _merge_candidate_lists(
+                merged_type,
+                reserved_by_type[content_type],
+            )
+        candidate_pool.extend(merged_type)
 
     candidate_pool = _rank_candidates(candidate_pool)
     candidate_count = len(candidate_pool)
@@ -316,12 +338,20 @@ def hybrid_search(
             retrieval_mode=f"{mode_prefix}_rerank",
             rerank_model=RERANK_MODEL,
             degraded=degraded,
+            routes_injected=routes_injected,
+            special_route_reserve=special_route_reserve,
+            final_per_type=final_per_type,
         )
 
     documents = [_rerank_document(candidate) for candidate in candidate_pool]
+    select_n = (
+        candidate_count
+        if final_per_type is not None
+        else min(top_k, candidate_count)
+    )
     try:
-        reranked = reranker(query, documents, min(top_k, candidate_count))
-        selected = [
+        reranked = reranker(query, documents, select_n)
+        ordered = [
             _result_hit(candidate_pool[index], rerank_score=score)
             for index, score in reranked
         ]
@@ -329,12 +359,17 @@ def hybrid_search(
         rerank_model: str | None = RERANK_MODEL
     except RuntimeError:
         degraded.append("rerank_failed")
-        selected = [
+        ordered = [
             _result_hit(candidate, rerank_score=None)
-            for candidate in candidate_pool[:top_k]
+            for candidate in candidate_pool[:select_n]
         ]
         retrieval_mode = f"{mode_prefix}_rrf_fallback"
         rerank_model = None
+
+    if final_per_type is not None:
+        selected = _slice_final_per_type(ordered, final_per_type=final_per_type)
+    else:
+        selected = ordered[:top_k]
 
     if similarity_threshold is not None:
         selected = [
@@ -357,7 +392,113 @@ def hybrid_search(
         retrieval_mode=retrieval_mode,
         rerank_model=rerank_model,
         degraded=degraded,
+        routes_injected=routes_injected,
+        special_route_reserve=special_route_reserve,
+        final_per_type=final_per_type,
     )
+
+
+def _resolve_query_routes(
+    query: str,
+    *,
+    query_routes: dict[str, str] | None,
+    planner: QueryPlanner,
+    degraded: list[str],
+) -> tuple[dict[str, str], bool]:
+    if query_routes is not None:
+        routes = _normalize_injected_routes(query, query_routes)
+        return routes, True
+
+    routes = {"production": query}
+    try:
+        planned = planner(query)
+        for route in ("semantic", "keyword"):
+            value = str(planned.get(route) or "").strip()
+            if value and value not in routes.values():
+                routes[route] = value
+        if len(routes) != 3:
+            raise ValueError("query rewriter omitted or duplicated a route")
+    except (RuntimeError, ValueError, json.JSONDecodeError, KeyError, TypeError):
+        degraded.append("query_rewrite_failed")
+        routes = {"production": query}
+    return routes, False
+
+
+def _normalize_injected_routes(query: str, query_routes: dict[str, str]) -> dict[str, str]:
+    routes: dict[str, str] = {"production": query}
+    production = str(query_routes.get("production") or "").strip()
+    if production:
+        routes["production"] = production
+    allowed = (*GENERAL_DENSE_ROUTES, *SPECIAL_ROUTE_CONTENT_TYPES)
+    for route in allowed:
+        if route == "production":
+            continue
+        value = str(query_routes.get(route) or "").strip()
+        if not value:
+            continue
+        if value in routes.values() and route not in SPECIAL_ROUTE_CONTENT_TYPES:
+            continue
+        routes[route] = value
+    if "production" not in routes or not routes["production"]:
+        raise ValueError("query_routes must include a production query")
+    return routes
+
+
+def _route_applies_to_content_type(route: str, content_type: str) -> bool:
+    special = SPECIAL_ROUTE_CONTENT_TYPES.get(route)
+    if special is not None:
+        return special == content_type
+    return route in GENERAL_DENSE_ROUTES or route == "production"
+
+
+def _special_route_reserves(
+    ranked: list[dict[str, Any]],
+    *,
+    content_type: str,
+    reserve: int,
+) -> list[dict[str, Any]]:
+    special_route = next(
+        (
+            route
+            for route, target in SPECIAL_ROUTE_CONTENT_TYPES.items()
+            if target == content_type
+        ),
+        None,
+    )
+    if not special_route or reserve <= 0:
+        return []
+    keyed = [
+        candidate
+        for candidate in ranked
+        if special_route in candidate.get("route_ranks", {})
+    ]
+    keyed.sort(
+        key=lambda item: (
+            item["route_ranks"].get(special_route, 10**9),
+            -float(item["route_scores"].get(special_route, 0.0)),
+            item["hit"]["chunk_id"],
+        )
+    )
+    return keyed[:reserve]
+
+
+def _slice_final_per_type(
+    ordered: list[dict[str, Any]],
+    *,
+    final_per_type: int,
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    counts = {kind: 0 for kind in CONTENT_TYPES}
+    for hit in ordered:
+        content_type = str((hit.get("business_metadata") or {}).get("content_type") or "")
+        if content_type not in counts:
+            # Keep unknown types only if both quotas still have room via fallback bucket.
+            content_type = "section" if counts["section"] <= counts["table"] else "table"
+        if counts[content_type] >= final_per_type:
+            continue
+        counts[content_type] += 1
+        selected.append(hit)
+    return selected
 
 
 def _response(
@@ -370,6 +511,9 @@ def _response(
     retrieval_mode: str,
     rerank_model: str | None,
     degraded: list[str],
+    routes_injected: bool = False,
+    special_route_reserve: int = 0,
+    final_per_type: int | None = None,
 ) -> dict[str, Any]:
     return {
         "query": query,
@@ -379,6 +523,9 @@ def _response(
         "candidate_count": candidate_count,
         "retrieval_mode": retrieval_mode,
         "query_routes": routes,
+        "routes_injected": routes_injected,
+        "special_route_reserve": special_route_reserve,
+        "final_per_type": final_per_type,
         "rerank_model": rerank_model,
         "degraded": degraded,
         "hits": hits,

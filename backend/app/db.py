@@ -173,6 +173,8 @@ CREATE TABLE IF NOT EXISTS knowledge_base_files (
     file_id           TEXT NOT NULL,
     role              TEXT NOT NULL DEFAULT 'source'
                       CHECK (role IN ('source','reference')),
+    corpus_kind       TEXT NOT NULL DEFAULT 'standard'
+                      CHECK (corpus_kind IN ('standard','spec')),
     enabled           INTEGER NOT NULL DEFAULT 1,
     created_at        TEXT NOT NULL,
     PRIMARY KEY (knowledge_base_id, file_id),
@@ -239,6 +241,7 @@ def init_db() -> None:
     _migrate_chunk_status_values()
     _migrate_field_config()
     _migrate_knowledge_base_corpus_rules()
+    _migrate_knowledge_base_corpus_kind()
     _backfill_chunk_layers()
     _backfill_auto_metadata()
     _seed_knowledge_base_and_assistant()
@@ -332,13 +335,37 @@ def _seed_knowledge_base_and_assistant() -> None:
         )
     _conn.execute(
         """INSERT OR IGNORE INTO knowledge_base_files
-           (knowledge_base_id, file_id, role, enabled, created_at)
-           SELECT ?, f.id, 'source', 1, ?
+           (knowledge_base_id, file_id, role, corpus_kind, enabled, created_at)
+           SELECT ?, f.id, 'source', 'standard', 1, ?
            FROM files f
            WHERE NOT EXISTS (
              SELECT 1 FROM knowledge_base_files kbf WHERE kbf.file_id=f.id
-           )""",
+           )
+           AND LOWER(COALESCE(json_extract(f.metadata, '$.doc_role'), ''))
+               NOT IN ('report', 'naming')
+           AND LOWER(COALESCE(json_extract(f.metadata, '$.doc_type'), ''))
+               NOT IN ('report', 'naming')""",
         (kb_id, now),
+    )
+    # Detach reports / naming files that were wrongly attached as corpus.
+    _conn.execute(
+        """DELETE FROM knowledge_base_files
+           WHERE file_id IN (
+             SELECT f.id FROM files f
+             WHERE LOWER(COALESCE(json_extract(f.metadata, '$.doc_role'), ''))
+                   IN ('report', 'naming')
+                OR LOWER(COALESCE(json_extract(f.metadata, '$.doc_type'), ''))
+                   IN ('report', 'naming')
+           )"""
+    )
+    # Naming attribute files must not remain in corpus membership.
+    _conn.execute(
+        """DELETE FROM knowledge_base_files
+           WHERE file_id IN (
+             SELECT default_naming_file_id FROM knowledge_bases
+             WHERE default_naming_file_id IS NOT NULL
+               AND TRIM(default_naming_file_id) != ''
+           )"""
     )
     _conn.execute(
         """INSERT OR IGNORE INTO audit_assistants
@@ -397,6 +424,8 @@ def _seed_knowledge_base_and_assistant() -> None:
                     "top_k": 10,
                     "route_top_k": 30,
                     "candidate_count_per_type": 20,
+                    "final_per_type": 15,
+                    "special_route_reserve": 3,
                     "similarity_threshold": 0.2,
                     "keyword_weight": 0.3,
                     "vector_weight": 0.7,
@@ -446,6 +475,31 @@ def _migrate_knowledge_base_corpus_rules() -> None:
     if "default_naming_file_id" not in cols:
         _conn.execute(
             "ALTER TABLE knowledge_bases ADD COLUMN default_naming_file_id TEXT"
+        )
+
+
+def _migrate_knowledge_base_corpus_kind() -> None:
+    """Add corpus_kind (standard/spec) for KB file membership rows."""
+    cols = {
+        row["name"]
+        for row in _conn.execute("PRAGMA table_info(knowledge_base_files)").fetchall()
+    }
+    if "corpus_kind" not in cols:
+        _conn.execute(
+            """ALTER TABLE knowledge_base_files
+               ADD COLUMN corpus_kind TEXT NOT NULL DEFAULT 'standard'"""
+        )
+        _conn.execute(
+            """UPDATE knowledge_base_files
+               SET corpus_kind='spec'
+               WHERE role='reference'"""
+        )
+        _conn.execute(
+            """UPDATE knowledge_base_files
+               SET corpus_kind='standard'
+               WHERE corpus_kind IS NULL
+                  OR TRIM(corpus_kind)=''
+                  OR corpus_kind NOT IN ('standard','spec')"""
         )
 
 def _migrate_chunk_layer_columns() -> None:

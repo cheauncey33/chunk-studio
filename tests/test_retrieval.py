@@ -439,3 +439,172 @@ def test_similarity_threshold_does_not_replace_zero_rerank_score_with_dense_scor
     )
 
     assert result["hits"] == []
+
+
+def test_hybrid_search_uses_injected_planner_routes_without_second_rewrite() -> None:
+    query = "生产查询"
+    routes = {
+        "production": query,
+        "semantic": "语义查询",
+        "keyword": "关键词",
+        "table_target": "专用表查询",
+        "section_target": "专用章节查询",
+    }
+    search_calls: list[tuple[str, str]] = []
+    planner_calls: list[str] = []
+
+    def vector_searcher(route_query: str, vector: list[float], **kwargs):
+        content_type = kwargs["content_type"]
+        search_calls.append((route_query, content_type))
+        if content_type == "table" and route_query == "专用表查询":
+            return {
+                "total_candidates": 1,
+                "hits": [_hit("table-special", 0.99, content_type="table", text="table special")],
+            }
+        if content_type == "section" and route_query == "专用章节查询":
+            return {
+                "total_candidates": 1,
+                "hits": [_hit("section-special", 0.98, content_type="section", text="section special")],
+            }
+        if content_type == "table" and route_query == query:
+            return {
+                "total_candidates": 1,
+                "hits": [_hit("table-prod", 0.5, content_type="table", text="table prod")],
+            }
+        return {"total_candidates": 0, "hits": []}
+
+    result = retrieval.hybrid_search(
+        query,
+        top_k=4,
+        query_routes=routes,
+        special_route_reserve=1,
+        final_per_type=1,
+        planner=lambda value: planner_calls.append(value) or {"semantic": "x", "keyword": "y"},
+        batch_embedder=lambda queries, **kwargs: [
+            [float(index)] * embeddings.DEFAULT_DIMENSION for index, _ in enumerate(queries, 1)
+        ],
+        vector_searcher=vector_searcher,
+        reranker=lambda original_query, documents, top_n: [
+            (index, 1.0 - index * 0.01) for index in range(min(top_n, len(documents)))
+        ],
+        lexical_enabled=False,
+    )
+
+    assert planner_calls == []
+    assert result["routes_injected"] is True
+    assert result["query_routes"]["table_target"] == "专用表查询"
+    assert ("专用表查询", "table") in search_calls
+    assert ("专用表查询", "section") not in search_calls
+    assert ("专用章节查询", "section") in search_calls
+    assert ("专用章节查询", "table") not in search_calls
+    hit_ids = {hit["chunk_id"] for hit in result["hits"]}
+    assert "table-special" in hit_ids
+    assert "section-special" in hit_ids
+    assert result["final_per_type"] == 1
+    assert len(result["hits"]) == 2
+    VectorSearchResponse.model_validate(result)
+
+
+def test_special_route_reserve_keeps_diluted_hits_in_pool() -> None:
+    """table_target hit survives even when RRF pool would otherwise drop it."""
+    query = "生产"
+
+    def vector_searcher(route_query: str, vector: list[float], **kwargs):
+        content_type = kwargs["content_type"]
+        if content_type != "table":
+            return {"total_candidates": 0, "hits": []}
+        if route_query == "表专用":
+            return {
+                "total_candidates": 1,
+                "hits": [_hit("special", 0.4, content_type="table", text="special table")],
+            }
+        # Strong general hits that would dominate a tiny candidates_per_type pool.
+        return {
+            "total_candidates": 3,
+            "hits": [
+                _hit("g1", 0.99, content_type="table", text="general 1"),
+                _hit("g2", 0.98, content_type="table", text="general 2"),
+                _hit("g3", 0.97, content_type="table", text="general 3"),
+            ],
+        }
+
+    seen_docs: list[str] = []
+
+    def reranker(original_query: str, documents: list[str], top_n: int):
+        seen_docs.extend(documents)
+        return [(index, 0.5) for index in range(min(top_n, len(documents)))]
+
+    retrieval.hybrid_search(
+        query,
+        top_k=2,
+        candidates_per_type=2,
+        query_routes={
+            "production": query,
+            "semantic": "语义",
+            "keyword": "关键词",
+            "table_target": "表专用",
+        },
+        special_route_reserve=1,
+        batch_embedder=lambda queries, **kwargs: [
+            [0.1] * embeddings.DEFAULT_DIMENSION for _ in queries
+        ],
+        vector_searcher=vector_searcher,
+        reranker=reranker,
+        lexical_enabled=False,
+    )
+
+    assert any("special table" in doc for doc in seen_docs)
+
+
+def test_final_per_type_slices_after_rerank() -> None:
+    query = "query"
+
+    def vector_searcher(route_query: str, vector: list[float], **kwargs):
+        content_type = kwargs["content_type"]
+        if content_type == "table":
+            return {
+                "total_candidates": 3,
+                "hits": [
+                    _hit("t1", 0.9, content_type="table", text="table 1"),
+                    _hit("t2", 0.8, content_type="table", text="table 2"),
+                    _hit("t3", 0.7, content_type="table", text="table 3"),
+                ],
+            }
+        return {
+            "total_candidates": 3,
+            "hits": [
+                _hit("s1", 0.9, content_type="section", text="section 1"),
+                _hit("s2", 0.8, content_type="section", text="section 2"),
+                _hit("s3", 0.7, content_type="section", text="section 3"),
+            ],
+        }
+
+    def reranker(original_query: str, documents: list[str], top_n: int):
+        # Prefer all tables first to show typed quota still keeps sections.
+        ranked = []
+        for index, text in enumerate(documents):
+            score = 0.9 if "table" in text else 0.1
+            ranked.append((index, score))
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        return ranked[:top_n]
+
+    result = retrieval.hybrid_search(
+        query,
+        top_k=2,
+        final_per_type=1,
+        planner=lambda value: {"semantic": "semantic", "keyword": "keyword"},
+        batch_embedder=lambda queries, **kwargs: [
+            [0.1] * embeddings.DEFAULT_DIMENSION for _ in queries
+        ],
+        vector_searcher=vector_searcher,
+        reranker=reranker,
+        lexical_enabled=False,
+    )
+
+    types = [
+        hit["business_metadata"]["content_type"]
+        for hit in result["hits"]
+    ]
+    assert types.count("table") == 1
+    assert types.count("section") == 1
+    assert len(result["hits"]) == 2

@@ -47,6 +47,47 @@ def resolve_config(*, model: str | None = None) -> dict[str, str]:
     }
 
 
+def chat_text(
+    messages: list[dict[str, str]],
+    *,
+    model: str | None = None,
+    temperature: float = 0,
+    timeout: float = 180,
+) -> str:
+    """Plain-text chat completion (no JSON response_format)."""
+    config = resolve_config(model=model)
+    response = httpx.post(
+        f"{config['base_url']}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {config['api_key']}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": config["model"],
+            "messages": messages,
+            "temperature": temperature,
+            "thinking": {"type": "disabled"},
+            "stream": False,
+        },
+        timeout=timeout,
+    )
+    if response.status_code != HTTPStatus.OK:
+        raise RuntimeError(
+            f"DeepSeek call failed: status={response.status_code} "
+            f"body={response.text[:500]}"
+        )
+    try:
+        content = response.json()["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("DeepSeek returned an invalid chat response") from exc
+    if isinstance(content, list):
+        content = "".join(
+            str(item.get("text") or "") if isinstance(item, dict) else str(item)
+            for item in content
+        )
+    return str(content or "").strip()
+
+
 def chat_json(
     messages: list[dict[str, str]],
     *,

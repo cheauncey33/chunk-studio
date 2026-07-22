@@ -9,6 +9,9 @@ export interface CSFile {
   page_count: number
   metadata: Record<string, unknown>
   created_at: string
+  parse_status?: string | null
+  parse_error?: string
+  parse_ready?: boolean
 }
 
 export interface BBox { x: number; y: number; w: number; h: number }
@@ -208,14 +211,18 @@ export interface KnowledgeBase {
   manual_rules: ManualKnowledgeRules
   few_shot_rules: FewShotRules
   default_naming_file_id: string | null
+  default_naming_file_name?: string | null
   file_count: number
   chunk_count: number
   created_at: string
   updated_at: string
 }
 
+export type CorpusKind = 'standard' | 'spec'
+
 export interface KnowledgeBaseFile extends CSFile {
   role: 'source' | 'reference'
+  corpus_kind: CorpusKind
   enabled: boolean
   chunk_count: number
   approved_count?: number
@@ -440,7 +447,7 @@ export const api = {
   updateKnowledgeBaseFile: (
     knowledgeBaseId: string,
     fileId: string,
-    body: Partial<{ enabled: boolean; role: 'source' | 'reference' }>,
+    body: Partial<{ enabled: boolean; role: 'source' | 'reference'; corpus_kind: CorpusKind }>,
   ) =>
     fetch(`${API}/knowledge-bases/${knowledgeBaseId}/files/${fileId}`, {
       method: 'PATCH',
@@ -509,8 +516,37 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ knowledge_base_ids: knowledgeBaseIds }),
     }).then(j<AuditAssistant>),
+  chatAssistant: (
+    id: string,
+    body: { message: string; history?: Array<{ role: 'user' | 'assistant'; content: string }> },
+  ) =>
+    fetch(`${API}/assistants/${id}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<{
+      answer: string
+      citations: Array<{
+        chunk_id?: string
+        file_id?: string
+        file_name?: string
+        page?: number | null
+        score?: number | null
+        snippet?: string
+      }>
+      model: string
+      retrieval: {
+        hit_count: number
+        scoped_file_count: number
+        top_k: number
+        similarity_threshold: number
+        degraded: string[]
+      }
+    }>),
 
   listFiles: () => fetch(`${API}/files`).then(j<CSFile[]>),
+  getFile: (id: string) => fetch(`${API}/files/${id}`).then(j<CSFile>),
+  fileContentUrl: (id: string) => `${API}/files/${id}/content`,
   uploadFile: (
     file: File,
     metadata: Record<string, unknown> = {},
