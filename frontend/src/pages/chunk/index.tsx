@@ -7,7 +7,8 @@ import {
   ChevronRight,
   CircleHelp,
   MoreHorizontal,
-  Save,
+  PanelRightClose,
+  PanelRightOpen,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, type Chunk, type CSFile } from '@/api'
@@ -26,13 +27,16 @@ import {
   BreadcrumbSeparator,
 } from '@/components/ui/breadcrumb'
 import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { queryKeys, useFields, useKnowledgeBase } from '@/hooks/use-knowledge-request'
 import { helpText } from '@/lib/help-text'
 import { cn } from '@/lib/utils'
@@ -53,13 +57,13 @@ export default function ChunkPage() {
   const [page, setPage] = useState(pageFromUrl > 0 ? pageFromUrl : 1)
   const [pageDraft, setPageDraft] = useState(String(page))
   const [selectedId, setSelectedId] = useState<string | null>(chunkFromUrl)
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [chunkViewKind, setChunkViewKind] = useState<ChunkKind>('manual')
   const [autoOcr, setAutoOcr] = useState(false)
   const [bulkQueuing, setBulkQueuing] = useState(false)
-  const [leftW, setLeftW] = useState(240)
   const [rightW, setRightW] = useState(420)
-  const [view, setView] = useState<'preview' | 'list' | 'edit'>('preview')
-  const [deleteChunkId, setDeleteChunkId] = useState<string | null>(null)
+  const [rightOpen, setRightOpen] = useState(true)
+  const [deleteChunkIds, setDeleteChunkIds] = useState<string[] | null>(null)
 
   const fileQuery = useQuery({
     queryKey: ['file', docId],
@@ -80,9 +84,9 @@ export default function ChunkPage() {
 
   const currentFile: CSFile | undefined = fileQuery.data
   const chunks = useMemo(() => chunksQuery.data || [], [chunksQuery.data])
-  const selectedChunk = useMemo(
-    () => chunks.find(item => item.id === selectedId) || null,
-    [chunks, selectedId],
+  const editingChunk = useMemo(
+    () => chunks.find(item => item.id === editingId) || null,
+    [chunks, editingId],
   )
 
   useEffect(() => {
@@ -116,11 +120,28 @@ export default function ChunkPage() {
     await client.invalidateQueries({ queryKey: queryKeys.chunks(docId) })
   }, [client, docId])
 
+  const selectChunk = useCallback((id: string | null) => {
+    if (!id) {
+      setSelectedId(null)
+      return
+    }
+    const chunk = chunks.find(item => item.id === id)
+    if (chunk) setPage(chunk.page)
+    setSelectedId(id)
+  }, [chunks])
+
+  const openChunkEditor = useCallback((id: string) => {
+    selectChunk(id)
+    setRightOpen(true)
+    setEditingId(id)
+  }, [selectChunk])
+
   const onChunkCreated = useCallback(async (chunk: Chunk) => {
     await refreshChunks()
     setSelectedId(chunk.id)
     setPage(chunk.page)
-    setView('edit')
+    setRightOpen(true)
+    setEditingId(chunk.id)
   }, [refreshChunks])
 
   const onChunkSaved = useCallback(async (chunk: Chunk) => {
@@ -129,16 +150,30 @@ export default function ChunkPage() {
     toast.success('切片已保存')
   }, [refreshChunks])
 
-  const requestChunkDelete = (id: string) => setDeleteChunkId(id)
+  const onChunkUpdated = useCallback(async (chunk: Chunk) => {
+    await client.setQueryData(queryKeys.chunks(docId), (prev: Chunk[] | undefined) => {
+      if (!prev) return prev
+      return prev.map(item => (item.id === chunk.id ? chunk : item))
+    })
+    await refreshChunks()
+  }, [client, docId, refreshChunks])
+
+  const requestChunkDelete = (ids: string | string[]) => {
+    setDeleteChunkIds(Array.isArray(ids) ? ids : [ids])
+  }
 
   const confirmDelete = async () => {
-    if (!deleteChunkId) return
+    if (!deleteChunkIds?.length) return
     try {
-      await api.deleteChunk(deleteChunkId)
-      if (selectedId === deleteChunkId) setSelectedId(null)
-      setDeleteChunkId(null)
+      for (const id of deleteChunkIds) {
+        await api.deleteChunk(id)
+      }
+      if (selectedId && deleteChunkIds.includes(selectedId)) setSelectedId(null)
+      if (editingId && deleteChunkIds.includes(editingId)) setEditingId(null)
+      const count = deleteChunkIds.length
+      setDeleteChunkIds(null)
       await refreshChunks()
-      toast.success('切片已删除')
+      toast.success(count > 1 ? `已删除 ${count} 段` : '切片已删除')
     } catch (err) {
       toast.error((err as Error).message)
     }
@@ -168,14 +203,12 @@ export default function ChunkPage() {
     setPageDraft(String(next))
   }
 
-  const startResize = (side: 'left' | 'right') => (e: React.MouseEvent) => {
+  const startResizeRight = (e: React.MouseEvent) => {
     e.preventDefault()
     const startX = e.clientX
-    const startLeft = leftW
     const startRight = rightW
     const onMove = (ev: MouseEvent) => {
-      if (side === 'left') setLeftW(Math.max(180, Math.min(360, startLeft + ev.clientX - startX)))
-      else setRightW(Math.max(320, Math.min(640, startRight - (ev.clientX - startX))))
+      setRightW(Math.max(320, Math.min(640, startRight - (ev.clientX - startX))))
     }
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
@@ -244,27 +277,6 @@ export default function ChunkPage() {
           </BreadcrumbList>
         </Breadcrumb>
 
-        <div className="inline-flex rounded-md bg-bg-card p-1">
-          {([
-            ['preview', '看原文', helpText.chunkStudio.viewPreview],
-            ['list', '看列表', helpText.chunkStudio.viewList],
-            ['edit', '编辑', helpText.chunkStudio.viewEdit],
-          ] as const).map(([key, label, help]) => (
-            <Explain key={key} text={help} title={label}>
-              <button
-                type="button"
-                className={cn(
-                  'rounded px-3 py-1.5 text-sm transition',
-                  view === key ? 'bg-bg-base text-text-primary shadow-sm' : 'text-text-secondary',
-                )}
-                onClick={() => setView(key)}
-              >
-                {label}
-              </button>
-            </Explain>
-          ))}
-        </div>
-
         <div className="flex items-center gap-2">
           <Explain text={helpText.nav.helpMode} title="说明模式">
             <Button
@@ -294,12 +306,6 @@ export default function ChunkPage() {
               )}
             </DropdownMenuContent>
           </DropdownMenu>
-          <Explain text={helpText.chunkStudio.viewEdit} title="编辑选中">
-            <Button size="sm" disabled={!selectedChunk} onClick={() => setView('edit')}>
-              <Save />
-              编辑选中
-            </Button>
-          </Explain>
         </div>
       </header>
 
@@ -313,51 +319,9 @@ export default function ChunkPage() {
       )}
 
       {currentFile && (
-        <div className="flex min-h-0 flex-1">
-          <aside className="flex shrink-0 flex-col border-r border-border-button bg-bg-base p-4" style={{ width: leftW }}>
-            <h2 className="truncate text-sm font-semibold" title={currentFile.name}>{currentFile.name}</h2>
-            <p className="mt-1 text-xs text-text-secondary">
-              {currentFile.page_count} 页 · {chunks.length} 段内容
-            </p>
-            <div className="mt-4 flex items-center gap-2">
-              <Explain text={helpText.chunkStudio.pageNav} title="翻页">
-                <Button variant="outline" size="icon" onClick={goPrev} disabled={page <= 1}>
-                  <ChevronLeft />
-                </Button>
-              </Explain>
-              <div className="flex flex-1 items-center justify-center gap-1 text-sm">
-                <input
-                  className="w-12 rounded border border-border-button bg-bg-input px-1 py-1 text-center"
-                  value={pageDraft}
-                  onChange={e => setPageDraft(e.target.value.replace(/[^\d]/g, ''))}
-                  onBlur={commitPageDraft}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') e.currentTarget.blur()
-                  }}
-                />
-                <span className="text-text-secondary">/ {currentFile.page_count}</span>
-              </div>
-              <Button variant="outline" size="icon" onClick={goNext} disabled={page >= currentFile.page_count}>
-                <ChevronRight />
-              </Button>
-            </div>
-            <Explain text={helpText.chunkStudio.autoOcr} title="新建后自动识别" className="mt-4">
-              <label className="flex items-center gap-2 text-xs text-text-secondary">
-                <input type="checkbox" checked={autoOcr} onChange={e => setAutoOcr(e.target.checked)} />
-                新建后自动识别文字
-              </label>
-            </Explain>
-            <Explain text={helpText.chunkStudio.drawHint} title="如何新建" className="mt-auto">
-              <p className="text-xs text-text-secondary">
-                在 PDF 上按住拖出方框即可新建；方向键可翻页。
-              </p>
-            </Explain>
-          </aside>
-
-          <div className="w-1 cursor-col-resize bg-transparent hover:bg-accent-primary/30" onMouseDown={startResize('left')} />
-
-          <main className={cn('min-w-0 flex-1 bg-bg-canvas p-3', view === 'list' && 'hidden')}>
-            <div className="legacy-surface chunk-studio-viewer h-full overflow-hidden rounded-xl border border-border-button bg-bg-base">
+        <div className="relative flex min-h-0 flex-1">
+          <main className="relative min-w-0 flex-1 bg-bg-canvas p-3">
+            <div className="legacy-surface chunk-studio-viewer relative h-full overflow-hidden rounded-xl border border-border-button bg-bg-base">
               <PageViewer
                 fileId={currentFile.id}
                 page={page}
@@ -366,74 +330,153 @@ export default function ChunkPage() {
                 visibleKind={chunkViewKind}
                 autoParseOnCreate={autoOcr}
                 onChunkCreated={onChunkCreated}
-                onSelectChunk={(id) => {
-                  setSelectedId(id)
-                  if (id) setView('edit')
-                }}
+                onSelectChunk={selectChunk}
                 onDeleteChunk={requestChunkDelete}
               />
+              <div
+                className="pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center"
+                title={helpText.chunkStudio.pageNav}
+              >
+                <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-border-button bg-bg-base/95 px-2 py-1.5 shadow-md backdrop-blur-sm">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 rounded-full"
+                      onClick={goPrev}
+                      disabled={page <= 1}
+                      title="上一页"
+                    >
+                      <ChevronLeft />
+                    </Button>
+                    <div className="flex items-center gap-1 px-1 text-sm tabular-nums">
+                      <input
+                        className="h-7 w-10 rounded-md border border-border-button bg-bg-input px-1 text-center"
+                        value={pageDraft}
+                        aria-label="页码"
+                        onChange={e => setPageDraft(e.target.value.replace(/[^\d]/g, ''))}
+                        onBlur={commitPageDraft}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') e.currentTarget.blur()
+                        }}
+                      />
+                      <span className="text-text-secondary">/</span>
+                      <span className="min-w-6 text-text-secondary">{currentFile.page_count}</span>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 rounded-full"
+                      onClick={goNext}
+                      disabled={page >= currentFile.page_count}
+                      title="下一页"
+                    >
+                      <ChevronRight />
+                    </Button>
+                </div>
+              </div>
             </div>
           </main>
 
-          <div className="w-1 cursor-col-resize bg-transparent hover:bg-accent-primary/30" onMouseDown={startResize('right')} />
-
-          <aside
-            className={cn(
-              'flex shrink-0 flex-col border-l border-border-button bg-bg-base',
-              view === 'preview' && 'hidden xl:flex',
-            )}
-            style={{ width: view === 'list' ? '100%' : rightW }}
-          >
-            <Tabs defaultValue="list" className="flex min-h-0 flex-1 flex-col">
-              <div className="border-b border-border-button px-3 pt-3">
-                <TabsList>
-                  <TabsTrigger value="list">内容列表</TabsTrigger>
-                  <TabsTrigger value="edit">编辑</TabsTrigger>
-                </TabsList>
-              </div>
-              <TabsContent value="list" className="mt-0 min-h-0 flex-1 overflow-hidden p-0">
-                <ScrollArea className="h-full">
-                  <div className="chunk-studio-list p-3">
-                    <ChunkList
-                      chunks={chunks}
-                      selectedId={selectedId}
-                      activeKind={chunkViewKind}
-                      onKindChange={setChunkViewKind}
-                      onSelect={(id) => {
-                        const chunk = chunks.find(item => item.id === id)
-                        if (chunk) setPage(chunk.page)
-                        setSelectedId(id)
-                        setView('edit')
-                      }}
-                      onDelete={requestChunkDelete}
-                    />
+          {rightOpen ? (
+            <>
+              <div
+                className="w-1 cursor-col-resize bg-transparent hover:bg-accent-primary/30"
+                onMouseDown={startResizeRight}
+              />
+              <aside
+                className="flex shrink-0 flex-col border-l border-border-button bg-bg-base"
+                style={{ width: rightW }}
+              >
+                <div className="flex items-start gap-2 border-b border-border-button px-3 py-3">
+                  <div className="min-w-0 flex-1">
+                    <h2 className="truncate text-sm font-semibold" title={currentFile.name}>
+                      {currentFile.name}
+                    </h2>
+                    <p className="mt-0.5 text-xs text-text-secondary">
+                      {currentFile.page_count} 页 · {chunks.length} 段内容
+                    </p>
                   </div>
-                </ScrollArea>
-              </TabsContent>
-              <TabsContent value="edit" className="mt-0 min-h-0 flex-1 overflow-auto p-3">
-                <div className="chunk-studio-editor h-full min-h-0 p-3">
-                  <ChunkEditor
-                    chunk={selectedChunk}
-                    fields={fields}
-                    onSaved={onChunkSaved}
+                  <div className="shrink-0">
+                    <Explain text={helpText.chunkStudio.collapseRight} title="收起列表">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setRightOpen(false)}
+                        title="收起列表"
+                      >
+                        <PanelRightClose />
+                      </Button>
+                    </Explain>
+                  </div>
+                </div>
+                <div className="chunk-studio-list min-h-0 flex-1">
+                  <ChunkList
+                    chunks={chunks}
+                    selectedId={selectedId}
+                    activeKind={chunkViewKind}
+                    onKindChange={setChunkViewKind}
+                    onSelect={selectChunk}
+                    onEdit={openChunkEditor}
                     onDelete={requestChunkDelete}
-                    onQueued={refreshChunks}
+                    onChunkUpdated={chunk => void onChunkUpdated(chunk)}
                   />
                 </div>
-              </TabsContent>
-            </Tabs>
-          </aside>
+              </aside>
+            </>
+          ) : (
+            <Explain text={helpText.chunkStudio.expandRight} title="展开列表">
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  'absolute right-0 top-3 z-10 h-9 w-9 rounded-r-none rounded-l-md',
+                  'border border-r-0 border-border-button bg-bg-base shadow-sm',
+                )}
+                onClick={() => setRightOpen(true)}
+                title="展开列表"
+              >
+                <PanelRightOpen />
+              </Button>
+            </Explain>
+          )}
         </div>
       )}
 
-      {deleteChunkId && (
+      <Dialog open={Boolean(editingId)} onOpenChange={open => { if (!open) setEditingId(null) }}>
+        <DialogContent
+          className="flex h-[min(780px,90vh)] w-[min(920px,92vw)] max-w-none flex-col gap-0 overflow-hidden p-0"
+          aria-describedby={undefined}
+          showCloseButton={false}
+        >
+          <DialogTitle className="sr-only">修改内容片段</DialogTitle>
+          <div className="min-h-0 flex-1 overflow-hidden p-5 pt-5">
+            {editingChunk ? (
+              <ChunkEditor
+                chunk={editingChunk}
+                fields={fields}
+                onSaved={async chunk => {
+                  await onChunkSaved(chunk)
+                }}
+                onCancel={() => setEditingId(null)}
+                onQueued={refreshChunks}
+              />
+            ) : (
+              <p className="py-10 text-center text-sm text-text-secondary">该片段已不存在</p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {deleteChunkIds && deleteChunkIds.length > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-sm rounded-xl border border-border-button bg-bg-base p-5 shadow-lg">
-            <h3 className="text-base font-semibold">删除这段内容？</h3>
+            <h3 className="text-base font-semibold">
+              {deleteChunkIds.length > 1 ? `删除选中的 ${deleteChunkIds.length} 段？` : '删除这段内容？'}
+            </h3>
             <p className="mt-2 text-sm text-text-secondary">删除后不能恢复，请确认。</p>
             <div className="mt-4 flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setDeleteChunkId(null)}>取消</Button>
-              <Button variant="destructive" onClick={confirmDelete}>删除</Button>
+              <Button variant="outline" onClick={() => setDeleteChunkIds(null)}>取消</Button>
+              <Button variant="destructive" onClick={() => void confirmDelete()}>删除</Button>
             </div>
           </div>
         </div>

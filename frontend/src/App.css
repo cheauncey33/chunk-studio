@@ -370,6 +370,11 @@
 }
 .metadata-review-heading h2 { margin: 0; font-size: 22px; }
 .metadata-review-heading p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+.metadata-review-heading-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+.metadata-extract-message {
+  margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--border);
+  border-radius: 10px; background: #f6f9f6; color: var(--ok); font-size: 13px;
+}
 .metadata-review-stats {
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px;
 }
@@ -782,9 +787,24 @@
   flex: 0 0 auto; padding: 2px 7px; border: 1px solid currentColor; border-radius: 999px;
   color: var(--muted); background: #fff; font-size: 11px; font-weight: 750;
 }
-.audit-status.correct, .audit-status.evaluated { color: var(--ok); }
-.audit-status.incorrect, .audit-status.evidence_not_found { color: var(--danger); }
-.audit-status.insufficient_context, .audit-status.context_required { color: var(--warn); }
+.audit-status.correct, .audit-status.supported, .audit-status.evaluated, .audit-status.confirmed { color: var(--ok); }
+.audit-status.incorrect, .audit-status.mismatch, .audit-status.evidence_not_found { color: var(--danger); }
+.audit-status.insufficient_context, .audit-status.context_required, .audit-status.not_audited, .audit-status.corrected { color: var(--warn); }
+.audit-review { border-top: 1px dashed var(--border); padding-top: 10px; }
+.audit-review-current { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+.audit-review-current p { flex-basis: 100%; margin: 2px 0 0; color: var(--muted); }
+.audit-review-current small { color: var(--muted); }
+.audit-review-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.audit-review-actions button {
+  padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: #fff; font-size: 12px; cursor: pointer;
+}
+.audit-review-actions button:hover { border-color: var(--accent, #4569d4); }
+.audit-review-form { display: grid; gap: 8px; }
+.audit-review-form label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.audit-review-form select, .audit-review-form textarea {
+  border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; font-size: 12px;
+}
 .audit-detail-empty {
   padding: 40px 18px; color: var(--muted); text-align: center; line-height: 1.6;
 }

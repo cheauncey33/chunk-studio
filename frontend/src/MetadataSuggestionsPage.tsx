@@ -35,6 +35,8 @@ export function MetadataSuggestionsPage({ onLocate }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [freshness, setFreshness] = useState<Freshness>('unknown')
+  const [extracting, setExtracting] = useState(false)
+  const [extractMessage, setExtractMessage] = useState('')
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -58,6 +60,25 @@ export function MetadataSuggestionsPage({ onLocate }: Props) {
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
+
+  const extractBulk = useCallback(async () => {
+    setExtracting(true)
+    setError('')
+    setExtractMessage('')
+    try {
+      const summary = await api.extractLlmSuggestionsBulk()
+      setExtractMessage(
+        summary.eligible === 0
+          ? '没有待提取的段落（已有建议的段落会被跳过）。'
+          : `已为 ${summary.extracted} / ${summary.eligible} 段生成关键词与问题建议（${summary.prompt_version}）。`,
+      )
+      await refresh()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setExtracting(false)
+    }
+  }, [refresh])
 
   const fileNames = useMemo(() => new Map(files.map(file => [file.id, file.name])), [files])
   const versions = useMemo(() => (
@@ -116,8 +137,15 @@ export function MetadataSuggestionsPage({ onLocate }: Props) {
             <h2>AI 建议审核</h2>
             <p>查看 AI 给内容片段写的关键词、可回答问题。这里只看建议；点「定位」可去编辑器核对原文后再决定是否采纳。</p>
           </div>
-          <button type="button" onClick={refresh} disabled={loading}>{loading ? '刷新中' : '刷新'}</button>
+          <div className="metadata-review-heading-actions">
+            <button type="button" className="primary" onClick={extractBulk} disabled={extracting || loading}>
+              {extracting ? '提取中…' : '批量提取建议'}
+            </button>
+            <button type="button" onClick={refresh} disabled={loading || extracting}>{loading ? '刷新中' : '刷新'}</button>
+          </div>
         </header>
+
+        {extractMessage && <p className="metadata-extract-message">{extractMessage}</p>}
 
         <div className="metadata-review-stats">
           <div><strong>{chunks.length}</strong><span>含建议的段落</span></div>
