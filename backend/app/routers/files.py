@@ -21,7 +21,7 @@ router = APIRouter(prefix="/files", tags=["files"])
 
 _PDF_MAGIC = b"%PDF-"
 _CORPUS_KINDS = frozenset({"standard", "spec"})
-_NON_CORPUS_ROLES = frozenset({"report", "naming"})
+_NON_CORPUS_ROLES = frozenset({"report", "naming", "sample_report"})
 
 
 class FileUpdate(BaseModel):
@@ -53,8 +53,9 @@ async def upload(
 ):
     """Upload a PDF. Validates magic bytes, content-addressed copy into data/files.
 
-    Corpus files (standard/spec) attach to a knowledge base. Report and naming
-    uploads stay outside knowledge_base_files; naming updates default_naming_file_id.
+    Corpus files (standard/spec) attach to a knowledge base. Report, sample_report
+    and naming uploads stay outside knowledge_base_files; naming updates
+    default_naming_file_id.
     """
     target_kb = None
     if knowledge_base_id:
@@ -112,8 +113,8 @@ async def upload(
                    WHERE id=?""",
                 (file_id, created, target_kb["id"]),
             )
-        elif doc_role == "report":
-            # Reports are audit inputs only; do not attach to a knowledge base.
+        elif doc_role in {"report", "sample_report"}:
+            # Audit / init inputs only; do not attach to a knowledge base.
             pass
         else:
             relation_kb = target_kb or conn.execute(
@@ -145,7 +146,7 @@ async def upload(
 @router.get("")
 def list_files():
     rows = db.get_conn().execute("SELECT * FROM files ORDER BY created_at DESC").fetchall()
-    return [_file_out(dict(r)) for r in rows]
+    return [_file_out(dict(r), include_parse=True) for r in rows]
 
 
 @router.get("/{file_id}")
@@ -323,12 +324,20 @@ def _get_file(file_id: str):
 
 def _latest_parse(file_id: str) -> dict[str, Any] | None:
     row = db.get_conn().execute(
-        """SELECT status, error, markdown_path FROM document_parses
+        """SELECT status, error, markdown_path, result FROM document_parses
            WHERE file_id=?
            ORDER BY created_at DESC LIMIT 1""",
         (file_id,),
     ).fetchone()
     return dict(row) if row else None
+
+
+def _auto_chunk_error(parse_result: Any) -> str:
+    try:
+        result = json.loads(parse_result or "{}")
+    except Exception:
+        return ""
+    return str(result.get("auto_chunk_error") or "") if isinstance(result, dict) else ""
 
 
 def _file_out(row: dict, *, include_parse: bool = False):
@@ -350,4 +359,7 @@ def _file_out(row: dict, *, include_parse: bool = False):
         out["parse_ready"] = bool(
             parse and parse.get("status") == "done" and parse.get("markdown_path")
         )
+        # Parse jobs succeed even when post-parse auto-chunking fails; surface
+        # that error so the UI can prompt a manual re-chunk.
+        out["auto_chunk_error"] = _auto_chunk_error(parse.get("result")) if parse else ""
     return out

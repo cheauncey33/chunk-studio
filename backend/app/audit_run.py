@@ -73,9 +73,13 @@ def run_assistant_audit(
     assistant_id: str,
     report_file_id: str,
     naming_rule_file_id: str | None = None,
-    report_id: str = "HBJC",
+    report_id: str | None = None,
 ) -> dict[str, Any]:
-    """Run the end-to-end audit workflow and write a timestamped report JSON."""
+    """Run the end-to-end audit workflow and write a timestamped report JSON.
+
+    Default is full-report mode (audit every extracted requirement). Passing
+    ``report_id`` switches to the legacy frozen case-pool evaluation mode.
+    """
     if not SCRIPT_PATH.is_file():
         raise RuntimeError(f"audit workflow script missing: {SCRIPT_PATH}")
 
@@ -85,7 +89,7 @@ def run_assistant_audit(
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     short = assistant_id.replace("assistant_", "")[:24] or "audit"
-    report_name = f"hbjc_end_to_end_audit_{short}_{stamp}.json"
+    report_name = f"end_to_end_audit_{short}_{stamp}.json"
     output_path = REPORTS_DIR / report_name
 
     cmd = [
@@ -98,11 +102,11 @@ def run_assistant_audit(
         assistant_id,
         "--report-file-id",
         report_file_id,
-        "--report-id",
-        report_id,
         "--output",
         str(output_path),
     ]
+    if report_id:
+        cmd.extend(["--case-pool", "--report-id", report_id])
     if resolved_naming_id:
         cmd.extend(["--naming-rule-file-id", resolved_naming_id])
     logger.info("starting assistant audit: %s", " ".join(cmd))

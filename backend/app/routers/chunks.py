@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 
@@ -11,13 +12,17 @@ from fastapi import APIRouter, HTTPException
 from .. import chunk_schema, config, db, extractors, jobs, pdf
 from ..models import BBox, ChunkCreate, ChunkOut, ChunkUpdate
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/chunks", tags=["chunks"])
 
 _ALLOWED_STATUS_TRANSITIONS = {
-    "pending": {"reviewed"},
-    "reviewed": {"approved", "rejected"},
-    "approved": set(),
-    "rejected": set(),
+    # Editor status dropdown and list enable toggle may jump between any
+    # review state; identical status is a no-op in the validator.
+    "pending": {"reviewed", "approved", "rejected"},
+    "reviewed": {"pending", "approved", "rejected"},
+    "approved": {"pending", "reviewed", "rejected"},
+    "rejected": {"pending", "reviewed", "approved"},
 }
 
 _REVIEW_SENSITIVE_JSON_FIELDS = (
@@ -204,6 +209,13 @@ def update_chunk(chunk_id: str, body: ChunkUpdate):
                 "UPDATE chunks SET status='pending', updated_at=? WHERE id=?",
                 (now, chunk_id),
             )
+    if body.status == "approved":
+        # Approved chunks should become retrievable without a manual CLI step.
+        # Failure to queue must not roll back the approval itself.
+        try:
+            jobs.enqueue_build_embeddings()
+        except Exception:
+            logger.exception("failed to enqueue embedding build after approval")
     return _get_chunk(chunk_id)
 
 

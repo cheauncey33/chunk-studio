@@ -24,6 +24,7 @@ _CHAT_SYSTEM = """你是知识库问答助手。只能依据下方「检索证�
 class AssistantCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=500)
+    knowledge_base_id: str | None = None
 
 
 class AssistantUpdate(BaseModel):
@@ -37,6 +38,7 @@ class AssistantVersionCreate(BaseModel):
     node_prompts: dict[str, Any]
     rules: dict[str, Any] = Field(default_factory=dict)
     retrieval_config: dict[str, Any] = Field(default_factory=dict)
+    parameter_schema: dict[str, Any] = Field(default_factory=dict)
     activate: bool = True
 
 
@@ -47,7 +49,32 @@ class KnowledgeBaseSelection(BaseModel):
 class AssistantRunRequest(BaseModel):
     report_file_id: str = Field(min_length=1)
     naming_rule_file_id: str | None = None
-    report_id: str = Field(default="HBJC", min_length=1, max_length=64)
+    # Evaluation-only: set to audit the frozen case pool instead of the full report.
+    report_id: str | None = Field(default=None, max_length=64)
+
+
+class AssistantRouteRequest(BaseModel):
+    report_file_id: str = Field(min_length=1)
+    model: str | None = None
+
+
+class AssistantRouteAndRunRequest(BaseModel):
+    report_file_id: str = Field(min_length=1)
+    naming_rule_file_id: str | None = None
+    # Evaluation-only: set to audit the frozen case pool instead of the full report.
+    report_id: str | None = Field(default=None, max_length=64)
+    model: str | None = None
+
+
+class AssistantInitRequest(BaseModel):
+    sample_report_file_ids: list[str] = Field(default_factory=list, max_length=3)
+    model: str | None = None
+
+
+class AssistantInitDraftUpdate(BaseModel):
+    category_profile: dict[str, Any] | None = None
+    parameter_schema: dict[str, Any] | None = None
+    report_parameters_prompt: str | None = None
 
 
 class ChatMessage(BaseModel):
@@ -66,6 +93,19 @@ def _loads(value: str | None) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     except json.JSONDecodeError:
         return {}
+
+
+def _version_out(row: Any) -> dict[str, Any]:
+    from ..parameter_schema import resolve_parameter_schema
+
+    return {
+        **dict(row),
+        "model_config": _loads(row["model_config"]),
+        "node_prompts": _loads(row["node_prompts"]),
+        "rules": _loads(row["rules"]),
+        "retrieval_config": _loads(row["retrieval_config"]),
+        "parameter_schema": resolve_parameter_schema(_loads(row["parameter_schema"])),
+    }
 
 
 def _assistant_row(assistant_id: str):
@@ -105,12 +145,12 @@ def _assistant_out(row: Any) -> dict[str, Any]:
 
 def _initial_version_template() -> Any:
     row = db.get_conn().execute(
-        """SELECT model_config, node_prompts, rules, retrieval_config
+        """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema
            FROM assistant_versions
-           WHERE id='assistant_oil_transformer_audit_v1'"""
+           WHERE id='assistant_audit_template_v1'"""
     ).fetchone()
     if not row:
-        raise RuntimeError("default assistant version template is missing")
+        raise RuntimeError("generic assistant version template is missing")
     return row
 
 
@@ -128,10 +168,26 @@ def list_assistants():
 
 @router.post("")
 def create_assistant(body: AssistantCreate):
+    from ..parameter_schema import resolve_parameter_schema
+
+    if body.knowledge_base_id:
+        try:
+            created = db.ensure_assistant_for_knowledge_base(
+                body.knowledge_base_id.strip(),
+                name=body.name.strip(),
+                description=body.description.strip(),
+            )
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        # If ensure returned an existing bind, optionally rename when caller provided a name.
+        existing = _assistant_out(_assistant_row(created["id"]))
+        return existing
+
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     assistant_id = f"assistant_{uuid.uuid4().hex}"
     version_id = f"{assistant_id}_v1"
     template = _initial_version_template()
+    parameter_schema = resolve_parameter_schema(_loads(template["parameter_schema"]))
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO audit_assistants
@@ -142,8 +198,8 @@ def create_assistant(body: AssistantCreate):
         conn.execute(
             """INSERT INTO assistant_versions
                (id,assistant_id,version,status,model_config,node_prompts,rules,
-                retrieval_config,created_at,activated_at)
-               VALUES (?,?,1,'active',?,?,?,?,?,?)""",
+                retrieval_config,parameter_schema,created_at,activated_at)
+               VALUES (?,?,1,'active',?,?,?,?,?,?,?)""",
             (
                 version_id,
                 assistant_id,
@@ -151,6 +207,7 @@ def create_assistant(body: AssistantCreate):
                 template["node_prompts"],
                 template["rules"],
                 template["retrieval_config"],
+                json.dumps(parameter_schema, ensure_ascii=False),
                 now,
                 now,
             ),
@@ -160,6 +217,49 @@ def create_assistant(body: AssistantCreate):
             (version_id, assistant_id),
         )
     return _assistant_out(_assistant_row(assistant_id))
+
+
+@router.post("/route")
+def route_assistant(body: AssistantRouteRequest):
+    from .. import assistant_router
+
+    try:
+        return assistant_router.route_report_to_assistant(
+            report_file_id=body.report_file_id,
+            model=body.model,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/route-and-run")
+def route_and_run_assistant(body: AssistantRouteAndRunRequest):
+    from .. import assistant_router
+
+    try:
+        route = assistant_router.route_report_to_assistant(
+            report_file_id=body.report_file_id,
+            model=body.model,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    try:
+        job = jobs.enqueue_assistant_audit(
+            route["assistant_id"],
+            report_file_id=body.report_file_id,
+            naming_rule_file_id=body.naming_rule_file_id,
+            report_id=body.report_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"route": route, "job": job}
 
 
 @router.get("/{assistant_id}")
@@ -196,16 +296,7 @@ def list_versions(assistant_id: str):
            WHERE assistant_id=? ORDER BY version DESC""",
         (assistant_id,),
     ).fetchall()
-    return [
-        {
-            **dict(row),
-            "model_config": _loads(row["model_config"]),
-            "node_prompts": _loads(row["node_prompts"]),
-            "rules": _loads(row["rules"]),
-            "retrieval_config": _loads(row["retrieval_config"]),
-        }
-        for row in rows
-    ]
+    return [_version_out(row) for row in rows]
 
 
 @router.get("/{assistant_id}/versions/active")
@@ -217,21 +308,47 @@ def get_active_version(assistant_id: str):
         "SELECT * FROM assistant_versions WHERE id=?",
         (assistant["active_version_id"],),
     ).fetchone()
-    return {
-        **dict(row),
-        "model_config": _loads(row["model_config"]),
-        "node_prompts": _loads(row["node_prompts"]),
-        "rules": _loads(row["rules"]),
-        "retrieval_config": _loads(row["retrieval_config"]),
-    }
+    return _version_out(row)
+
+
+@router.post("/{assistant_id}/versions/{version_id}/activate")
+def activate_version(assistant_id: str, version_id: str):
+    _assistant_row(assistant_id)
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    with db.transaction() as conn:
+        row = conn.execute(
+            "SELECT * FROM assistant_versions WHERE id=? AND assistant_id=?",
+            (version_id, assistant_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "version not found")
+        if row["status"] != "active":
+            conn.execute(
+                "UPDATE assistant_versions SET status='retired' WHERE assistant_id=? AND status='active'",
+                (assistant_id,),
+            )
+            conn.execute(
+                "UPDATE assistant_versions SET status='active', activated_at=? WHERE id=?",
+                (now, version_id),
+            )
+            conn.execute(
+                """UPDATE audit_assistants
+                   SET active_version_id=?, status='active', updated_at=?
+                   WHERE id=?""",
+                (version_id, now, assistant_id),
+            )
+    return get_active_version(assistant_id)
 
 
 @router.post("/{assistant_id}/versions")
 def create_version(assistant_id: str, body: AssistantVersionCreate):
+    from ..parameter_schema import resolve_parameter_schema
+
     _assistant_row(assistant_id)
     provider = str(body.model_settings.get("provider") or "").lower()
     if provider != "deepseek":
         raise HTTPException(422, "only DeepSeek assistant versions are supported")
+    parameter_schema = resolve_parameter_schema(body.parameter_schema)
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     with db.transaction() as conn:
         row = conn.execute(
@@ -248,8 +365,8 @@ def create_version(assistant_id: str, body: AssistantVersionCreate):
         conn.execute(
             """INSERT INTO assistant_versions
                (id,assistant_id,version,status,model_config,node_prompts,rules,
-                retrieval_config,created_at,activated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                retrieval_config,parameter_schema,created_at,activated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 version_id,
                 assistant_id,
@@ -259,6 +376,7 @@ def create_version(assistant_id: str, body: AssistantVersionCreate):
                 json.dumps(body.node_prompts, ensure_ascii=False),
                 json.dumps(body.rules, ensure_ascii=False),
                 json.dumps(body.retrieval_config, ensure_ascii=False),
+                json.dumps(parameter_schema, ensure_ascii=False),
                 now,
                 now if body.activate else None,
             ),
@@ -275,27 +393,46 @@ def create_version(assistant_id: str, body: AssistantVersionCreate):
 
 @router.put("/{assistant_id}/knowledge-bases")
 def set_knowledge_bases(assistant_id: str, body: KnowledgeBaseSelection):
+    """Bind exactly one knowledge base (1:1). Empty list unbinds."""
+    if assistant_id == "assistant_audit_template":
+        raise HTTPException(400, "通用审查模板不绑定知识库")
     _assistant_row(assistant_id)
     unique_ids = list(dict.fromkeys(body.knowledge_base_ids))
+    if len(unique_ids) > 1:
+        raise HTTPException(422, "每个助手只能绑定一个知识库")
     if unique_ids:
-        placeholders = ",".join("?" for _ in unique_ids)
-        count = db.get_conn().execute(
-            f"SELECT COUNT(*) AS n FROM knowledge_bases WHERE id IN ({placeholders})",
-            unique_ids,
-        ).fetchone()["n"]
-        if count != len(unique_ids):
-            raise HTTPException(422, "one or more knowledge bases do not exist")
+        kb_id = unique_ids[0]
+        row = db.get_conn().execute(
+            "SELECT id FROM knowledge_bases WHERE id=?",
+            (kb_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(422, "knowledge base does not exist")
+        conflict = db.get_conn().execute(
+            """SELECT assistant_id FROM assistant_knowledge_bases
+               WHERE knowledge_base_id=? AND enabled=1 AND assistant_id!=?""",
+            (kb_id, assistant_id),
+        ).fetchone()
+        if conflict:
+            raise HTTPException(409, "该知识库已绑定其他助手")
     with db.transaction() as conn:
         conn.execute(
             "DELETE FROM assistant_knowledge_bases WHERE assistant_id=?",
             (assistant_id,),
         )
-        conn.executemany(
-            """INSERT INTO assistant_knowledge_bases
-               (assistant_id,knowledge_base_id,priority,enabled)
-               VALUES (?,?,?,1)""",
-            [(assistant_id, kb_id, index) for index, kb_id in enumerate(unique_ids)],
-        )
+        if unique_ids:
+            kb_id = unique_ids[0]
+            # Ensure the KB has no stale binds (disabled rows included).
+            conn.execute(
+                "DELETE FROM assistant_knowledge_bases WHERE knowledge_base_id=?",
+                (kb_id,),
+            )
+            conn.execute(
+                """INSERT INTO assistant_knowledge_bases
+                   (assistant_id,knowledge_base_id,priority,enabled)
+                   VALUES (?,?,0,1)""",
+                (assistant_id, kb_id),
+            )
     return _assistant_out(_assistant_row(assistant_id))
 
 
@@ -314,6 +451,95 @@ def start_assistant_run(assistant_id: str, body: AssistantRunRequest):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return job
+
+
+@router.post("/{assistant_id}/init")
+def start_assistant_init(assistant_id: str, body: AssistantInitRequest):
+    _assistant_row(assistant_id)
+    try:
+        job = jobs.enqueue_assistant_init(
+            assistant_id,
+            sample_report_file_ids=body.sample_report_file_ids,
+            model=body.model,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    from .. import assistant_init
+
+    return {
+        "job": job,
+        "draft": assistant_init.get_init_draft(assistant_id),
+    }
+
+
+@router.get("/{assistant_id}/init-draft")
+def get_assistant_init_draft(assistant_id: str):
+    _assistant_row(assistant_id)
+    from .. import assistant_init
+
+    draft = assistant_init.get_init_draft(assistant_id)
+    if not draft:
+        raise HTTPException(404, "init draft not found")
+    return draft
+
+
+@router.put("/{assistant_id}/init-draft")
+def update_assistant_init_draft(assistant_id: str, body: AssistantInitDraftUpdate):
+    _assistant_row(assistant_id)
+    from .. import assistant_init
+
+    patch: dict[str, Any] = {}
+    if body.category_profile is not None:
+        patch["category_profile"] = body.category_profile
+    if body.parameter_schema is not None:
+        patch["parameter_schema"] = body.parameter_schema
+    if body.report_parameters_prompt is not None:
+        patch["report_parameters_prompt"] = body.report_parameters_prompt
+    if not patch:
+        raise HTTPException(422, "no draft fields to update")
+    try:
+        return assistant_init.update_init_draft_payload(assistant_id, patch)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/{assistant_id}/init-draft/apply")
+def apply_assistant_init_draft(assistant_id: str):
+    _assistant_row(assistant_id)
+    from .. import assistant_init
+
+    try:
+        applied = assistant_init.apply_init_draft(assistant_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        **applied,
+        "assistant": _assistant_out(_assistant_row(assistant_id)),
+        "active_version": get_active_version(assistant_id),
+    }
+
+
+@router.post("/{assistant_id}/init-draft/discard")
+def discard_assistant_init_draft(assistant_id: str):
+    _assistant_row(assistant_id)
+    from .. import assistant_init
+
+    draft = assistant_init.get_init_draft(assistant_id)
+    if not draft:
+        raise HTTPException(404, "init draft not found")
+    if draft["status"] == "generating":
+        raise HTTPException(400, "draft is still generating")
+    return assistant_init.upsert_init_draft(
+        assistant_id,
+        status="discarded",
+        payload=draft.get("payload") or {},
+    )
 
 
 def _format_evidence(hits: list[dict[str, Any]]) -> str:

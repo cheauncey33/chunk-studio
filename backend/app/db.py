@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import uuid
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -41,8 +42,8 @@ SEED_FIELDS = [
      "提炼3-8个可用于电力标准检索的关键词。", 7),
     ("questions", "相关问题", "llm", "free", "[]", "list",
      "生成2-4个可由当前片段直接回答的检索问题。", 8),
-    ("tags", "用户标签", "manual", "enum", "[]", "list",
-     "用户自定义标签(可多选)。", 9),
+    ("tags", "用户标签", "manual", "free", "[]", "list",
+     "用户自定义标签(可多选，逗号分隔)。", 9),
 ]
 
 _SCHEMA = """
@@ -206,6 +207,7 @@ CREATE TABLE IF NOT EXISTS assistant_versions (
     node_prompts      TEXT NOT NULL DEFAULT '{}',
     rules             TEXT NOT NULL DEFAULT '{}',
     retrieval_config  TEXT NOT NULL DEFAULT '{}',
+    parameter_schema  TEXT NOT NULL DEFAULT '{}',
     created_at        TEXT NOT NULL,
     activated_at      TEXT,
     UNIQUE (assistant_id, version),
@@ -220,6 +222,29 @@ CREATE TABLE IF NOT EXISTS assistant_knowledge_bases (
     PRIMARY KEY (assistant_id, knowledge_base_id),
     FOREIGN KEY (assistant_id) REFERENCES audit_assistants(id) ON DELETE CASCADE,
     FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS assistant_init_drafts (
+    assistant_id TEXT PRIMARY KEY,
+    status       TEXT NOT NULL DEFAULT 'ready'
+                 CHECK (status IN ('generating','ready','failed','applied','discarded')),
+    payload      TEXT NOT NULL DEFAULT '{}',
+    job_id       TEXT,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    FOREIGN KEY (assistant_id) REFERENCES audit_assistants(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS audit_case_reviews (
+    report_name      TEXT NOT NULL,
+    case_id          TEXT NOT NULL,
+    status           TEXT NOT NULL CHECK (status IN ('confirmed','corrected')),
+    corrected_status TEXT NOT NULL DEFAULT '',
+    note             TEXT NOT NULL DEFAULT '',
+    reviewer         TEXT NOT NULL DEFAULT '',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    PRIMARY KEY (report_name, case_id)
 );
 """
 
@@ -242,10 +267,397 @@ def init_db() -> None:
     _migrate_field_config()
     _migrate_knowledge_base_corpus_rules()
     _migrate_knowledge_base_corpus_kind()
+    _migrate_assistant_parameter_schema()
+    _migrate_assistant_kb_one_to_one()
+    _migrate_assistant_init_drafts()
     _backfill_chunk_layers()
     _backfill_auto_metadata()
     _seed_knowledge_base_and_assistant()
+    _ensure_knowledge_base_assistants()
     _conn.commit()
+
+
+def _migrate_assistant_parameter_schema() -> None:
+    """Add parameter_schema column on assistant_versions."""
+    assert _conn is not None
+    cols = {
+        row["name"]
+        for row in _conn.execute("PRAGMA table_info(assistant_versions)").fetchall()
+    }
+    if "parameter_schema" not in cols:
+        _conn.execute(
+            """ALTER TABLE assistant_versions
+               ADD COLUMN parameter_schema TEXT NOT NULL DEFAULT '{}'"""
+        )
+
+
+def _migrate_assistant_init_drafts() -> None:
+    """Ensure assistant_init_drafts exists on older databases."""
+    assert _conn is not None
+    _conn.execute(
+        """CREATE TABLE IF NOT EXISTS assistant_init_drafts (
+               assistant_id TEXT PRIMARY KEY,
+               status       TEXT NOT NULL DEFAULT 'ready'
+                            CHECK (status IN ('generating','ready','failed','applied','discarded')),
+               payload      TEXT NOT NULL DEFAULT '{}',
+               job_id       TEXT,
+               created_at   TEXT NOT NULL,
+               updated_at   TEXT NOT NULL,
+               FOREIGN KEY (assistant_id) REFERENCES audit_assistants(id) ON DELETE CASCADE
+           )"""
+    )
+
+
+def _migrate_assistant_kb_one_to_one() -> None:
+    """Enforce one enabled assistant bind per knowledge base.
+
+    If a KB has multiple assistants, keep oil for default KB when present,
+    otherwise the lowest-priority bind. If an assistant has multiple KBs,
+    keep its lowest-priority bind only.
+    """
+    assert _conn is not None
+    # Collapse multi-assistant binds on the same KB.
+    kb_ids = [
+        row["knowledge_base_id"]
+        for row in _conn.execute(
+            """SELECT knowledge_base_id
+               FROM assistant_knowledge_bases
+               WHERE enabled=1
+               GROUP BY knowledge_base_id
+               HAVING COUNT(*) > 1"""
+        ).fetchall()
+    ]
+    for kb_id in kb_ids:
+        rows = _conn.execute(
+            """SELECT assistant_id, priority
+               FROM assistant_knowledge_bases
+               WHERE knowledge_base_id=? AND enabled=1
+               ORDER BY
+                 CASE WHEN assistant_id='assistant_oil_transformer_audit' THEN 0 ELSE 1 END,
+                 priority ASC,
+                 assistant_id ASC""",
+            (kb_id,),
+        ).fetchall()
+        keep = rows[0]["assistant_id"]
+        _conn.execute(
+            """DELETE FROM assistant_knowledge_bases
+               WHERE knowledge_base_id=? AND assistant_id!=?""",
+            (kb_id, keep),
+        )
+    # Collapse multi-KB binds on the same assistant.
+    assistant_ids = [
+        row["assistant_id"]
+        for row in _conn.execute(
+            """SELECT assistant_id
+               FROM assistant_knowledge_bases
+               WHERE enabled=1
+               GROUP BY assistant_id
+               HAVING COUNT(*) > 1"""
+        ).fetchall()
+    ]
+    for assistant_id in assistant_ids:
+        rows = _conn.execute(
+            """SELECT knowledge_base_id, priority
+               FROM assistant_knowledge_bases
+               WHERE assistant_id=? AND enabled=1
+               ORDER BY priority ASC, knowledge_base_id ASC""",
+            (assistant_id,),
+        ).fetchall()
+        keep = rows[0]["knowledge_base_id"]
+        _conn.execute(
+            """DELETE FROM assistant_knowledge_bases
+               WHERE assistant_id=? AND knowledge_base_id!=?""",
+            (assistant_id, keep),
+        )
+
+
+def _ensure_knowledge_base_assistants() -> None:
+    """Every active KB gets a paired assistant (1:1)."""
+    assert _conn is not None
+    rows = _conn.execute(
+        """SELECT kb.id, kb.name, kb.description
+           FROM knowledge_bases kb
+           WHERE kb.status='active'
+             AND NOT EXISTS (
+               SELECT 1 FROM assistant_knowledge_bases akb
+               WHERE akb.knowledge_base_id=kb.id AND akb.enabled=1
+             )"""
+    ).fetchall()
+    for row in rows:
+        ensure_assistant_for_knowledge_base(
+            row["id"],
+            name=f"{row['name']}审查",
+            description=row["description"] or f"绑定知识库「{row['name']}」的审查配置",
+        )
+
+
+def assistant_id_for_knowledge_base(knowledge_base_id: str) -> str | None:
+    row = get_conn().execute(
+        """SELECT assistant_id
+           FROM assistant_knowledge_bases
+           WHERE knowledge_base_id=? AND enabled=1
+           ORDER BY priority ASC, assistant_id ASC
+           LIMIT 1""",
+        (knowledge_base_id,),
+    ).fetchone()
+    return str(row["assistant_id"]) if row else None
+
+
+def knowledge_base_id_for_assistant(assistant_id: str) -> str | None:
+    row = get_conn().execute(
+        """SELECT knowledge_base_id
+           FROM assistant_knowledge_bases
+           WHERE assistant_id=? AND enabled=1
+           ORDER BY priority ASC, knowledge_base_id ASC
+           LIMIT 1""",
+        (assistant_id,),
+    ).fetchone()
+    return str(row["knowledge_base_id"]) if row else None
+
+
+def _unique_assistant_name(base: str) -> str:
+    conn = get_conn()
+    cleaned = (base or "审查助手").strip()[:80] or "审查助手"
+    exists = conn.execute(
+        "SELECT 1 FROM audit_assistants WHERE name=?",
+        (cleaned,),
+    ).fetchone()
+    if not exists:
+        return cleaned
+    stem = cleaned[:70]
+    for index in range(2, 1000):
+        candidate = f"{stem} ({index})"
+        exists = conn.execute(
+            "SELECT 1 FROM audit_assistants WHERE name=?",
+            (candidate,),
+        ).fetchone()
+        if not exists:
+            return candidate
+    return f"{stem} ({uuid.uuid4().hex[:8]})"
+
+
+def ensure_assistant_for_knowledge_base(
+    knowledge_base_id: str,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> dict[str, Any]:
+    """Create-or-return the single assistant bound to this knowledge base."""
+    import time
+
+    from .parameter_schema import resolve_parameter_schema
+
+    conn = get_conn()
+    kb = conn.execute(
+        "SELECT id, name, description, status FROM knowledge_bases WHERE id=?",
+        (knowledge_base_id,),
+    ).fetchone()
+    if not kb:
+        raise KeyError(f"knowledge base not found: {knowledge_base_id}")
+
+    existing_id = assistant_id_for_knowledge_base(knowledge_base_id)
+    if existing_id:
+        row = conn.execute(
+            """SELECT a.*, v.version AS active_version
+               FROM audit_assistants a
+               LEFT JOIN assistant_versions v ON v.id=a.active_version_id
+               WHERE a.id=?""",
+            (existing_id,),
+        ).fetchone()
+        if row:
+            return dict(row)
+
+    template = conn.execute(
+        """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema
+           FROM assistant_versions
+           WHERE id='assistant_audit_template_v1'"""
+    ).fetchone()
+    if not template:
+        raise RuntimeError("generic assistant version template is missing")
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    assistant_id = f"assistant_{uuid.uuid4().hex}"
+    version_id = f"{assistant_id}_v1"
+    assistant_name = _unique_assistant_name(name or f"{kb['name']}审查")
+    assistant_description = (
+        description
+        if description is not None
+        else (kb["description"] or f"绑定知识库「{kb['name']}」的审查配置")
+    )
+    parameter_schema = resolve_parameter_schema(
+        _loads_json(template["parameter_schema"], {})
+    )
+
+    with transaction() as tx:
+        # Another writer may have bound this KB between the check and now.
+        raced = tx.execute(
+            """SELECT assistant_id FROM assistant_knowledge_bases
+               WHERE knowledge_base_id=? AND enabled=1 LIMIT 1""",
+            (knowledge_base_id,),
+        ).fetchone()
+        if raced:
+            return dict(
+                tx.execute(
+                    """SELECT a.*, v.version AS active_version
+                       FROM audit_assistants a
+                       LEFT JOIN assistant_versions v ON v.id=a.active_version_id
+                       WHERE a.id=?""",
+                    (raced["assistant_id"],),
+                ).fetchone()
+            )
+
+        tx.execute(
+            """INSERT INTO audit_assistants
+               (id,name,description,status,active_version_id,created_at,updated_at)
+               VALUES (?,?,?,'active',NULL,?,?)""",
+            (assistant_id, assistant_name, assistant_description, now, now),
+        )
+        tx.execute(
+            """INSERT INTO assistant_versions
+               (id,assistant_id,version,status,model_config,node_prompts,rules,
+                retrieval_config,parameter_schema,created_at,activated_at)
+               VALUES (?,?,1,'active',?,?,?,?,?,?,?)""",
+            (
+                version_id,
+                assistant_id,
+                template["model_config"],
+                template["node_prompts"],
+                template["rules"],
+                template["retrieval_config"],
+                json.dumps(parameter_schema, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+        tx.execute(
+            "UPDATE audit_assistants SET active_version_id=? WHERE id=?",
+            (version_id, assistant_id),
+        )
+        # Drop any prior binds on this KB (should be none) and bind 1:1.
+        tx.execute(
+            "DELETE FROM assistant_knowledge_bases WHERE knowledge_base_id=?",
+            (knowledge_base_id,),
+        )
+        tx.execute(
+            """INSERT INTO assistant_knowledge_bases
+               (assistant_id, knowledge_base_id, priority, enabled)
+               VALUES (?,?,0,1)""",
+            (assistant_id, knowledge_base_id),
+        )
+
+    row = get_conn().execute(
+        """SELECT a.*, v.version AS active_version
+           FROM audit_assistants a
+           LEFT JOIN assistant_versions v ON v.id=a.active_version_id
+           WHERE a.id=?""",
+        (assistant_id,),
+    ).fetchone()
+    return dict(row)
+
+
+def _load_node_prompts(prompt_paths: dict[str, str]) -> dict[str, dict[str, str]]:
+    prompt_dir = config.PROJECT_ROOT / "evaluation" / "prompts"
+    node_prompts: dict[str, dict[str, str]] = {}
+    for key, filename in prompt_paths.items():
+        path = prompt_dir / filename
+        node_prompts[key] = {
+            "path": str(path.relative_to(config.PROJECT_ROOT)).replace("\\", "/"),
+            "content": path.read_text(encoding="utf-8") if path.exists() else "",
+        }
+    return node_prompts
+
+
+def _default_model_config() -> dict[str, Any]:
+    return {
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+        "temperature": 0,
+        "response_format": "json_object",
+        "thinking": "disabled",
+    }
+
+
+def _default_retrieval_config() -> dict[str, Any]:
+    return {
+        "top_k": 10,
+        "route_top_k": 30,
+        "candidate_count_per_type": 20,
+        "final_per_type": 15,
+        "special_route_reserve": 3,
+        "similarity_threshold": 0.2,
+        "keyword_weight": 0.3,
+        "vector_weight": 0.7,
+        # Peer-report context triggers for the audit workflow. Editable per
+        # assistant version; an empty list disables peer context.
+        "peer_context_rules": [
+            {
+                "triggers": ["总损耗", "P总"],
+                "related": ["空载损耗", "负载损耗", "总损耗", "P0", "Pk", "P总"],
+            },
+            {
+                "triggers": ["频率", "Hz"],
+                "related": ["频率", "Hz", "持续时间", "试验时间", "感应耐压"],
+            },
+        ],
+    }
+
+
+def _seed_assistant_version(
+    *,
+    assistant_id: str,
+    version_id: str,
+    name: str,
+    description: str,
+    node_prompts: dict[str, Any],
+    rules: dict[str, Any],
+    parameter_schema: dict[str, Any],
+    now: str,
+) -> None:
+    assert _conn is not None
+    _conn.execute(
+        """INSERT OR IGNORE INTO audit_assistants
+           (id, name, description, status, active_version_id, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?)""",
+        (assistant_id, name, description, "active", None, now, now),
+    )
+    _conn.execute(
+        """INSERT OR IGNORE INTO assistant_versions
+           (id, assistant_id, version, status, model_config, node_prompts,
+            rules, retrieval_config, parameter_schema, created_at, activated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            version_id,
+            assistant_id,
+            1,
+            "active",
+            json.dumps(_default_model_config(), ensure_ascii=False),
+            json.dumps(node_prompts, ensure_ascii=False),
+            json.dumps(rules, ensure_ascii=False),
+            json.dumps(_default_retrieval_config(), ensure_ascii=False),
+            json.dumps(parameter_schema, ensure_ascii=False),
+            now,
+            now,
+        ),
+    )
+    _conn.execute(
+        "UPDATE audit_assistants SET active_version_id=? WHERE id=? AND active_version_id IS NULL",
+        (version_id, assistant_id),
+    )
+    # Backfill empty parameter_schema on the seed version without clobbering edits.
+    row = _conn.execute(
+        "SELECT parameter_schema FROM assistant_versions WHERE id=?",
+        (version_id,),
+    ).fetchone()
+    existing = {}
+    try:
+        existing = json.loads((row["parameter_schema"] if row else None) or "{}")
+    except (json.JSONDecodeError, TypeError):
+        existing = {}
+    if not (isinstance(existing, dict) and existing.get("fields")):
+        _conn.execute(
+            "UPDATE assistant_versions SET parameter_schema=? WHERE id=?",
+            (json.dumps(parameter_schema, ensure_ascii=False), version_id),
+        )
 
 
 def _seed_knowledge_base_and_assistant() -> None:
@@ -258,10 +670,14 @@ def _seed_knowledge_base_and_assistant() -> None:
     """
     import time
 
+    from .parameter_schema import generic_parameter_schema, oil_parameter_schema
+
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     kb_id = "kb_uncategorized"
-    assistant_id = "assistant_oil_transformer_audit"
-    version_id = "assistant_oil_transformer_audit_v1"
+    oil_assistant_id = "assistant_oil_transformer_audit"
+    oil_version_id = "assistant_oil_transformer_audit_v1"
+    template_assistant_id = "assistant_audit_template"
+    template_version_id = "assistant_audit_template_v1"
     rules_path = config.PROJECT_ROOT / "evaluation" / "manual_knowledge_rules_v1.json"
     seed_manual_rules = (
         json.loads(rules_path.read_text(encoding="utf-8")) if rules_path.exists() else {}
@@ -342,9 +758,9 @@ def _seed_knowledge_base_and_assistant() -> None:
              SELECT 1 FROM knowledge_base_files kbf WHERE kbf.file_id=f.id
            )
            AND LOWER(COALESCE(json_extract(f.metadata, '$.doc_role'), ''))
-               NOT IN ('report', 'naming')
+               NOT IN ('report', 'naming', 'sample_report')
            AND LOWER(COALESCE(json_extract(f.metadata, '$.doc_type'), ''))
-               NOT IN ('report', 'naming')""",
+               NOT IN ('report', 'naming', 'sample_report')""",
         (kb_id, now),
     )
     # Detach reports / naming files that were wrongly attached as corpus.
@@ -353,9 +769,9 @@ def _seed_knowledge_base_and_assistant() -> None:
            WHERE file_id IN (
              SELECT f.id FROM files f
              WHERE LOWER(COALESCE(json_extract(f.metadata, '$.doc_role'), ''))
-                   IN ('report', 'naming')
+                   IN ('report', 'naming', 'sample_report')
                 OR LOWER(COALESCE(json_extract(f.metadata, '$.doc_type'), ''))
-                   IN ('report', 'naming')
+                   IN ('report', 'naming', 'sample_report')
            )"""
     )
     # Naming attribute files must not remain in corpus membership.
@@ -367,84 +783,50 @@ def _seed_knowledge_base_and_assistant() -> None:
                AND TRIM(default_naming_file_id) != ''
            )"""
     )
-    _conn.execute(
-        """INSERT OR IGNORE INTO audit_assistants
-           (id, name, description, status, active_version_id, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?)""",
-        (
-            assistant_id,
-            "油浸式变压器审查",
-            "检测报告参数、项目、型号规则、证据检索与标准值审查",
-            "active",
-            None,
-            now,
-            now,
-        ),
-    )
-    prompt_paths = {
-        "report_parameters": "report_parameter_extraction_v1.md",
-        "test_items": "report_test_item_extraction_v1.md",
-        "model_decode": "model_naming_decode_v1.md",
-        "query_planner": "retrieval_query_planner_v1.md",
-        "audit_judge": "standard_value_audit_judge_v1.md",
-    }
-    prompt_dir = config.PROJECT_ROOT / "evaluation" / "prompts"
-    node_prompts = {}
-    for key, filename in prompt_paths.items():
-        path = prompt_dir / filename
-        node_prompts[key] = {
-            "path": str(path.relative_to(config.PROJECT_ROOT)).replace("\\", "/"),
-            "content": path.read_text(encoding="utf-8") if path.exists() else "",
+
+    oil_prompts = _load_node_prompts(
+        {
+            "report_parameters": "report_parameter_extraction_v1.md",
+            "test_items": "report_test_item_extraction_v1.md",
+            "model_decode": "model_naming_decode_v1.md",
+            "query_planner": "retrieval_query_planner_v1.md",
+            "audit_judge": "standard_value_audit_judge_v1.md",
         }
-    rules = seed_manual_rules
-    _conn.execute(
-        """INSERT OR IGNORE INTO assistant_versions
-           (id, assistant_id, version, status, model_config, node_prompts,
-            rules, retrieval_config, created_at, activated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?)""",
-        (
-            version_id,
-            assistant_id,
-            1,
-            "active",
-            json.dumps(
-                {
-                    "provider": "deepseek",
-                    "model": "deepseek-v4-flash",
-                    "temperature": 0,
-                    "response_format": "json_object",
-                    "thinking": "disabled",
-                },
-                ensure_ascii=False,
-            ),
-            json.dumps(node_prompts, ensure_ascii=False),
-            json.dumps(rules, ensure_ascii=False),
-            json.dumps(
-                {
-                    "top_k": 10,
-                    "route_top_k": 30,
-                    "candidate_count_per_type": 20,
-                    "final_per_type": 15,
-                    "special_route_reserve": 3,
-                    "similarity_threshold": 0.2,
-                    "keyword_weight": 0.3,
-                    "vector_weight": 0.7,
-                },
-                ensure_ascii=False,
-            ),
-            now,
-            now,
-        ),
     )
-    _conn.execute(
-        "UPDATE audit_assistants SET active_version_id=? WHERE id=? AND active_version_id IS NULL",
-        (version_id, assistant_id),
+    template_prompts = _load_node_prompts(
+        {
+            "report_parameters": "generic/report_parameter_extraction_generic_v1.md",
+            "test_items": "generic/report_test_item_extraction_generic_v1.md",
+            "model_decode": "generic/model_naming_decode_generic_v1.md",
+            "query_planner": "generic/retrieval_query_planner_generic_v1.md",
+            "audit_judge": "generic/standard_value_audit_judge_generic_v1.md",
+        }
+    )
+    _seed_assistant_version(
+        assistant_id=template_assistant_id,
+        version_id=template_version_id,
+        name="通用审查模板",
+        description="品类无关的审查工作流骨架；新建助手默认从此复制",
+        node_prompts=template_prompts,
+        rules={},
+        parameter_schema=generic_parameter_schema(),
+        now=now,
+    )
+    _seed_assistant_version(
+        assistant_id=oil_assistant_id,
+        version_id=oil_version_id,
+        name="油浸式变压器审查",
+        description="检测报告参数、项目、型号规则、证据检索与标准值审查",
+        node_prompts=oil_prompts,
+        rules=seed_manual_rules,
+        parameter_schema=oil_parameter_schema(),
+        now=now,
     )
     _conn.execute(
         """INSERT OR IGNORE INTO assistant_knowledge_bases
            (assistant_id, knowledge_base_id, priority, enabled)
            VALUES (?,?,0,1)""",
-        (assistant_id, kb_id),
+        (oil_assistant_id, kb_id),
     )
 
 
@@ -540,6 +922,7 @@ def _migrate_field_config() -> None:
         _seed_fields_if_empty()  # fresh install: ensure defaults present
         _normalize_field_config_paths()
         _retire_deprecated_field_configs()
+        _fix_user_tags_field_config()
         return  # already new schema
     _conn.execute("DROP TABLE IF EXISTS field_config")
     _conn.execute(
@@ -564,7 +947,20 @@ def _migrate_field_config() -> None:
     _seed_fields_if_empty()
     _normalize_field_config_paths()
     _retire_deprecated_field_configs()
+    _fix_user_tags_field_config()
     _backfill_auto_metadata()
+
+
+def _fix_user_tags_field_config() -> None:
+    """User tags were seeded as enum with an empty option list (unusable)."""
+    assert _conn is not None
+    _conn.execute(
+        """UPDATE field_config
+           SET value_constraint='free',
+               label_list='[]',
+               llm_description=COALESCE(NULLIF(llm_description, ''), '用户自定义标签(可多选，逗号分隔)。')
+           WHERE field_key='tags' AND value_constraint='enum'"""
+    )
 
 
 def _migrate_field_config_columns() -> None:

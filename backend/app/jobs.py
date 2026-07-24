@@ -157,10 +157,13 @@ def enqueue_assistant_audit(
     *,
     report_file_id: str,
     naming_rule_file_id: str | None = None,
-    report_id: str = "HBJC",
+    report_id: str | None = None,
     priority: int = 5,
 ) -> dict[str, Any]:
-    """Queue an end-to-end assistant audit trial run.
+    """Queue an end-to-end assistant audit run.
+
+    ``report_id`` is an evaluation-only option: when set, the run audits the
+    frozen case pool for that report instead of the full extracted report.
 
     The report is an audit input (not KB corpus). Naming PDF is a KB attribute
     and also need not appear in knowledge_base_files. Evidence still comes from
@@ -225,14 +228,124 @@ def enqueue_assistant_audit(
         "assistant_id": assistant_id,
         "report_file_id": report_file_id,
         "naming_rule_file_id": resolved_naming_id,
-        "report_id": report_id,
     }
+    if report_id:
+        payload["report_id"] = report_id
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO jobs
                (id, type, target_type, target_id, status, priority, attempts,
                 max_attempts, error, result, created_at)
                VALUES (?, 'audit', 'assistant', ?, 'queued', ?, 0, 1, '', ?, ?)""",
+            (jid, assistant_id, priority, json.dumps(payload, ensure_ascii=False), created),
+        )
+    return get_job(jid)
+
+
+def enqueue_build_embeddings(*, priority: int = 3) -> dict[str, Any]:
+    """Queue an incremental dense-embedding build for approved chunks.
+
+    The build itself is idempotent (skips chunks whose text hash already has a
+    stored vector), so a single queued/running job is reused for any number of
+    approvals that happen in the meantime.
+    """
+    existing = db.get_conn().execute(
+        """SELECT * FROM jobs
+           WHERE type='embed' AND target_type='corpus' AND target_id='approved_chunks'
+             AND status IN ('queued','running')
+           ORDER BY created_at DESC LIMIT 1"""
+    ).fetchone()
+    if existing:
+        return get_job(existing["id"])
+
+    jid = uuid.uuid4().hex
+    created = now_iso()
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO jobs
+               (id, type, target_type, target_id, status, priority, attempts,
+                max_attempts, error, result, created_at)
+               VALUES (?, 'embed', 'corpus', 'approved_chunks', 'queued', ?, 0, 1, '', '{}', ?)""",
+            (jid, priority, created),
+        )
+    return get_job(jid)
+
+
+def enqueue_assistant_init(
+    assistant_id: str,
+    *,
+    sample_report_file_ids: list[str] | None = None,
+    model: str | None = None,
+    priority: int = 4,
+) -> dict[str, Any]:
+    """Queue category-init draft generation for an assistant."""
+    from . import assistant_init
+
+    row = db.get_conn().execute(
+        "SELECT id, active_version_id FROM audit_assistants WHERE id=?",
+        (assistant_id,),
+    ).fetchone()
+    if not row:
+        raise KeyError("assistant not found")
+    if assistant_id == "assistant_audit_template":
+        raise ValueError("不能对通用审查模板运行品类初始化")
+    if not row["active_version_id"]:
+        raise ValueError("assistant has no active version")
+    if not db.knowledge_base_id_for_assistant(assistant_id):
+        raise ValueError("assistant is not bound to a knowledge base")
+
+    samples = list(dict.fromkeys(sample_report_file_ids or []))[:3]
+    for file_id in samples:
+        file_row = db.get_conn().execute(
+            "SELECT id FROM files WHERE id=?",
+            (file_id,),
+        ).fetchone()
+        if not file_row:
+            raise ValueError(f"sample report file not found: {file_id}")
+
+    standard_ids = assistant_init.list_standard_corpus_file_ids(assistant_id)
+    if not standard_ids and not samples:
+        raise ValueError("需要至少一个已解析的标准语料或样例报告")
+
+    existing = db.get_conn().execute(
+        """SELECT * FROM jobs
+           WHERE type='assistant_init' AND target_type='assistant' AND target_id=?
+             AND status IN ('queued','running')
+           ORDER BY created_at DESC LIMIT 1""",
+        (assistant_id,),
+    ).fetchone()
+    if existing:
+        return get_job(existing["id"])
+
+    jid = uuid.uuid4().hex
+    created = now_iso()
+    payload = {
+        "assistant_id": assistant_id,
+        "sample_report_file_ids": samples,
+        "model": model,
+    }
+    assistant_init.upsert_init_draft(
+        assistant_id,
+        status="generating",
+        payload={
+            "category_profile": {},
+            "parameter_schema": {},
+            "report_parameters_prompt": "",
+            "source_file_ids": {
+                "standard": standard_ids,
+                "sample_reports": samples,
+            },
+            "model": model or "",
+            "error": "",
+        },
+        job_id=jid,
+    )
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO jobs
+               (id, type, target_type, target_id, status, priority, attempts,
+                max_attempts, error, result, created_at)
+               VALUES (?, 'assistant_init', 'assistant', ?, 'queued', ?, 0, 1, '', ?, ?)""",
             (jid, assistant_id, priority, json.dumps(payload, ensure_ascii=False), created),
         )
     return get_job(jid)
@@ -293,6 +406,10 @@ async def worker_loop() -> None:
             await _run_parse_job(job)
         elif job["type"] == "audit" and job["target_type"] == "assistant":
             await _run_audit_job(job)
+        elif job["type"] == "assistant_init" and job["target_type"] == "assistant":
+            await _run_assistant_init_job(job)
+        elif job["type"] == "embed" and job["target_type"] == "corpus":
+            await _run_embed_job(job)
         else:
             _fail_job(job, f"unknown job type {job['type']}")
 
@@ -408,7 +525,7 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
     assistant_id = str(payload.get("assistant_id") or job["target_id"])
     report_file_id = str(payload.get("report_file_id") or "")
     naming_rule_file_id = payload.get("naming_rule_file_id") or None
-    report_id = str(payload.get("report_id") or "HBJC")
+    report_id = str(payload.get("report_id") or "") or None
     if not report_file_id:
         _fail_job(job, "audit job missing report_file_id")
         return
@@ -436,6 +553,82 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
                SET status='done', error='', result=?, finished_at=?
                WHERE id=?""",
             (json.dumps(result, ensure_ascii=False), finished, job["id"]),
+        )
+
+
+async def _run_embed_job(job: dict[str, Any]) -> None:
+    from . import embeddings
+
+    try:
+        summary = await asyncio.to_thread(embeddings.build_embeddings)
+    except Exception as exc:
+        logger.exception("embedding build failed")
+        _fail_job(job, str(exc))
+        return
+
+    with db.transaction() as conn:
+        conn.execute(
+            """UPDATE jobs
+               SET status='done', error='', result=?, finished_at=?
+               WHERE id=?""",
+            (json.dumps(summary, ensure_ascii=False), now_iso(), job["id"]),
+        )
+
+
+async def _run_assistant_init_job(job: dict[str, Any]) -> None:
+    from . import assistant_init
+
+    payload = job.get("result") or {}
+    assistant_id = str(payload.get("assistant_id") or job["target_id"])
+    samples = payload.get("sample_report_file_ids") or []
+    if not isinstance(samples, list):
+        samples = []
+    model = payload.get("model") or None
+    try:
+        result_payload = await asyncio.to_thread(
+            assistant_init.generate_init_draft,
+            assistant_id,
+            sample_report_file_ids=[str(item) for item in samples],
+            model=str(model) if model else None,
+        )
+    except Exception as exc:
+        logger.exception("assistant init failed for %s", assistant_id)
+        assistant_init.upsert_init_draft(
+            assistant_id,
+            status="failed",
+            payload={
+                "category_profile": {},
+                "parameter_schema": {},
+                "report_parameters_prompt": "",
+                "source_file_ids": {
+                    "standard": assistant_init.list_standard_corpus_file_ids(assistant_id),
+                    "sample_reports": samples,
+                },
+                "model": model or "",
+                "error": str(exc),
+            },
+            job_id=job["id"],
+        )
+        _fail_job(job, str(exc))
+        return
+
+    assistant_init.upsert_init_draft(
+        assistant_id,
+        status="ready",
+        payload=result_payload,
+        job_id=job["id"],
+    )
+    finished = now_iso()
+    with db.transaction() as conn:
+        conn.execute(
+            """UPDATE jobs
+               SET status='done', error='', result=?, finished_at=?
+               WHERE id=?""",
+            (
+                json.dumps({**payload, "draft_status": "ready"}, ensure_ascii=False),
+                finished,
+                job["id"],
+            ),
         )
 
 

@@ -47,7 +47,7 @@ class RetrievalTestRequest(BaseModel):
     file_ids: list[str] | None = None
 
 
-_NON_CORPUS_ROLES = frozenset({"report", "naming"})
+_NON_CORPUS_ROLES = frozenset({"report", "naming", "sample_report"})
 
 
 def _loads(value: str | None, fallback: Any) -> Any:
@@ -85,6 +85,11 @@ def _kb_out(row: Any) -> dict[str, Any]:
             (naming_file_id,),
         ).fetchone()
         naming_file_name = name_row["name"] if name_row else None
+    assistant_id = None
+    if "assistant_id" in keys:
+        assistant_id = row["assistant_id"]
+    else:
+        assistant_id = db.assistant_id_for_knowledge_base(row["id"])
     return {
         "id": row["id"],
         "name": row["name"],
@@ -97,6 +102,7 @@ def _kb_out(row: Any) -> dict[str, Any]:
         "few_shot_rules": _loads(row["few_shot_rules"] if "few_shot_rules" in keys else "{}", {}),
         "default_naming_file_id": naming_file_id,
         "default_naming_file_name": naming_file_name,
+        "assistant_id": assistant_id,
         "file_count": int(row["file_count"]),
         "chunk_count": int(row["chunk_count"]),
         "created_at": row["created_at"],
@@ -108,6 +114,13 @@ def _get_kb(knowledge_base_id: str) -> Any:
     row = db.get_conn().execute(
         """SELECT kb.*,
                   nf.name AS default_naming_file_name,
+                  (
+                    SELECT akb.assistant_id
+                    FROM assistant_knowledge_bases akb
+                    WHERE akb.knowledge_base_id=kb.id AND akb.enabled=1
+                    ORDER BY akb.priority ASC, akb.assistant_id ASC
+                    LIMIT 1
+                  ) AS assistant_id,
                   COUNT(DISTINCT kbf.file_id) AS file_count,
                   COUNT(DISTINCT c.id) AS chunk_count
            FROM knowledge_bases kb
@@ -129,6 +142,13 @@ def list_knowledge_bases():
     rows = db.get_conn().execute(
         """SELECT kb.*,
                   nf.name AS default_naming_file_name,
+                  (
+                    SELECT akb.assistant_id
+                    FROM assistant_knowledge_bases akb
+                    WHERE akb.knowledge_base_id=kb.id AND akb.enabled=1
+                    ORDER BY akb.priority ASC, akb.assistant_id ASC
+                    LIMIT 1
+                  ) AS assistant_id,
                   COUNT(DISTINCT kbf.file_id) AS file_count,
                   COUNT(DISTINCT c.id) AS chunk_count
            FROM knowledge_bases kb
@@ -180,6 +200,17 @@ def create_knowledge_base(body: KnowledgeBaseCreate):
         if "UNIQUE" in str(exc).upper():
             raise HTTPException(409, "knowledge base name already exists") from exc
         raise
+    try:
+        db.ensure_assistant_for_knowledge_base(
+            knowledge_base_id,
+            name=f"{body.name.strip()}审查",
+            description=(
+                body.description.strip()
+                or f"绑定知识库「{body.name.strip()}」的审查配置"
+            ),
+        )
+    except Exception as exc:
+        raise HTTPException(500, f"knowledge base created but assistant bind failed: {exc}") from exc
     return _kb_out(_get_kb(knowledge_base_id))
 
 
@@ -216,6 +247,10 @@ def delete_knowledge_base(knowledge_base_id: str):
     exclusive_ids = [item["id"] for item in exclusive]
     deleted_chunk_count = sum(int(item["chunk_count"] or 0) for item in exclusive)
     deleted_file_count = len(exclusive_ids)
+    paired_assistant_id = db.assistant_id_for_knowledge_base(knowledge_base_id)
+    # Keep the generic template even if somehow bound.
+    if paired_assistant_id == "assistant_audit_template":
+        paired_assistant_id = None
 
     with db.transaction() as conn:
         if exclusive_ids:
@@ -232,6 +267,19 @@ def delete_knowledge_base(knowledge_base_id: str):
             "DELETE FROM knowledge_bases WHERE id=?",
             (knowledge_base_id,),
         )
+        if paired_assistant_id:
+            conn.execute(
+                "UPDATE audit_assistants SET active_version_id=NULL WHERE id=?",
+                (paired_assistant_id,),
+            )
+            conn.execute(
+                "DELETE FROM assistant_versions WHERE assistant_id=?",
+                (paired_assistant_id,),
+            )
+            conn.execute(
+                "DELETE FROM audit_assistants WHERE id=?",
+                (paired_assistant_id,),
+            )
 
     for item in exclusive:
         path = (item.get("path") or "").strip()
@@ -321,7 +369,12 @@ _KB_FILE_SELECT = """SELECT f.id, f.name, f.page_count, f.metadata, f.created_at
                                 SELECT p.markdown_path FROM document_parses p
                                 WHERE p.file_id=f.id
                                 ORDER BY p.created_at DESC LIMIT 1
-                              ) AS parse_markdown_path
+                              ) AS parse_markdown_path,
+                              (
+                                SELECT p.result FROM document_parses p
+                                WHERE p.file_id=f.id
+                                ORDER BY p.created_at DESC LIMIT 1
+                              ) AS parse_result
                        FROM knowledge_base_files kbf
                        JOIN files f ON f.id=kbf.file_id
                        LEFT JOIN chunks c ON c.file_id=f.id
@@ -332,9 +385,9 @@ _KB_FILE_SELECT = """SELECT f.id, f.name, f.page_count, f.metadata, f.created_at
                            WHERE kb.id=kbf.knowledge_base_id
                          ) IS NOT f.id
                          AND LOWER(COALESCE(json_extract(f.metadata, '$.doc_role'), ''))
-                             NOT IN ('report', 'naming')
+                             NOT IN ('report', 'naming', 'sample_report')
                          AND LOWER(COALESCE(json_extract(f.metadata, '$.doc_type'), ''))
-                             NOT IN ('report', 'naming')"""
+                             NOT IN ('report', 'naming', 'sample_report')"""
 
 
 def _kb_file_out(row: Any) -> dict[str, Any]:
@@ -359,7 +412,17 @@ def _kb_file_out(row: Any) -> dict[str, Any]:
         "parse_ready": bool(
             row["parse_status"] == "done" and row["parse_markdown_path"]
         ),
+        # Auto-chunk failures don't fail the parse job; expose them here so the
+        # files page can prompt a manual re-chunk.
+        "auto_chunk_error": _auto_chunk_error_from_result(
+            row["parse_result"] if "parse_result" in keys else None
+        ),
     }
+
+
+def _auto_chunk_error_from_result(parse_result: Any) -> str:
+    result = _loads(parse_result, {})
+    return str(result.get("auto_chunk_error") or "") if isinstance(result, dict) else ""
 
 
 def _get_kb_file(knowledge_base_id: str, file_id: str) -> dict[str, Any]:
@@ -397,7 +460,7 @@ def add_file_to_knowledge_base(knowledge_base_id: str, file_id: str):
         raise HTTPException(404, "file not found")
     metadata = _loads(file_row["metadata"], {})
     if _is_non_corpus_metadata(metadata if isinstance(metadata, dict) else {}):
-        raise HTTPException(400, "report/naming files cannot join a knowledge base corpus")
+        raise HTTPException(400, "report/naming/sample_report files cannot join a knowledge base corpus")
     corpus_kind = _normalize_corpus_kind(
         str((metadata or {}).get("corpus_kind") or "") if isinstance(metadata, dict) else "",
     )

@@ -1,7 +1,13 @@
-"""Run a read-only end-to-end report standard-value audit trial."""
+"""Run a read-only end-to-end report standard-value audit.
+
+Default mode audits every extracted test-item requirement in the report.
+``--case-pool`` restores the legacy evaluation mode that only audits cases
+from the frozen retrieval case pool and computes gold-recall diagnostics.
+"""
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -15,6 +21,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from app import db, embeddings, llm  # noqa: E402
 from app.evidence_locator import chunk_text_sha256  # noqa: E402
+from app.parameter_schema import (  # noqa: E402
+    normalize_extracted_parameters,
+    resolve_parameter_schema,
+)
 from build_retrieval_evidence_reviews import (  # noqa: E402
     FINAL_PER_TYPE,
     RRF_K,
@@ -28,11 +38,9 @@ from extract_report_test_items import extract_report  # noqa: E402
 CASE_POOL = ROOT / "evaluation" / "retrieval_case_pool_v1.json"
 GOLD = ROOT / "evaluation" / "retrieval_gold_candidates_v1.json"
 DEFAULT_OUTPUT = BACKEND / "data" / "reports" / "hbjc_end_to_end_audit_v1.json"
-PARAMETER_FIELDS = {
-    "model", "rated_capacity", "rated_voltage", "phase_count",
-    "connection_group", "cooling_method", "insulation_level",
-}
-PEER_CONTEXT_RULES = [
+# Fallback for assistant versions created before peer_context_rules moved into
+# retrieval_config (see db._default_retrieval_config).
+DEFAULT_PEER_CONTEXT_RULES: list[tuple[tuple[str, ...], tuple[str, ...]]] = [
     (
         ("总损耗", "P总"),
         ("空载损耗", "负载损耗", "总损耗", "P0", "Pk", "P总"),
@@ -42,6 +50,32 @@ PEER_CONTEXT_RULES = [
         ("频率", "Hz", "持续时间", "试验时间", "感应耐压"),
     ),
 ]
+
+
+def _resolve_peer_context_rules(
+    retrieval_config: dict[str, Any],
+) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
+    """Read peer-context trigger rules from assistant config, else fallback.
+
+    An explicitly configured empty list disables peer context; only a missing
+    key falls back to the built-in defaults.
+    """
+    raw = retrieval_config.get("peer_context_rules")
+    if not isinstance(raw, list):
+        return list(DEFAULT_PEER_CONTEXT_RULES)
+    rules: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        triggers = tuple(
+            str(value).strip() for value in item.get("triggers") or [] if str(value).strip()
+        )
+        related = tuple(
+            str(value).strip() for value in item.get("related") or [] if str(value).strip()
+        )
+        if triggers and related:
+            rules.append((triggers, related))
+    return rules
 
 
 def _load_assistant_version(assistant_id: str) -> dict[str, Any]:
@@ -55,8 +89,13 @@ def _load_assistant_version(assistant_id: str) -> dict[str, Any]:
     if not row:
         raise ValueError(f"active assistant version not found: {assistant_id}")
     payload = dict(row)
-    for key in ("model_config", "node_prompts", "rules", "retrieval_config"):
-        payload[key] = json.loads(payload[key] or "{}")
+    for key in ("model_config", "node_prompts", "rules", "retrieval_config", "parameter_schema"):
+        raw = payload.get(key)
+        if raw is None:
+            payload[key] = {}
+        else:
+            payload[key] = json.loads(raw or "{}")
+    payload["parameter_schema"] = resolve_parameter_schema(payload.get("parameter_schema"))
     if payload["model_config"].get("provider") != "deepseek":
         raise ValueError("only DeepSeek assistant versions can run this workflow")
     return payload
@@ -81,15 +120,23 @@ def _prompt_content(profile: dict[str, Any], key: str) -> str:
     return content
 
 
-def _extract_parameters(markdown: str, *, prompt: str, model: str) -> dict[str, str]:
+def _extract_parameters(
+    markdown: str,
+    *,
+    prompt: str,
+    model: str,
+    parameter_schema: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    schema = resolve_parameter_schema(parameter_schema)
     result = _call_model(
         prompt,
-        {"report_markdown": markdown},
+        {
+            "report_markdown": markdown,
+            "parameter_schema": schema,
+        },
         model=model,
     )
-    if set(result) != PARAMETER_FIELDS:
-        raise ValueError(f"parameter extraction fields mismatch: {sorted(result)}")
-    return {key: str(result[key] or "").strip() for key in sorted(PARAMETER_FIELDS)}
+    return normalize_extracted_parameters(result, schema)
 
 
 def _decode_model(
@@ -156,10 +203,70 @@ def _find_requirement(extracted: dict[str, Any], case: dict[str, Any]) -> dict[s
     raise ValueError(f"fresh extraction did not reproduce {case['case_id']}")
 
 
-def _peer_context_terms(requirement_text: str, project_name: str) -> tuple[str, ...]:
+def _full_audit_case_id(item: dict[str, Any], requirement: dict[str, Any]) -> str:
+    basis = "|".join((
+        str(item.get("item_no") or ""),
+        str(item.get("phase") or ""),
+        str(requirement.get("requirement_text") or "").replace(" ", ""),
+    ))
+    return f"item_{hashlib.sha256(basis.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _build_full_audit_units(extracted: dict[str, Any]) -> list[dict[str, Any]]:
+    """One audit unit per extracted item x requirement; ids stable across reruns."""
+    units: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}
+    for item in extracted["items"]:
+        for requirement in item.get("requirements") or []:
+            if not str(requirement.get("requirement_text") or "").strip():
+                continue
+            case_id = _full_audit_case_id(item, requirement)
+            # Duplicate item/phase/requirement rows get a deterministic ordinal
+            # suffix so checkpoint resume still matches them one-to-one.
+            count = seen.get(case_id, 0)
+            seen[case_id] = count + 1
+            if count:
+                case_id = f"{case_id}_{count + 1}"
+            units.append({
+                "case_id": case_id,
+                "test_item": item,
+                "requirement": requirement,
+                "gold_case": None,
+            })
+    return units
+
+
+def _build_case_pool_units(
+    extracted: dict[str, Any],
+    *,
+    report_id: str,
+) -> list[dict[str, Any]]:
+    cases = [
+        case for case in json.loads(CASE_POOL.read_text(encoding="utf-8"))["cases"]
+        if case["report_id"] == report_id
+    ]
+    gold_by_id = {
+        case["case_id"]: case
+        for case in json.loads(GOLD.read_text(encoding="utf-8"))["cases"]
+    }
+    return [
+        {
+            "case_id": case["case_id"],
+            **_find_requirement(extracted, case),
+            "gold_case": gold_by_id[case["case_id"]],
+        }
+        for case in cases
+    ]
+
+
+def _peer_context_terms(
+    requirement_text: str,
+    project_name: str,
+    peer_context_rules: list[tuple[tuple[str, ...], tuple[str, ...]]],
+) -> tuple[str, ...]:
     source = f"{project_name} {requirement_text}"
     terms: list[str] = []
-    for triggers, related in PEER_CONTEXT_RULES:
+    for triggers, related in peer_context_rules:
         if any(trigger in source for trigger in triggers):
             terms.extend(related)
     return tuple(dict.fromkeys(terms))
@@ -170,11 +277,13 @@ def _build_peer_report_context(
     current_item: dict[str, Any],
     current_requirement: dict[str, Any],
     *,
+    peer_context_rules: list[tuple[tuple[str, ...], tuple[str, ...]]],
     limit: int = 12,
 ) -> list[dict[str, str]]:
     terms = _peer_context_terms(
         str(current_requirement.get("requirement_text") or ""),
         str(current_item.get("project_name") or ""),
+        peer_context_rules,
     )
     if not terms:
         return []
@@ -229,6 +338,82 @@ def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
 def _candidate_locator(candidate: dict[str, Any]) -> tuple[str, str, str]:
     metadata = candidate["business_metadata"]
     return metadata.get("standard_no", ""), candidate["content_type"], chunk_text_sha256(candidate["text"])
+
+
+def _evidence_locator(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Stable locator (no chunk UUIDs) so adopted evidence survives rebuilds."""
+    metadata = candidate.get("business_metadata") or {}
+    trace = candidate.get("source_trace") or {}
+    locator: dict[str, Any] = {
+        "standard_no": str(metadata.get("standard_no") or ""),
+        "content_type": str(
+            candidate.get("content_type") or metadata.get("content_type") or "section"
+        ),
+        "text_sha256": chunk_text_sha256(str(candidate.get("text") or "")),
+    }
+    page_start = trace.get("page_start") or candidate.get("page")
+    page_end = trace.get("page_end") or page_start
+    if page_start:
+        locator["page_start"] = page_start
+        locator["page_end"] = page_end
+    for key in ("section", "section_title", "table_no", "table_title"):
+        value = metadata.get(key)
+        if value:
+            locator[key] = value
+    return locator
+
+
+JUDGE_STATUSES = ("supported", "mismatch", "insufficient_context", "not_audited")
+# Older assistant versions carry prompt snapshots that still emit these values.
+LEGACY_JUDGE_STATUS_MAP = {
+    "correct": "supported",
+    "incorrect": "mismatch",
+    "evidence_not_found": "not_audited",
+}
+
+
+def _validate_judgment(
+    judgment: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Enforce the audit-result contract on raw model output.
+
+    Model output is never trusted as a hard filter: invalid statuses and
+    evidence keys are normalized/dropped, and definitive verdicts without
+    surviving evidence are downgraded to insufficient_context. Every applied
+    fix is recorded under judgment.validation_issues.
+    """
+    by_key = {candidate["candidate_key"]: candidate for candidate in candidates}
+    issues: list[str] = []
+
+    raw_status = str(judgment.get("status") or "")
+    status = LEGACY_JUDGE_STATUS_MAP.get(raw_status, raw_status)
+    if status != raw_status:
+        issues.append(f"legacy status '{raw_status}' mapped to '{status}'")
+    if status not in JUDGE_STATUSES:
+        issues.append(f"invalid status '{raw_status}' downgraded to insufficient_context")
+        status = "insufficient_context"
+
+    raw_keys = [str(key) for key in judgment.get("evidence_candidate_keys") or []]
+    valid_keys = [key for key in raw_keys if key in by_key]
+    dropped = [key for key in raw_keys if key not in by_key]
+    if dropped:
+        issues.append(f"dropped unknown evidence keys: {', '.join(sorted(set(dropped)))}")
+    if status in ("supported", "mismatch") and not valid_keys:
+        issues.append(
+            f"definitive status '{status}' without valid evidence downgraded to insufficient_context"
+        )
+        status = "insufficient_context"
+
+    judgment["status"] = status
+    judgment["evidence_candidate_keys"] = valid_keys
+    judgment["evidence"] = [
+        {**_compact_candidate(by_key[key]), "locator": _evidence_locator(by_key[key])}
+        for key in valid_keys
+    ]
+    if issues:
+        judgment["validation_issues"] = issues
+    return judgment
 
 
 def _retrieval_runtime_config(profile: dict[str, Any]) -> dict[str, int | float]:
@@ -341,6 +526,11 @@ def main() -> None:
     parser.add_argument("--report-file-id")
     parser.add_argument("--naming-rule-file-id")
     parser.add_argument("--judge-model")
+    parser.add_argument(
+        "--case-pool",
+        action="store_true",
+        help="legacy evaluation mode: audit only frozen case-pool cases and compute gold recall",
+    )
     args = parser.parse_args()
 
     db.init_db()
@@ -357,6 +547,7 @@ def main() -> None:
     if not judge_model.lower().startswith("deepseek"):
         raise ValueError("judge model must be a DeepSeek model")
     retrieval_config = _retrieval_runtime_config(profile)
+    peer_context_rules = _resolve_peer_context_rules(profile["retrieval_config"])
     top_k = int(retrieval_config["top_k"])
     route_top_k = int(retrieval_config["route_top_k"])
     candidates_per_type = int(retrieval_config["candidate_count_per_type"])
@@ -380,6 +571,7 @@ def main() -> None:
         markdown,
         prompt=parameter_prompt,
         model=judge_model,
+        parameter_schema=profile.get("parameter_schema"),
     )
     checkpoint["parameters"] = parameters
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -398,14 +590,10 @@ def main() -> None:
     checkpoint["model_decode"] = decoded
     checkpoint_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    cases = [
-        case for case in json.loads(CASE_POOL.read_text(encoding="utf-8"))["cases"]
-        if case["report_id"] == args.report_id
-    ]
-    gold_by_id = {
-        case["case_id"]: case
-        for case in json.loads(GOLD.read_text(encoding="utf-8"))["cases"]
-    }
+    if args.case_pool:
+        units = _build_case_pool_units(extracted, report_id=args.report_id)
+    else:
+        units = _build_full_audit_units(extracted)
     manual_knowledge_rules = _load_manual_knowledge_rules(
         db.resolve_assistant_manual_rules(
             args.assistant_id,
@@ -415,10 +603,11 @@ def main() -> None:
     few_shot_rules = db.resolve_assistant_few_shot_rules(args.assistant_id)
     results = list(checkpoint.get("cases") or [])
     completed_ids = {item["case_id"] for item in results}
-    for index, case in enumerate(cases, start=1):
-        if case["case_id"] in completed_ids:
+    for index, unit in enumerate(units, start=1):
+        if unit["case_id"] in completed_ids:
             continue
-        fresh = _find_requirement(extracted, case)
+        fresh = {"test_item": unit["test_item"], "requirement": unit["requirement"]}
+        gold_case = unit.get("gold_case")
         runtime_case = {
             "sample_context": parameters,
             "test_item": {"item_no": fresh["test_item"]["item_no"], "project_name": fresh["test_item"]["project_name"], "phase": fresh["test_item"]["phase"]},
@@ -428,6 +617,7 @@ def main() -> None:
             extracted,
             fresh["test_item"],
             fresh["requirement"],
+            peer_context_rules=peer_context_rules,
         )
         selected_manual_knowledge_rules = _select_manual_knowledge_rules(
             manual_knowledge_rules,
@@ -460,30 +650,33 @@ def main() -> None:
             "decoded_model": decoded,
             "peer_report_context": peer_report_context,
             "manual_knowledge_rules": selected_manual_knowledge_rules,
+            # Human-curated examples align output style/caliber only; the judge
+            # prompt forbids using them as evidence.
+            **(
+                {"few_shot_examples": few_shot_rules.get("items")}
+                if few_shot_rules.get("items")
+                else {}
+            ),
             "candidates": [_compact_candidate(candidate) for candidate in candidates],
         }
-        judgment = _call_model(judge_prompt, judge_input, model=judge_model)
-        selected = set(judgment.get("evidence_candidate_keys") or [])
-        judgment["evidence"] = [
-            _compact_candidate(candidate) for candidate in candidates
-            if candidate["candidate_key"] in selected
-        ]
+        judgment = _validate_judgment(
+            _call_model(judge_prompt, judge_input, model=judge_model),
+            candidates,
+        )
         gold_hashes = {
             evidence["locator"]["text_sha256"]
-            for evidence in gold_by_id[case["case_id"]]["selected_evidence"]
+            for evidence in gold_case["selected_evidence"]
             if evidence["label"] == "direct_candidate"
-        }
+        } if gold_case is not None else set()
         hit_hashes = {chunk_text_sha256(candidate["text"]) for candidate in candidates}
         compact_candidates = [_compact_candidate(candidate) for candidate in candidates]
-        results.append({
-            "case_id": case["case_id"],
+        entry: dict[str, Any] = {
+            "case_id": unit["case_id"],
             **runtime_case,
             "peer_report_context": peer_report_context,
             "manual_knowledge_rules": selected_manual_knowledge_rules,
             "queries": queries,
             "candidate_counts": {kind: sum(c["content_type"] == kind for c in candidates) for kind in ("table", "section")},
-            "direct_gold_available": bool(gold_hashes),
-            "direct_gold_recalled": bool(gold_hashes & hit_hashes),
             "judgment": judgment,
             "workflow_trace": {
                 "query_planner": {
@@ -517,25 +710,30 @@ def main() -> None:
                     "input": judge_input,
                     "output": judgment,
                 },
-                "gold_comparison": {
-                    "input": {
-                        "direct_gold_text_sha256": sorted(gold_hashes),
-                        "retrieved_text_sha256": sorted(hit_hashes),
-                    },
-                    "output": {
-                        "direct_gold_available": bool(gold_hashes),
-                        "direct_gold_recalled": bool(gold_hashes & hit_hashes),
-                    },
-                },
             },
-        })
+        }
+        if gold_case is not None:
+            entry["direct_gold_available"] = bool(gold_hashes)
+            entry["direct_gold_recalled"] = bool(gold_hashes & hit_hashes)
+            entry["workflow_trace"]["gold_comparison"] = {
+                "input": {
+                    "direct_gold_text_sha256": sorted(gold_hashes),
+                    "retrieved_text_sha256": sorted(hit_hashes),
+                },
+                "output": {
+                    "direct_gold_available": bool(gold_hashes),
+                    "direct_gold_recalled": bool(gold_hashes & hit_hashes),
+                },
+            }
+        results.append(entry)
         checkpoint["cases"] = results
         checkpoint_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"audited {index}/{len(cases)} {case['case_id']}: {judgment.get('status')}", flush=True)
+        print(f"audited {index}/{len(units)} {unit['case_id']}: {judgment.get('status')}", flush=True)
 
     output = {
         "version": 1,
-        "scope": "read_only_hbjc_end_to_end_trial",
+        "scope": "read_only_case_pool_trial" if args.case_pool else "full_report_audit",
+        "audit_mode": "case_pool" if args.case_pool else "full_report",
         "database_writes": False,
         "report": str(args.report),
         "naming_rule": str(args.naming_rule),
@@ -611,10 +809,17 @@ def main() -> None:
         "model_decode": decoded,
         "extraction_summary": {"items": len(extracted["items"]), "requirements": sum(len(item["requirements"]) for item in extracted["items"])},
         "summary": {
+            "mode": "case_pool" if args.case_pool else "full_report",
             "cases": len(results),
-            "direct_gold_cases": sum(item["direct_gold_available"] for item in results),
-            "direct_gold_recalled": sum(item["direct_gold_recalled"] for item in results),
-            "judgments": {status: sum(item["judgment"].get("status") == status for item in results) for status in ("correct", "incorrect", "insufficient_context", "evidence_not_found")},
+            **(
+                {
+                    "direct_gold_cases": sum(bool(item.get("direct_gold_available")) for item in results),
+                    "direct_gold_recalled": sum(bool(item.get("direct_gold_recalled")) for item in results),
+                }
+                if args.case_pool
+                else {}
+            ),
+            "judgments": {status: sum(item["judgment"].get("status") == status for item in results) for status in JUDGE_STATUSES},
         },
         "cases": results,
     }

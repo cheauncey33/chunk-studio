@@ -98,6 +98,37 @@ def test_created_assistant_has_an_editable_active_v1(monkeypatch, tmp_path) -> N
     assert version["status"] == "active"
     assert version["model_config"]["provider"] == "deepseek"
     assert version["node_prompts"]["report_parameters"]["content"]
+    assert "generic/" in (version["node_prompts"]["report_parameters"].get("path") or "")
+    assert version["parameter_schema"]["allow_extra"] is True
+    assert version["parameter_schema"]["fields"][0]["key"] == "model"
+    _close_temp_db(monkeypatch)
+
+
+def test_generic_template_assistant_is_seeded(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+
+    row = db.get_conn().execute(
+        """SELECT a.name, v.node_prompts, v.parameter_schema
+           FROM audit_assistants a
+           JOIN assistant_versions v ON v.id=a.active_version_id
+           WHERE a.id='assistant_audit_template'"""
+    ).fetchone()
+    oil = db.get_conn().execute(
+        """SELECT v.parameter_schema, v.node_prompts
+           FROM assistant_versions v
+           WHERE v.id='assistant_oil_transformer_audit_v1'"""
+    ).fetchone()
+
+    assert row["name"] == "通用审查模板"
+    prompts = json.loads(row["node_prompts"])
+    schema = json.loads(row["parameter_schema"])
+    assert "generic/" in prompts["report_parameters"]["path"]
+    assert schema["allow_extra"] is True
+    oil_schema = json.loads(oil["parameter_schema"])
+    oil_prompts = json.loads(oil["node_prompts"])
+    assert oil_schema["allow_extra"] is False
+    assert len(oil_schema["fields"]) == 7
+    assert "generic/" not in oil_prompts["report_parameters"]["path"]
     _close_temp_db(monkeypatch)
 
 

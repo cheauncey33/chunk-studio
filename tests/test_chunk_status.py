@@ -61,6 +61,29 @@ def test_chunk_review_happy_path(monkeypatch, tmp_path: Path) -> None:
     conn.close()
 
 
+def test_approving_chunk_enqueues_single_embedding_build(
+    monkeypatch, tmp_path: Path
+) -> None:
+    conn = _chunk_db(monkeypatch, tmp_path)
+
+    update_chunk("chunk-1", ChunkUpdate(status="reviewed"))
+    jobs = conn.execute("SELECT id FROM jobs WHERE type='embed'").fetchall()
+    assert jobs == []
+
+    update_chunk("chunk-1", ChunkUpdate(status="approved"))
+    # Re-approving reuses the queued job instead of duplicating it.
+    update_chunk("chunk-1", ChunkUpdate(status="approved"))
+
+    jobs = conn.execute(
+        "SELECT target_type, target_id, status FROM jobs WHERE type='embed'"
+    ).fetchall()
+    assert len(jobs) == 1
+    assert jobs[0]["target_type"] == "corpus"
+    assert jobs[0]["target_id"] == "approved_chunks"
+    assert jobs[0]["status"] == "queued"
+    conn.close()
+
+
 def test_chunk_can_be_rejected_after_review(monkeypatch, tmp_path: Path) -> None:
     conn = _chunk_db(monkeypatch, tmp_path)
 
@@ -69,25 +92,23 @@ def test_chunk_can_be_rejected_after_review(monkeypatch, tmp_path: Path) -> None
     conn.close()
 
 
-@pytest.mark.parametrize(
-    ("current", "target"),
-    [
-        ("pending", "approved"),
-        ("pending", "rejected"),
-        ("reviewed", "pending"),
-        ("approved", "reviewed"),
-        ("rejected", "reviewed"),
-    ],
-)
-def test_invalid_chunk_status_transition_is_rejected(
-    monkeypatch, tmp_path: Path, current: str, target: str
+def test_chunk_status_dropdown_allows_any_review_state(
+    monkeypatch, tmp_path: Path
 ) -> None:
-    conn = _chunk_db(monkeypatch, tmp_path, status=current)
+    conn = _chunk_db(monkeypatch, tmp_path)
 
-    with pytest.raises(HTTPException) as exc:
-        update_chunk("chunk-1", ChunkUpdate(status=target))
+    assert update_chunk("chunk-1", ChunkUpdate(status="approved")).status == "approved"
+    assert update_chunk("chunk-1", ChunkUpdate(status="rejected")).status == "rejected"
+    assert update_chunk("chunk-1", ChunkUpdate(status="reviewed")).status == "reviewed"
+    assert update_chunk("chunk-1", ChunkUpdate(status="pending")).status == "pending"
+    conn.close()
 
-    assert exc.value.status_code == 409
+
+def test_chunk_enable_toggle_pending_approved(monkeypatch, tmp_path: Path) -> None:
+    conn = _chunk_db(monkeypatch, tmp_path)
+
+    assert update_chunk("chunk-1", ChunkUpdate(status="approved")).status == "approved"
+    assert update_chunk("chunk-1", ChunkUpdate(status="pending")).status == "pending"
     conn.close()
 
 

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 sys.path.insert(0, str(BACKEND))
 
-from app import embeddings  # noqa: E402
+from app import embeddings, retrieval_experiments  # noqa: E402
 from app.evidence_locator import chunk_text_sha256  # noqa: E402
 
 
@@ -65,6 +65,8 @@ def retrieve_candidates(
     final_per_type: int,
     preserve_routes: dict[str, int],
     table_aware_rerank: bool,
+    aggregate_continuation_tables: bool = False,
+    expand_references: bool = False,
 ) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for content_type in CONTENT_TYPES:
@@ -83,6 +85,23 @@ def retrieve_candidates(
         key=lambda item: (item["rank_score"], max(item["route_scores"].values())),
         reverse=True,
     )
+    if aggregate_continuation_tables:
+        candidates = retrieval_experiments.aggregate_continuation_tables(
+            candidates,
+            complete_groups=retrieval_experiments.db_table_group_members,
+        )
+    if expand_references:
+        candidates = retrieval_experiments.expand_table_references(
+            candidates,
+            fetch_table_chunks=retrieval_experiments.db_fetch_table_chunks,
+        )
+    for candidate in candidates:
+        # Candidates added by experiment transforms have no route provenance.
+        candidate.setdefault("route_ranks", {})
+        candidate.setdefault("route_scores", {"experiment": 0.0})
+        candidate.setdefault("rrf_score", 0.0)
+        candidate.setdefault("rank_score", 0.0)
+        candidate.setdefault("type_rank", None)
     for rank, candidate in enumerate(candidates, start=1):
         candidate["rank"] = rank
     return candidates
@@ -258,6 +277,12 @@ def summarize_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         "rank_score": candidate.get("rank_score", candidate["rrf_score"]),
         "route_ranks": candidate["route_ranks"],
         "text_sha256": chunk_text_sha256(candidate.get("text")),
+        **(
+            {"evidence_unit_members": len((candidate.get("evidence_unit") or {}).get("members") or [])}
+            if candidate.get("evidence_unit")
+            else {}
+        ),
+        **({"added_by": candidate["added_by"]} if candidate.get("added_by") else {}),
     }
 
 
@@ -279,6 +304,18 @@ def gold_items(case: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
+def candidate_text_hashes(candidate: dict[str, Any]) -> list[str]:
+    """All gold-matchable hashes for a candidate.
+
+    Aggregated evidence units match through any member fragment's original
+    text; plain candidates match through their own text.
+    """
+    members = (candidate.get("evidence_unit") or {}).get("members") or []
+    if members:
+        return [chunk_text_sha256(member.get("text")) for member in members]
+    return [chunk_text_sha256(candidate.get("text"))]
+
+
 def evaluate_case(
     case: dict[str, Any],
     gold_case: dict[str, Any],
@@ -288,6 +325,8 @@ def evaluate_case(
     final_per_type: int,
     preserve_routes: dict[str, int],
     table_aware_rerank: bool,
+    aggregate_continuation_tables: bool = False,
+    expand_references: bool = False,
 ) -> list[dict[str, Any]]:
     results = []
     gold = gold_items(gold_case)
@@ -299,10 +338,13 @@ def evaluate_case(
             final_per_type=final_per_type,
             preserve_routes=preserve_routes,
             table_aware_rerank=table_aware_rerank,
+            aggregate_continuation_tables=aggregate_continuation_tables,
+            expand_references=expand_references,
         )
-        candidates_by_hash = {
-            chunk_text_sha256(candidate.get("text")): candidate for candidate in candidates
-        }
+        candidates_by_hash: dict[str, dict[str, Any]] = {}
+        for candidate in candidates:
+            for text_hash in candidate_text_hashes(candidate):
+                candidates_by_hash.setdefault(text_hash, candidate)
         recalled = []
         missed = []
         for item in gold:
@@ -534,6 +576,8 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 final_per_type=args.final_per_type,
                 preserve_routes=preserve_routes,
                 table_aware_rerank=args.table_aware_rerank,
+                aggregate_continuation_tables=args.aggregate_continuation_tables,
+                expand_references=args.expand_references,
             )
         )
 
@@ -552,6 +596,8 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             "preserve_routes": preserve_routes,
             "table_aware_rerank": args.table_aware_rerank,
             "table_aware_score_scale": TABLE_AWARE_SCORE_SCALE,
+            "aggregate_continuation_tables": args.aggregate_continuation_tables,
+            "expand_references": args.expand_references,
             "route_sets": ["all_routes", "no_table_target", "production_only"],
         },
         "summary": aggregate(details),
@@ -578,6 +624,18 @@ def main() -> None:
         "--table-aware-rerank",
         action="store_true",
         help="Apply a lightweight case-aware metadata/title/text boost before candidate cutoff.",
+    )
+    parser.add_argument(
+        "--aggregate-continuation-tables",
+        action="store_true",
+        help="Ablation (experiment B): merge continued-table fragments into one "
+             "evidence unit and pull missing sibling fragments from the database.",
+    )
+    parser.add_argument(
+        "--expand-references",
+        action="store_true",
+        help="Ablation (experiment C): when a retrieved section references 表 N, "
+             "append the corresponding table chunks as extra candidates.",
     )
     args = parser.parse_args()
 

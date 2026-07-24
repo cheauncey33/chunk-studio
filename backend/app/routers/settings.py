@@ -20,6 +20,7 @@ KNOWN_KEYS = [
     "ocr.request_template", "ocr.response_text_path",
     "ocr.async_mode", "ocr.submit_url", "ocr.poll_url", "ocr.result_url",
     "retrieval.lexical_production_enabled", "retrieval.lexical_shadow_enabled",
+    "audit.default_assistant_id",
 ]
 
 # Match runtime resolution order used by llm.py / adapters/ocr.py.
@@ -36,6 +37,7 @@ DISPLAY_DEFAULTS = {
     "mineru.model_version": "vlm",
     "retrieval.lexical_production_enabled": "true",
     "retrieval.lexical_shadow_enabled": "true",
+    "audit.default_assistant_id": "assistant_oil_transformer_audit",
 }
 
 

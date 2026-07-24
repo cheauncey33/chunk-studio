@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
-from .. import config, lexical, llm
+from .. import config, db, lexical, llm
 
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
+JUDGE_STATUSES = ("supported", "mismatch", "insufficient_context", "not_audited")
+
 REPORTS_DIR = config.DATA_DIR / "reports"
-MANUAL_RULES_PATH = config.PROJECT_ROOT / "evaluation" / "manual_knowledge_rules_v1.json"
 PROMPT_PATHS = {
     "report_parameters": config.PROJECT_ROOT / "evaluation" / "prompts" / "report_parameter_extraction_v1.md",
     "test_items": config.PROJECT_ROOT / "evaluation" / "prompts" / "report_test_item_extraction_v1.md",
@@ -55,7 +58,7 @@ def _load_json(path: Path) -> Any:
 
 
 def _report_kind(name: str) -> str:
-    if name.startswith("hbjc_end_to_end_audit"):
+    if name.startswith(("hbjc_end_to_end_audit", "end_to_end_audit")):
         return "end_to_end_audit"
     if name.startswith("hbjc_retrieval_group_eval"):
         return "retrieval_group_eval"
@@ -218,6 +221,10 @@ def _build_workflow_trace(
     nodes = []
     for node_id, label, kind, diagnostic_only in WORKFLOW_NODE_SPECS:
         trace = _record(global_trace.get(node_id)) or _record(case_trace.get(node_id))
+        # Full-report runs record traces but have no gold comparison; omit the
+        # diagnostic node instead of showing a reconstructed placeholder.
+        if node_id == "gold_comparison" and recorded and not trace:
+            continue
         if trace:
             node_input = trace.get("input")
             node_output = trace.get("output")
@@ -289,7 +296,85 @@ def get_audit_report(name: str) -> dict[str, Any]:
         "size_bytes": stat.st_size,
         "modified_at": stat.st_mtime,
         "payload": _load_json(path),
+        "reviews": _case_reviews(path.name),
     }
+
+
+class CaseReviewRequest(BaseModel):
+    status: Literal["confirmed", "corrected"]
+    corrected_status: str = Field(default="", max_length=64)
+    note: str = Field(default="", max_length=2000)
+    reviewer: str = Field(default="", max_length=128)
+
+
+def _case_reviews(report_name: str) -> dict[str, dict[str, Any]]:
+    rows = db.get_conn().execute(
+        "SELECT * FROM audit_case_reviews WHERE report_name=?",
+        (report_name,),
+    ).fetchall()
+    return {row["case_id"]: dict(row) for row in rows}
+
+
+@router.get("/reports/{name}/reviews")
+def list_case_reviews(name: str) -> dict[str, Any]:
+    path = _safe_report_path(name)
+    return {"report_name": path.name, "reviews": _case_reviews(path.name)}
+
+
+@router.put("/reports/{name}/reviews/{case_id}")
+def upsert_case_review(name: str, case_id: str, body: CaseReviewRequest) -> dict[str, Any]:
+    path = _safe_report_path(name)
+    payload = _load_json(path)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Report payload must be an object")
+    _find_case(payload, case_id)
+
+    corrected_status = body.corrected_status.strip()
+    if body.status == "corrected":
+        if corrected_status not in JUDGE_STATUSES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"corrected_status must be one of {', '.join(JUDGE_STATUSES)}",
+            )
+    else:
+        corrected_status = ""
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO audit_case_reviews
+               (report_name, case_id, status, corrected_status, note, reviewer,
+                created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?)
+               ON CONFLICT(report_name, case_id) DO UPDATE SET
+                 status=excluded.status,
+                 corrected_status=excluded.corrected_status,
+                 note=excluded.note,
+                 reviewer=excluded.reviewer,
+                 updated_at=excluded.updated_at""",
+            (
+                path.name, case_id, body.status, corrected_status,
+                body.note.strip(), body.reviewer.strip(), now, now,
+            ),
+        )
+    row = db.get_conn().execute(
+        "SELECT * FROM audit_case_reviews WHERE report_name=? AND case_id=?",
+        (path.name, case_id),
+    ).fetchone()
+    return dict(row)
+
+
+@router.delete("/reports/{name}/reviews/{case_id}")
+def delete_case_review(name: str, case_id: str) -> dict[str, Any]:
+    path = _safe_report_path(name)
+    with db.transaction() as conn:
+        cursor = conn.execute(
+            "DELETE FROM audit_case_reviews WHERE report_name=? AND case_id=?",
+            (path.name, case_id),
+        )
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Review not found")
+    return {"ok": True}
 
 
 @router.get("/reports/{name}/workflow/{case_id}")
@@ -306,10 +391,20 @@ def get_audit_workflow(name: str, case_id: str) -> dict[str, Any]:
 
 
 @router.get("/manual-rules")
-def get_manual_rules() -> dict[str, Any]:
-    if not MANUAL_RULES_PATH.exists():
-        raise HTTPException(status_code=404, detail="Manual rules file not found")
-    return _load_json(MANUAL_RULES_PATH)
+def get_manual_rules(assistant_id: str = "assistant_oil_transformer_audit") -> dict[str, Any]:
+    """Runtime manual rules resolved from the assistant's bound knowledge bases.
+
+    Reads the same DB source the audit workflow uses, so this view can no
+    longer drift from what the judge actually receives. The repository file
+    ``evaluation/manual_knowledge_rules_v1.json`` remains a versioned seed only.
+    """
+    row = db.get_conn().execute(
+        "SELECT id FROM audit_assistants WHERE id=?", (assistant_id,)
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Assistant not found")
+    payload = db.resolve_assistant_manual_rules(assistant_id)
+    return {**payload, "source": "knowledge_bases.manual_rules", "assistant_id": assistant_id}
 
 
 @router.get("/lexical-index")
