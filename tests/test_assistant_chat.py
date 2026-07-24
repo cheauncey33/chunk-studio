@@ -27,6 +27,15 @@ def test_assistant_chat_uses_rag_then_plain_text_llm(monkeypatch, tmp_path) -> N
             """INSERT INTO knowledge_base_files(knowledge_base_id,file_id,enabled,created_at)
                VALUES ('kb_uncategorized','f1',1,'now')"""
         )
+        conn.execute(
+            """UPDATE assistant_versions
+               SET retrieval_config=json_set(
+                 retrieval_config,
+                 '$.aggregate_continuation_tables', json('true'),
+                 '$.expand_references', json('true')
+               )
+               WHERE id='assistant_oil_transformer_audit_v1'"""
+        )
         # Seed may already bind default assistant ↔ default KB.
 
     captured = {}
@@ -34,6 +43,10 @@ def test_assistant_chat_uses_rag_then_plain_text_llm(monkeypatch, tmp_path) -> N
     def fake_search(query, **kwargs):
         captured["query"] = query
         captured["file_ids"] = kwargs.get("file_ids")
+        captured["aggregate_continuation_tables"] = kwargs.get(
+            "aggregate_continuation_tables"
+        )
+        captured["expand_references"] = kwargs.get("expand_references")
         return {
             "hits": [
                 {
@@ -65,6 +78,8 @@ def test_assistant_chat_uses_rag_then_plain_text_llm(monkeypatch, tmp_path) -> N
     assert result["citations"][0]["file_name"] == "std.pdf"
     assert captured["query"] == "绝缘电阻要求是什么？"
     assert captured["file_ids"] == ["f1"]
+    assert captured["aggregate_continuation_tables"] is True
+    assert captured["expand_references"] is True
     assert "检索证据" in captured["messages"][0]["content"]
     assert captured["messages"][-1]["role"] == "user"
 

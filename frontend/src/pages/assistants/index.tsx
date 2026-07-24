@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input, Label, Textarea } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { SearchableMultiSelect, SearchableSelect } from '@/components/searchable-select'
 import { useAssistants, useKnowledgeBase, queryKeys } from '@/hooks/use-knowledge-request'
@@ -310,7 +311,7 @@ export function AssistantSettings({
     [knowledgeBases],
   )
 
-  const updateRetrieval = (key: string, value: number) => {
+  const updateRetrieval = (key: string, value: number | boolean) => {
     if (!version) return
     setVersion({
       ...version,
@@ -908,6 +909,30 @@ export function AssistantSettings({
                   onChange={v => updateRetrieval('route_top_k', Math.round(v))}
                 />
               </div>
+              {devMode && (
+                <div className="space-y-3 rounded-xl border border-[#e5e7eb] bg-[#f9fafb] p-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <SettingHint
+                      label="续表聚合（实验 B）"
+                      tip="补全并合并同一表格的续表片段。默认关闭，随助手版本保存。"
+                    />
+                    <Switch
+                      checked={Boolean(version.retrieval_config.aggregate_continuation_tables ?? false)}
+                      onCheckedChange={checked => updateRetrieval('aggregate_continuation_tables', checked)}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-4">
+                    <SettingHint
+                      label="引用表扩展（实验 C）"
+                      tip="章节命中“见表 N”时补充对应表格。默认关闭，随助手版本保存。"
+                    />
+                    <Switch
+                      checked={Boolean(version.retrieval_config.expand_references ?? false)}
+                      onCheckedChange={checked => updateRetrieval('expand_references', checked)}
+                    />
+                  </div>
+                </div>
+              )}
               <div>
                 <SettingHint label="温度" tip="生成随机性。审查场景建议保持较低温度。" />
                 <SettingSlider

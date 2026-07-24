@@ -73,6 +73,8 @@ def test_runtime_retrieval_config_and_selection_apply_version_values() -> None:
             "candidate_count_per_type": 5,
             "rrf_k": 40,
             "similarity_threshold": 0.5,
+            "aggregate_continuation_tables": True,
+            "expand_references": True,
         }
     }
     config = workflow._retrieval_runtime_config(profile)
@@ -91,7 +93,13 @@ def test_runtime_retrieval_config_and_selection_apply_version_values() -> None:
     assert config["route_top_k"] == 7
     assert config["final_per_type"] == 15
     assert config["special_route_reserve"] == 3
+    assert config["aggregate_continuation_tables"] is True
+    assert config["expand_references"] is True
     assert [item["id"] for item in selected] == ["keep"]
+
+    defaults = workflow._retrieval_runtime_config({"retrieval_config": {}})
+    assert defaults["aggregate_continuation_tables"] is False
+    assert defaults["expand_references"] is False
 
 
 def test_extract_parameters_uses_schema_and_open_list(monkeypatch) -> None:
@@ -370,6 +378,8 @@ def test_retrieve_hybrid_candidates_maps_hits_and_passes_scope(monkeypatch) -> N
         special_route_reserve=3,
         rrf_k=40,
         similarity_threshold=0.3,
+        aggregate_continuation_tables=False,
+        expand_references=True,
     )
 
     assert captured["query"] == "空载损耗限值"
@@ -382,6 +392,8 @@ def test_retrieve_hybrid_candidates_maps_hits_and_passes_scope(monkeypatch) -> N
     assert captured["kwargs"]["special_route_reserve"] == 3
     assert captured["kwargs"]["rrf_k"] == 40
     assert captured["kwargs"]["similarity_threshold"] == 0.3
+    assert captured["kwargs"]["aggregate_continuation_tables"] is False
+    assert captured["kwargs"]["expand_references"] is True
     assert [item["chunk_id"] for item in candidates] == ["t1", "s1"]
     assert candidates[0]["content_type"] == "table"
     assert candidates[0]["route_scores"] == {"hybrid": 0.91}

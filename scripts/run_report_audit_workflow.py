@@ -416,7 +416,7 @@ def _validate_judgment(
     return judgment
 
 
-def _retrieval_runtime_config(profile: dict[str, Any]) -> dict[str, int | float]:
+def _retrieval_runtime_config(profile: dict[str, Any]) -> dict[str, int | float | bool]:
     raw = profile["retrieval_config"]
     values: dict[str, int | float] = {
         "top_k": int(raw.get("top_k", 10)),
@@ -428,6 +428,10 @@ def _retrieval_runtime_config(profile: dict[str, Any]) -> dict[str, int | float]
         "special_route_reserve": int(raw.get("special_route_reserve", 3)),
         "rrf_k": int(raw.get("rrf_k", RRF_K)),
         "similarity_threshold": float(raw.get("similarity_threshold", 0.2)),
+        "aggregate_continuation_tables": bool(
+            raw.get("aggregate_continuation_tables", False)
+        ),
+        "expand_references": bool(raw.get("expand_references", False)),
     }
     bounds = {
         "top_k": (1, 50),
@@ -439,6 +443,8 @@ def _retrieval_runtime_config(profile: dict[str, Any]) -> dict[str, int | float]
         "similarity_threshold": (-1, 1),
     }
     for key, value in values.items():
+        if isinstance(value, bool):
+            continue
         lower, upper = bounds[key]
         if not lower <= value <= upper:
             raise ValueError(f"assistant retrieval setting {key} must be between {lower} and {upper}")
@@ -473,6 +479,8 @@ def _retrieve_hybrid_candidates(
     special_route_reserve: int,
     rrf_k: int,
     similarity_threshold: float,
+    aggregate_continuation_tables: bool,
+    expand_references: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Run hybrid_search with planner routes when provided."""
     from app import retrieval
@@ -487,6 +495,8 @@ def _retrieve_hybrid_candidates(
         query_routes=query_routes,
         special_route_reserve=special_route_reserve,
         final_per_type=final_per_type,
+        aggregate_continuation_tables=aggregate_continuation_tables,
+        expand_references=expand_references,
         file_ids=file_ids,
     )
     candidates: list[dict[str, Any]] = []
@@ -555,6 +565,10 @@ def main() -> None:
     special_route_reserve = int(retrieval_config["special_route_reserve"])
     rrf_k = int(retrieval_config["rrf_k"])
     similarity_threshold = float(retrieval_config["similarity_threshold"])
+    aggregate_continuation_tables = bool(
+        retrieval_config["aggregate_continuation_tables"]
+    )
+    expand_references = bool(retrieval_config["expand_references"])
     parameter_prompt = _prompt_content(profile, "report_parameters")
     item_prompt = _prompt_content(profile, "test_items")
     naming_prompt = _prompt_content(profile, "model_decode")
@@ -642,6 +656,8 @@ def main() -> None:
             special_route_reserve=special_route_reserve,
             rrf_k=rrf_k,
             similarity_threshold=similarity_threshold,
+            aggregate_continuation_tables=aggregate_continuation_tables,
+            expand_references=expand_references,
         )
         for rank, candidate in enumerate(candidates, start=1):
             candidate["candidate_key"] = f"c{rank:02d}"
@@ -696,6 +712,8 @@ def main() -> None:
                         "special_route_reserve": special_route_reserve,
                         "rrf_k": rrf_k,
                         "similarity_threshold": similarity_threshold,
+                        "aggregate_continuation_tables": aggregate_continuation_tables,
+                        "expand_references": expand_references,
                     },
                     "output": {
                         "candidate_counts": {
@@ -768,6 +786,8 @@ def main() -> None:
                 "special_route_reserve": special_route_reserve,
                 "rrf_k": rrf_k,
                 "similarity_threshold": similarity_threshold,
+                "aggregate_continuation_tables": aggregate_continuation_tables,
+                "expand_references": expand_references,
                 "content_types": ["table", "section"],
                 "scoped_file_count": len(evidence_file_ids),
                 "planner_routes_enabled": True,

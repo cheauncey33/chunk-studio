@@ -24,9 +24,6 @@ LEXICAL_CANDIDATES_PER_TYPE = 20
 RRF_K = 60
 SPECIAL_ROUTE_RESERVE = 3
 FINAL_PER_TYPE = 15
-# Production post-rerank enrichment (phase-4 B + C).
-AGGREGATE_CONTINUATION_TABLES = True
-EXPAND_TABLE_REFERENCES = True
 GENERAL_DENSE_ROUTES = ("production", "semantic", "keyword")
 SPECIAL_ROUTE_CONTENT_TYPES = {
     "table_target": "table",
@@ -158,6 +155,8 @@ def hybrid_search(
     query_routes: dict[str, str] | None = None,
     special_route_reserve: int = 0,
     final_per_type: int | None = None,
+    aggregate_continuation_tables: bool = False,
+    expand_references: bool = False,
     planner: QueryPlanner | None = None,
     batch_embedder: QueryBatchEmbedder | None = None,
     vector_searcher: VectorSearcher | None = None,
@@ -386,11 +385,11 @@ def hybrid_search(
             >= similarity_threshold
         ]
 
-    if EXPAND_TABLE_REFERENCES or AGGREGATE_CONTINUATION_TABLES:
+    if expand_references or aggregate_continuation_tables:
         selected = _enrich_evidence_hits(
             selected,
-            expand_references=EXPAND_TABLE_REFERENCES,
-            aggregate_continuations=AGGREGATE_CONTINUATION_TABLES,
+            expand_references=expand_references,
+            aggregate_continuations=aggregate_continuation_tables,
         )
 
     return _response(

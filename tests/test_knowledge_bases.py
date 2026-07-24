@@ -81,6 +81,9 @@ def test_default_assistant_is_deepseek_only_and_versioned(
     assert "report_parameters" in row["node_prompts"]
     assert row["rules"]
     assert "top_k" in row["retrieval_config"]
+    retrieval_config = json.loads(row["retrieval_config"])
+    assert retrieval_config["aggregate_continuation_tables"] is False
+    assert retrieval_config["expand_references"] is False
     _close_temp_db(monkeypatch)
 
 

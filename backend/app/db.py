@@ -763,6 +763,8 @@ def _default_retrieval_config() -> dict[str, Any]:
         "final_per_type": 15,
         "special_route_reserve": 3,
         "similarity_threshold": 0.2,
+        "aggregate_continuation_tables": False,
+        "expand_references": False,
         "keyword_weight": 0.3,
         "vector_weight": 0.7,
         # Peer-report context triggers for the audit workflow. Editable per

@@ -98,12 +98,15 @@ def _loads(value: str | None) -> dict[str, Any]:
 def _version_out(row: Any) -> dict[str, Any]:
     from ..parameter_schema import resolve_parameter_schema
 
+    retrieval_config = _loads(row["retrieval_config"])
+    retrieval_config.setdefault("aggregate_continuation_tables", False)
+    retrieval_config.setdefault("expand_references", False)
     return {
         **dict(row),
         "model_config": _loads(row["model_config"]),
         "node_prompts": _loads(row["node_prompts"]),
         "rules": _loads(row["rules"]),
-        "retrieval_config": _loads(row["retrieval_config"]),
+        "retrieval_config": retrieval_config,
         "parameter_schema": resolve_parameter_schema(_loads(row["parameter_schema"])),
     }
 
@@ -615,6 +618,10 @@ def assistant_chat(assistant_id: str, body: AssistantChatRequest):
     candidates_per_type = int(retrieval_config.get("candidate_count_per_type") or 20)
     similarity_threshold = retrieval_config.get("similarity_threshold")
     threshold = float(similarity_threshold) if similarity_threshold is not None else 0.2
+    aggregate_continuation_tables = bool(
+        retrieval_config.get("aggregate_continuation_tables", False)
+    )
+    expand_references = bool(retrieval_config.get("expand_references", False))
 
     try:
         search = retrieval.hybrid_search(
@@ -623,6 +630,8 @@ def assistant_chat(assistant_id: str, body: AssistantChatRequest):
             route_top_k=max(1, min(route_top_k, 100)),
             candidates_per_type=max(1, min(candidates_per_type, 100)),
             similarity_threshold=threshold,
+            aggregate_continuation_tables=aggregate_continuation_tables,
+            expand_references=expand_references,
             file_ids=file_ids,
         )
     except ValueError as exc:
@@ -661,6 +670,8 @@ def assistant_chat(assistant_id: str, body: AssistantChatRequest):
             "scoped_file_count": len(file_ids),
             "top_k": top_k,
             "similarity_threshold": threshold,
+            "aggregate_continuation_tables": aggregate_continuation_tables,
+            "expand_references": expand_references,
             "degraded": search.get("degraded") or [],
         },
     }
