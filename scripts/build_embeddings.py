@@ -20,6 +20,12 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=embeddings.MAX_BATCH_SIZE)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--include-table-columns",
+        action="store_true",
+        help="Ablation (experiment A): add table header columns to the dense document "
+             "prefix. Use with --force to rebuild all vectors before evaluating.",
+    )
     args = parser.parse_args()
 
     db.init_db()
@@ -33,6 +39,7 @@ def main() -> None:
         batch_size=args.batch_size,
         force=args.force,
         limit=args.limit,
+        include_table_columns=args.include_table_columns,
         on_batch=progress,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))

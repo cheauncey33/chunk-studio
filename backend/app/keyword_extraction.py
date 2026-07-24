@@ -36,12 +36,15 @@ def pending_chunks(
     force: bool = False,
     chunk_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    clauses = ["status='approved'"]
+    clauses: list[str] = []
     args: list[Any] = []
     if chunk_ids:
+        # Explicit chunk regenerate may run regardless of review status.
         placeholders = ",".join("?" for _ in chunk_ids)
         clauses.append(f"id IN ({placeholders})")
         args.extend(chunk_ids)
+    else:
+        clauses.append("status='approved'")
     rows = db.get_conn().execute(
         f"""SELECT id, file_id, page, text, business_metadata, metadata_llm
             FROM chunks WHERE {' AND '.join(clauses)}

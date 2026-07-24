@@ -29,6 +29,7 @@ from .routers import (
     audit,
     auto_chunks,
     chunks,
+    embeddings,
     export,
     extract,
     fields,
@@ -74,7 +75,8 @@ def health():
 api_prefix = "/api"
 for r in (files.router, chunks.router, auto_chunks.router, fields.router, settings.router,
           knowledge_bases.router, assistants.router, audit.router,
-          jobs.router, extract.router, ocr.router, export.router, search.router):
+          jobs.router, extract.router, ocr.router, export.router, search.router,
+          embeddings.router):
     app.include_router(r, prefix=api_prefix)
 
 

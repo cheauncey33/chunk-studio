@@ -42,3 +42,24 @@ def test_build_embeddings_is_incremental(monkeypatch, tmp_path) -> None:
 
     db.get_conn().close()
     monkeypatch.setattr(db, "_conn", None)
+
+
+def test_build_document_table_columns_flag_changes_prefix_and_hash() -> None:
+    row = {
+        "id": "c1",
+        "text": "| 1 | 2 |",
+        "business_metadata": (
+            '{"content_type":"table","standard_no":"GB 20052-2024",'
+            '"table_no":"1","table_title":"能效限值",'
+            '"table_columns":["额定容量/kVA","空载损耗/W",""]}'
+        ),
+    }
+
+    baseline = embeddings.build_document(row)
+    with_columns = embeddings.build_document(row, include_table_columns=True)
+
+    assert "额定容量/kVA" not in baseline.text
+    assert "额定容量/kVA / 空载损耗/W" in with_columns.text
+    assert with_columns.text.startswith("GB 20052-2024 | 1 | 能效限值 | 额定容量/kVA")
+    # Different documents must produce different hashes so a rebuild re-embeds.
+    assert baseline.text_sha256 != with_columns.text_sha256

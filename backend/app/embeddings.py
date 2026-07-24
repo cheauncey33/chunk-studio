@@ -27,7 +27,13 @@ class EmbeddingDocument:
     text_sha256: str
 
 
-def build_document(row: Any) -> EmbeddingDocument:
+def build_document(row: Any, *, include_table_columns: bool = False) -> EmbeddingDocument:
+    """Build the dense-embedding document for a chunk.
+
+    ``include_table_columns`` is an ablation flag (phase-4 experiment A): it
+    appends the table header columns to the metadata prefix. Keep it off in
+    production until the frozen-set evaluation shows a recall improvement.
+    """
     business = chunk_schema.parse_json_object(row["business_metadata"])
     labels = [
         business.get("standard_no"),
@@ -38,6 +44,10 @@ def build_document(row: Any) -> EmbeddingDocument:
         business.get("figure_no"),
         business.get("figure_title"),
     ]
+    if include_table_columns:
+        columns = business.get("table_columns")
+        if isinstance(columns, list) and columns:
+            labels.append(" / ".join(str(column).strip() for column in columns if str(column).strip()))
     prefix = " | ".join(str(value).strip() for value in labels if value)
     body = str(row["text"] or "").strip()
     text = f"{prefix}\n\n{body}" if prefix and body else prefix or body
@@ -45,14 +55,22 @@ def build_document(row: Any) -> EmbeddingDocument:
     return EmbeddingDocument(str(row["id"]), text, digest)
 
 
-def pending_documents(*, model: str, dimension: int, force: bool = False) -> list[EmbeddingDocument]:
+def pending_documents(
+    *,
+    model: str,
+    dimension: int,
+    force: bool = False,
+    include_table_columns: bool = False,
+) -> list[EmbeddingDocument]:
     rows = db.get_conn().execute(
         """SELECT id, text, business_metadata
            FROM chunks
            WHERE status='approved'
            ORDER BY file_id, page, created_at"""
     ).fetchall()
-    documents = [build_document(row) for row in rows]
+    documents = [
+        build_document(row, include_table_columns=include_table_columns) for row in rows
+    ]
     if force:
         return documents
     existing = {
@@ -307,12 +325,18 @@ def build_embeddings(
     batch_size: int = MAX_BATCH_SIZE,
     force: bool = False,
     limit: int | None = None,
+    include_table_columns: bool = False,
     embedder: Callable[..., tuple[list[list[float]], int]] = embed_with_dashscope,
     on_batch: Callable[[int, int, int], None] | None = None,
 ) -> dict[str, int | str]:
     if not 1 <= batch_size <= MAX_BATCH_SIZE:
         raise ValueError(f"batch_size must be between 1 and {MAX_BATCH_SIZE}")
-    documents = pending_documents(model=model, dimension=dimension, force=force)
+    documents = pending_documents(
+        model=model,
+        dimension=dimension,
+        force=force,
+        include_table_columns=include_table_columns,
+    )
     if limit is not None:
         documents = documents[:limit]
     embedded = 0
