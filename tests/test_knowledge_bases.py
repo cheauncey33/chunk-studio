@@ -254,41 +254,31 @@ def test_patch_knowledge_base_corpus_rules(monkeypatch, tmp_path) -> None:
     _close_temp_db(monkeypatch)
 
 
-def test_merge_manual_rules_priority_and_fallback(monkeypatch, tmp_path) -> None:
-    _init_temp_db(monkeypatch, tmp_path)
-    with db.transaction() as conn:
-        for kb_id, name, priority, rule_id, text in [
-            ("kb_a", "库A", 0, "shared", "from-a"),
-            ("kb_b", "库B", 10, "shared", "from-b"),
-        ]:
-            conn.execute(
-                """INSERT INTO knowledge_bases
-                   (id,name,description,status,is_default,parser_config,
-                    retrieval_config,manual_rules,few_shot_rules,
-                    default_naming_file_id,created_at,updated_at)
-                   VALUES (?,?,?,'active',0,'{}','{}',?,'{}',NULL,'now','now')""",
-                (
-                    kb_id,
-                    name,
-                    "",
-                    json.dumps(
-                        {
-                            "version": 1,
-                            "scope": "knowledge_base_manual_rules",
-                            "rules": [{"rule_id": rule_id, "rule_text": text}],
-                        },
-                        ensure_ascii=False,
-                    ),
-                ),
-            )
-            conn.execute(
-                """INSERT INTO assistant_knowledge_bases
-                   (assistant_id,knowledge_base_id,priority,enabled)
-                   VALUES ('assistant_oil_transformer_audit',?,?,1)""",
-                (kb_id, priority),
-            )
-
-    merged = db.resolve_assistant_manual_rules("assistant_oil_transformer_audit")
+def test_merge_manual_rules_priority_and_fallback() -> None:
+    merged = db.merge_manual_rules(
+        [
+            {
+                "manual_rules": json.dumps(
+                    {
+                        "version": 1,
+                        "scope": "knowledge_base_manual_rules",
+                        "rules": [{"rule_id": "shared", "rule_text": "from-a"}],
+                    },
+                    ensure_ascii=False,
+                )
+            },
+            {
+                "manual_rules": json.dumps(
+                    {
+                        "version": 1,
+                        "scope": "knowledge_base_manual_rules",
+                        "rules": [{"rule_id": "shared", "rule_text": "from-b"}],
+                    },
+                    ensure_ascii=False,
+                )
+            },
+        ]
+    )
     by_id = {rule["rule_id"]: rule for rule in merged["rules"]}
     assert by_id["shared"]["rule_text"] == "from-b"
 
@@ -300,10 +290,9 @@ def test_merge_manual_rules_priority_and_fallback(monkeypatch, tmp_path) -> None
         },
     )
     assert empty["rules"][0]["rule_id"] == "fallback"
-    _close_temp_db(monkeypatch)
 
 
-def test_assistant_default_naming_file_id_uses_highest_priority(
+def test_assistant_default_naming_file_id_uses_bound_kb(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -314,30 +303,10 @@ def test_assistant_default_naming_file_id_uses_highest_priority(
                ('f_low','low.pdf','files/low.pdf','{}','now'),
                ('f_high','high.pdf','files/high.pdf','{}','now')"""
         )
-        for kb_id, name, priority, naming in [
-            ("kb_low", "低优", 1, "f_low"),
-            ("kb_high", "高优", 9, "f_high"),
-        ]:
-            conn.execute(
-                """INSERT INTO knowledge_bases
-                   (id,name,description,status,is_default,parser_config,
-                    retrieval_config,manual_rules,few_shot_rules,
-                    default_naming_file_id,created_at,updated_at)
-                   VALUES (?,?,?,'active',0,'{}','{}','{}','{}',?,'now','now')""",
-                (kb_id, name, "", naming),
-            )
-            conn.execute(
-                """INSERT INTO knowledge_base_files
-                   (knowledge_base_id,file_id,role,enabled,created_at)
-                   VALUES (?,?,'source',1,'now')""",
-                (kb_id, naming),
-            )
-            conn.execute(
-                """INSERT INTO assistant_knowledge_bases
-                   (assistant_id,knowledge_base_id,priority,enabled)
-                   VALUES ('assistant_oil_transformer_audit',?,?,1)""",
-                (kb_id, priority),
-            )
+        conn.execute(
+            """UPDATE knowledge_bases SET default_naming_file_id='f_high'
+               WHERE id='kb_uncategorized'"""
+        )
 
     assert db.assistant_default_naming_file_id("assistant_oil_transformer_audit") == "f_high"
     from app import audit_run

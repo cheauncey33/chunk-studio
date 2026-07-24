@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import sqlite3
 import sys
 
 import pytest
@@ -38,8 +40,15 @@ def test_create_knowledge_base_auto_binds_assistant(monkeypatch, tmp_path) -> No
     _close_temp_db(monkeypatch)
 
 
-def test_migrate_collapses_multi_binds(monkeypatch, tmp_path) -> None:
+def test_migrate_preserves_multi_binds_by_cloning_and_disabling_conflicts(
+    monkeypatch, tmp_path
+) -> None:
     _init_temp_db(monkeypatch, tmp_path)
+    db.get_conn().execute(
+        "DELETE FROM schema_migrations WHERE name='assistant-kb-one-to-one-v2'"
+    )
+    db.get_conn().execute("DROP INDEX uq_assistant_kb_enabled_assistant")
+    db.get_conn().execute("DROP INDEX uq_assistant_kb_enabled_kb")
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO knowledge_bases
@@ -65,7 +74,8 @@ def test_migrate_collapses_multi_binds(monkeypatch, tmp_path) -> None:
                VALUES ('assistant_extra','kb_uncategorized',5,1)"""
         )
 
-    db._migrate_assistant_kb_one_to_one()
+    # Re-run the migration against the deliberately corrupted legacy state.
+    details = db._migrate_assistant_kb_one_to_one()
     db.get_conn().commit()
 
     oil_kbs = db.get_conn().execute(
@@ -80,6 +90,56 @@ def test_migrate_collapses_multi_binds(monkeypatch, tmp_path) -> None:
     ).fetchall()
     assert len(default_assistants) == 1
     assert default_assistants[0]["assistant_id"] == "assistant_oil_transformer_audit"
+
+    cloned = details["cloned_bindings"]
+    assert len(cloned) == 1
+    assert cloned[0]["source_assistant_id"] == "assistant_oil_transformer_audit"
+    assert cloned[0]["knowledge_base_id"] == "kb_extra"
+    clone_id = cloned[0]["clone_assistant_id"]
+    clone_versions = db.get_conn().execute(
+        "SELECT COUNT(*) FROM assistant_versions WHERE assistant_id=?",
+        (clone_id,),
+    ).fetchone()[0]
+    oil_versions = db.get_conn().execute(
+        """SELECT COUNT(*) FROM assistant_versions
+           WHERE assistant_id='assistant_oil_transformer_audit'"""
+    ).fetchone()[0]
+    assert clone_versions == oil_versions
+
+    # Conflicting rows are retained as disabled, not deleted.
+    disabled = db.get_conn().execute(
+        """SELECT enabled FROM assistant_knowledge_bases
+           WHERE assistant_id='assistant_extra'
+             AND knowledge_base_id='kb_uncategorized'"""
+    ).fetchone()
+    assert disabled is not None
+    assert disabled["enabled"] == 0
+    assert Path(details["backup_path"]).is_file()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        with db.transaction() as conn:
+            conn.execute(
+                """INSERT INTO assistant_knowledge_bases
+                   (assistant_id,knowledge_base_id,priority,enabled)
+                   VALUES ('assistant_oil_transformer_audit','kb_extra',9,1)"""
+            )
+    _close_temp_db(monkeypatch)
+
+
+def test_one_to_one_migration_is_idempotent(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    before = db.get_conn().execute(
+        "SELECT details FROM schema_migrations WHERE name='assistant-kb-one-to-one-v2'"
+    ).fetchone()
+    assert before is not None
+
+    first = json.loads(before["details"])
+    second = db._migrate_assistant_kb_one_to_one()
+    assert second == first
+    assert db.get_conn().execute(
+        """SELECT COUNT(*) FROM schema_migrations
+           WHERE name='assistant-kb-one-to-one-v2'"""
+    ).fetchone()[0] == 1
     _close_temp_db(monkeypatch)
 
 

@@ -268,11 +268,11 @@ def init_db() -> None:
     _migrate_knowledge_base_corpus_rules()
     _migrate_knowledge_base_corpus_kind()
     _migrate_assistant_parameter_schema()
-    _migrate_assistant_kb_one_to_one()
     _migrate_assistant_init_drafts()
     _backfill_chunk_layers()
     _backfill_auto_metadata()
     _seed_knowledge_base_and_assistant()
+    _migrate_assistant_kb_one_to_one()
     _ensure_knowledge_base_assistants()
     _conn.commit()
 
@@ -308,67 +308,245 @@ def _migrate_assistant_init_drafts() -> None:
     )
 
 
-def _migrate_assistant_kb_one_to_one() -> None:
-    """Enforce one enabled assistant bind per knowledge base.
+def _backup_database_for_migration(migration_name: str) -> str:
+    """Create a consistent SQLite backup before a data-shaping migration."""
+    import time
 
-    If a KB has multiple assistants, keep oil for default KB when present,
-    otherwise the lowest-priority bind. If an assistant has multiple KBs,
-    keep its lowest-priority bind only.
-    """
     assert _conn is not None
-    # Collapse multi-assistant binds on the same KB.
-    kb_ids = [
-        row["knowledge_base_id"]
-        for row in _conn.execute(
+    backup_dir = config.DATA_DIR / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup_path = backup_dir / f"chunkstudio.before-{migration_name}.{stamp}.db"
+    with sqlite3.connect(str(backup_path)) as backup:
+        _conn.backup(backup)
+    return str(backup_path)
+
+
+def _clone_assistant_for_knowledge_base(
+    assistant_id: str,
+    knowledge_base_id: str,
+) -> str:
+    """Clone an assistant and all versions so an existing binding is preserved."""
+    import time
+
+    assert _conn is not None
+    assistant = _conn.execute(
+        "SELECT * FROM audit_assistants WHERE id=?",
+        (assistant_id,),
+    ).fetchone()
+    kb = _conn.execute(
+        "SELECT name, description FROM knowledge_bases WHERE id=?",
+        (knowledge_base_id,),
+    ).fetchone()
+    if not assistant or not kb:
+        raise RuntimeError("assistant/knowledge-base binding references a missing row")
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    clone_id = f"assistant_{uuid.uuid4().hex}"
+    clone_name = _unique_assistant_name(f"{kb['name']}审查")
+    clone_description = kb["description"] or f"从「{assistant['name']}」迁移并绑定知识库「{kb['name']}」"
+    _conn.execute(
+        """INSERT INTO audit_assistants
+           (id,name,description,status,active_version_id,created_at,updated_at)
+           VALUES (?,?,?,?,NULL,?,?)""",
+        (
+            clone_id,
+            clone_name,
+            clone_description,
+            assistant["status"],
+            now,
+            now,
+        ),
+    )
+
+    active_clone_id: str | None = None
+    versions = _conn.execute(
+        "SELECT * FROM assistant_versions WHERE assistant_id=? ORDER BY version",
+        (assistant_id,),
+    ).fetchall()
+    for version in versions:
+        clone_version_id = f"{clone_id}_v{version['version']}_{uuid.uuid4().hex[:8]}"
+        _conn.execute(
+            """INSERT INTO assistant_versions
+               (id,assistant_id,version,status,model_config,node_prompts,rules,
+                retrieval_config,parameter_schema,created_at,activated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                clone_version_id,
+                clone_id,
+                version["version"],
+                version["status"],
+                version["model_config"],
+                version["node_prompts"],
+                version["rules"],
+                version["retrieval_config"],
+                version["parameter_schema"],
+                version["created_at"],
+                version["activated_at"],
+            ),
+        )
+        if version["id"] == assistant["active_version_id"]:
+            active_clone_id = clone_version_id
+    _conn.execute(
+        "UPDATE audit_assistants SET active_version_id=? WHERE id=?",
+        (active_clone_id, clone_id),
+    )
+    _conn.execute(
+        """UPDATE assistant_knowledge_bases
+           SET assistant_id=?
+           WHERE assistant_id=? AND knowledge_base_id=?""",
+        (clone_id, assistant_id, knowledge_base_id),
+    )
+    return clone_id
+
+
+def _migrate_assistant_kb_one_to_one() -> dict[str, Any]:
+    """Preserve bindings while converting enabled relationships to strict 1:1."""
+    import time
+
+    assert _conn is not None
+    migration_name = "assistant-kb-one-to-one-v2"
+    _conn.execute(
+        """CREATE TABLE IF NOT EXISTS schema_migrations (
+               name       TEXT PRIMARY KEY,
+               applied_at TEXT NOT NULL,
+               details    TEXT NOT NULL DEFAULT '{}'
+           )"""
+    )
+    _conn.execute(
+        """CREATE TABLE IF NOT EXISTS assistant_kb_migration_conflicts (
+               migration_name   TEXT NOT NULL,
+               assistant_id     TEXT NOT NULL,
+               knowledge_base_id TEXT NOT NULL,
+               resolution       TEXT NOT NULL,
+               created_at       TEXT NOT NULL,
+               PRIMARY KEY (migration_name, assistant_id, knowledge_base_id)
+           )"""
+    )
+    applied = _conn.execute(
+        "SELECT details FROM schema_migrations WHERE name=?",
+        (migration_name,),
+    ).fetchone()
+    if applied:
+        _conn.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_kb_enabled_assistant
+               ON assistant_knowledge_bases(assistant_id) WHERE enabled=1"""
+        )
+        _conn.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_kb_enabled_kb
+               ON assistant_knowledge_bases(knowledge_base_id) WHERE enabled=1"""
+        )
+        return _loads_json(applied["details"], {})
+
+    multi_assistants = _conn.execute(
+        """SELECT assistant_id
+           FROM assistant_knowledge_bases
+           WHERE enabled=1
+           GROUP BY assistant_id
+           HAVING COUNT(*) > 1
+           ORDER BY assistant_id"""
+    ).fetchall()
+    multi_kbs = _conn.execute(
+        """SELECT knowledge_base_id
+           FROM assistant_knowledge_bases
+           WHERE enabled=1
+           GROUP BY knowledge_base_id
+           HAVING COUNT(*) > 1
+           ORDER BY knowledge_base_id"""
+    ).fetchall()
+    backup_path = ""
+    if multi_assistants or multi_kbs:
+        _conn.commit()
+        backup_path = _backup_database_for_migration(migration_name)
+
+    cloned: list[dict[str, str]] = []
+    disabled_conflicts: list[dict[str, str]] = []
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    with _conn:
+        for item in multi_assistants:
+            assistant_id = str(item["assistant_id"])
+            bindings = _conn.execute(
+                """SELECT akb.knowledge_base_id, akb.priority, kb.is_default
+                   FROM assistant_knowledge_bases akb
+                   JOIN knowledge_bases kb ON kb.id=akb.knowledge_base_id
+                   WHERE akb.assistant_id=? AND akb.enabled=1
+                   ORDER BY
+                     CASE WHEN ?='assistant_oil_transformer_audit'
+                                AND akb.knowledge_base_id='kb_uncategorized'
+                          THEN 0 ELSE 1 END,
+                     akb.priority ASC, kb.is_default DESC, akb.knowledge_base_id ASC""",
+                (assistant_id, assistant_id),
+            ).fetchall()
+            for binding in bindings[1:]:
+                kb_id = str(binding["knowledge_base_id"])
+                clone_id = _clone_assistant_for_knowledge_base(assistant_id, kb_id)
+                cloned.append(
+                    {
+                        "source_assistant_id": assistant_id,
+                        "clone_assistant_id": clone_id,
+                        "knowledge_base_id": kb_id,
+                    }
+                )
+
+        remaining_multi_kbs = _conn.execute(
             """SELECT knowledge_base_id
                FROM assistant_knowledge_bases
                WHERE enabled=1
                GROUP BY knowledge_base_id
-               HAVING COUNT(*) > 1"""
+               HAVING COUNT(*) > 1
+               ORDER BY knowledge_base_id"""
         ).fetchall()
-    ]
-    for kb_id in kb_ids:
-        rows = _conn.execute(
-            """SELECT assistant_id, priority
-               FROM assistant_knowledge_bases
-               WHERE knowledge_base_id=? AND enabled=1
-               ORDER BY
-                 CASE WHEN assistant_id='assistant_oil_transformer_audit' THEN 0 ELSE 1 END,
-                 priority ASC,
-                 assistant_id ASC""",
-            (kb_id,),
-        ).fetchall()
-        keep = rows[0]["assistant_id"]
+        for item in remaining_multi_kbs:
+            kb_id = str(item["knowledge_base_id"])
+            bindings = _conn.execute(
+                """SELECT assistant_id
+                   FROM assistant_knowledge_bases
+                   WHERE knowledge_base_id=? AND enabled=1
+                   ORDER BY priority ASC, assistant_id ASC""",
+                (kb_id,),
+            ).fetchall()
+            for binding in bindings[1:]:
+                assistant_id = str(binding["assistant_id"])
+                _conn.execute(
+                    """UPDATE assistant_knowledge_bases SET enabled=0
+                       WHERE assistant_id=? AND knowledge_base_id=?""",
+                    (assistant_id, kb_id),
+                )
+                _conn.execute(
+                    """INSERT INTO assistant_kb_migration_conflicts
+                       (migration_name,assistant_id,knowledge_base_id,resolution,created_at)
+                       VALUES (?,?,?,?,?)""",
+                    (
+                        migration_name,
+                        assistant_id,
+                        kb_id,
+                        "disabled_duplicate_binding",
+                        now,
+                    ),
+                )
+                disabled_conflicts.append(
+                    {"assistant_id": assistant_id, "knowledge_base_id": kb_id}
+                )
+
         _conn.execute(
-            """DELETE FROM assistant_knowledge_bases
-               WHERE knowledge_base_id=? AND assistant_id!=?""",
-            (kb_id, keep),
+            """CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_kb_enabled_assistant
+               ON assistant_knowledge_bases(assistant_id) WHERE enabled=1"""
         )
-    # Collapse multi-KB binds on the same assistant.
-    assistant_ids = [
-        row["assistant_id"]
-        for row in _conn.execute(
-            """SELECT assistant_id
-               FROM assistant_knowledge_bases
-               WHERE enabled=1
-               GROUP BY assistant_id
-               HAVING COUNT(*) > 1"""
-        ).fetchall()
-    ]
-    for assistant_id in assistant_ids:
-        rows = _conn.execute(
-            """SELECT knowledge_base_id, priority
-               FROM assistant_knowledge_bases
-               WHERE assistant_id=? AND enabled=1
-               ORDER BY priority ASC, knowledge_base_id ASC""",
-            (assistant_id,),
-        ).fetchall()
-        keep = rows[0]["knowledge_base_id"]
         _conn.execute(
-            """DELETE FROM assistant_knowledge_bases
-               WHERE assistant_id=? AND knowledge_base_id!=?""",
-            (assistant_id, keep),
+            """CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_kb_enabled_kb
+               ON assistant_knowledge_bases(knowledge_base_id) WHERE enabled=1"""
         )
+        details = {
+            "backup_path": backup_path,
+            "cloned_bindings": cloned,
+            "disabled_conflicts": disabled_conflicts,
+        }
+        _conn.execute(
+            """INSERT INTO schema_migrations (name,applied_at,details)
+               VALUES (?,?,?)""",
+            (migration_name, now, json.dumps(details, ensure_ascii=False)),
+        )
+    return details
 
 
 def _ensure_knowledge_base_assistants() -> None:
