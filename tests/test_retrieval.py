@@ -608,3 +608,112 @@ def test_final_per_type_slices_after_rerank() -> None:
     assert types.count("table") == 1
     assert types.count("section") == 1
     assert len(result["hits"]) == 2
+
+
+def test_enrich_evidence_hits_expands_references_then_aggregates_continuations(monkeypatch) -> None:
+    section = {
+        "chunk_id": "s1",
+        "score": 0.8,
+        "file_id": "file-1",
+        "file_name": "std.pdf",
+        "page": 2,
+        "crop_url": None,
+        "text": "试验电压见表 7。",
+        "business_metadata": {"content_type": "section", "standard_no": "GB/T 1"},
+        "source_trace": {},
+        "rrf_score": 0.1,
+        "rerank_score": 0.9,
+        "route_ranks": {"production": 1},
+        "retrieval_sources": ["dense"],
+        "source_ranks": {},
+    }
+    table_page = {
+        "chunk_id": "t7a",
+        "score": 0.7,
+        "file_id": "file-1",
+        "file_name": "std.pdf",
+        "page": 9,
+        "crop_url": None,
+        "text": "表7 第一页",
+        "business_metadata": {
+            "content_type": "table",
+            "standard_no": "GB/T 1",
+            "table_no": "7",
+            "table_title": "试验电压",
+        },
+        "source_trace": {},
+        "rrf_score": 0.05,
+        "rerank_score": 0.8,
+        "route_ranks": {"production": 2},
+        "retrieval_sources": ["dense"],
+        "source_ranks": {},
+    }
+
+    monkeypatch.setattr(
+        retrieval,
+        "_safe_fetch_table_chunks",
+        lambda file_id, table_no: [
+            {
+                "chunk_id": "t7a",
+                "file_id": file_id,
+                "file_name": "std.pdf",
+                "page": 9,
+                "text": "表7 第一页",
+                "business_metadata": table_page["business_metadata"],
+                "source_trace": {},
+                "content_type": "table",
+            },
+            {
+                "chunk_id": "t7b",
+                "file_id": file_id,
+                "file_name": "std.pdf",
+                "page": 10,
+                "text": "表7（续）第二页",
+                "business_metadata": {
+                    **table_page["business_metadata"],
+                    "table_title": "(续)",
+                    "table_kind": "continued_table",
+                },
+                "source_trace": {},
+                "content_type": "table",
+            },
+        ] if table_no == "7" else [],
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "_safe_table_group_members",
+        lambda file_id, standard_no, table_no: [
+            {
+                "chunk_id": "t7a",
+                "file_id": file_id,
+                "file_name": "std.pdf",
+                "page": 9,
+                "text": "表7 第一页",
+                "business_metadata": table_page["business_metadata"],
+                "source_trace": {},
+                "content_type": "table",
+            },
+            {
+                "chunk_id": "t7b",
+                "file_id": file_id,
+                "file_name": "std.pdf",
+                "page": 10,
+                "text": "表7（续）第二页",
+                "business_metadata": {
+                    **table_page["business_metadata"],
+                    "table_title": "(续)",
+                    "table_kind": "continued_table",
+                },
+                "source_trace": {},
+                "content_type": "table",
+            },
+        ],
+    )
+
+    enriched = retrieval._enrich_evidence_hits([section])
+    assert [hit["chunk_id"] for hit in enriched] == ["s1", "t7a"]
+    table_hit = enriched[1]
+    assert table_hit["added_by"] == "reference_expansion"
+    assert "表7 第一页" in table_hit["text"]
+    assert "表7（续）第二页" in table_hit["text"]
+    assert [m["chunk_id"] for m in table_hit["evidence_unit"]["members"]] == ["t7a", "t7b"]

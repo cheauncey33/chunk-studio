@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 from http import HTTPStatus
 from typing import Any
 
-from . import embeddings, lexical, llm
+from . import embeddings, lexical, llm, retrieval_experiments
 
 
 QUERY_REWRITE_MODEL = os.environ.get("RETRIEVAL_QUERY_MODEL", llm.DEFAULT_MODEL)
@@ -24,6 +24,9 @@ LEXICAL_CANDIDATES_PER_TYPE = 20
 RRF_K = 60
 SPECIAL_ROUTE_RESERVE = 3
 FINAL_PER_TYPE = 15
+# Production post-rerank enrichment (phase-4 B + C).
+AGGREGATE_CONTINUATION_TABLES = True
+EXPAND_TABLE_REFERENCES = True
 GENERAL_DENSE_ROUTES = ("production", "semantic", "keyword")
 SPECIAL_ROUTE_CONTENT_TYPES = {
     "table_target": "table",
@@ -383,6 +386,13 @@ def hybrid_search(
             >= similarity_threshold
         ]
 
+    if EXPAND_TABLE_REFERENCES or AGGREGATE_CONTINUATION_TABLES:
+        selected = _enrich_evidence_hits(
+            selected,
+            expand_references=EXPAND_TABLE_REFERENCES,
+            aggregate_continuations=AGGREGATE_CONTINUATION_TABLES,
+        )
+
     return _response(
         query,
         routes,
@@ -396,6 +406,72 @@ def hybrid_search(
         special_route_reserve=special_route_reserve,
         final_per_type=final_per_type,
     )
+
+
+def _enrich_evidence_hits(
+    hits: list[dict[str, Any]],
+    *,
+    expand_references: bool = True,
+    aggregate_continuations: bool = True,
+) -> list[dict[str, Any]]:
+    """Post-rerank enrichment: C (见表 N) then B (续表聚合/补全)."""
+    if not hits:
+        return hits
+    candidates = [_as_evidence_candidate(hit) for hit in hits]
+    if expand_references:
+        candidates = retrieval_experiments.expand_table_references(
+            candidates,
+            fetch_table_chunks=_safe_fetch_table_chunks,
+        )
+    if aggregate_continuations:
+        candidates = retrieval_experiments.aggregate_continuation_tables(
+            candidates,
+            complete_groups=_safe_table_group_members,
+        )
+    return [_normalize_evidence_hit(candidate) for candidate in candidates]
+
+
+def _safe_fetch_table_chunks(file_id: str, table_no: str) -> list[dict[str, Any]]:
+    try:
+        return retrieval_experiments.db_fetch_table_chunks(file_id, table_no)
+    except (sqlite3.Error, OSError, RuntimeError):
+        return []
+
+
+def _safe_table_group_members(
+    file_id: str, standard_no: str, table_no: str
+) -> list[dict[str, Any]]:
+    try:
+        return retrieval_experiments.db_table_group_members(file_id, standard_no, table_no)
+    except (sqlite3.Error, OSError, RuntimeError):
+        return []
+
+
+def _as_evidence_candidate(hit: dict[str, Any]) -> dict[str, Any]:
+    metadata = hit.get("business_metadata") or {}
+    candidate = dict(hit)
+    candidate.setdefault(
+        "content_type",
+        hit.get("content_type") or metadata.get("content_type") or "",
+    )
+    return candidate
+
+
+def _normalize_evidence_hit(candidate: dict[str, Any]) -> dict[str, Any]:
+    hit = dict(candidate)
+    metadata = hit.get("business_metadata") or {}
+    hit.setdefault("content_type", metadata.get("content_type") or hit.get("content_type") or "")
+    hit.setdefault("file_name", hit.get("file_name") or "")
+    hit.setdefault("crop_url", hit.get("crop_url"))
+    hit.setdefault("score", float(hit.get("score") or 0.0))
+    hit.setdefault("rrf_score", hit.get("rrf_score"))
+    hit.setdefault("rerank_score", hit.get("rerank_score"))
+    hit.setdefault("route_ranks", hit.get("route_ranks") or {})
+    hit.setdefault("retrieval_sources", hit.get("retrieval_sources") or [])
+    hit.setdefault("source_ranks", hit.get("source_ranks") or {})
+    if hit.get("added_by") and "experiment" not in hit["retrieval_sources"]:
+        hit["retrieval_sources"] = [*hit["retrieval_sources"], "experiment"]
+    return hit
 
 
 def _resolve_query_routes(
