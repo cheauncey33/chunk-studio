@@ -191,7 +191,9 @@ export default function DatasetsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>新建知识库</DialogTitle>
-            <DialogDescription>先建库，再上传 PDF。提示词请到「审查助手」里配置。</DialogDescription>
+            <DialogDescription>
+              先建库，再上传 PDF。审查问答与配置在库内「问答 / 审查配置」；通用模板在系统设置。
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">

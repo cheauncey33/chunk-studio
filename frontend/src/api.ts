@@ -12,6 +12,7 @@ export interface CSFile {
   parse_status?: string | null
   parse_error?: string
   parse_ready?: boolean
+  auto_chunk_error?: string
 }
 
 export interface BBox { x: number; y: number; w: number; h: number }
@@ -212,6 +213,7 @@ export interface KnowledgeBase {
   few_shot_rules: FewShotRules
   default_naming_file_id: string | null
   default_naming_file_name?: string | null
+  assistant_id?: string | null
   file_count: number
   chunk_count: number
   created_at: string
@@ -229,6 +231,24 @@ export interface KnowledgeBaseFile extends CSFile {
   parse_status?: string | null
   parse_error?: string
   parse_ready?: boolean
+  auto_chunk_error?: string
+}
+
+export interface KeywordExtractionSummary {
+  model: string
+  prompt_version: string
+  eligible: number
+  extracted: number
+  by_content_type?: Record<string, number>
+}
+
+export interface EmbeddingsStatus {
+  model: string
+  dimension: number
+  approved_chunks: number
+  pending_chunks: number
+  embedded_chunks: number
+  latest_job: Job | null
 }
 
 export interface KnowledgeBaseChunk {
@@ -255,6 +275,43 @@ export interface AuditAssistant {
   updated_at: string
 }
 
+export interface ParameterSchemaField {
+  key: string
+  label: string
+  required: boolean
+  hint: string
+}
+
+export interface ParameterSchema {
+  version: number
+  allow_extra: boolean
+  fields: ParameterSchemaField[]
+}
+
+export interface AssistantInitDraft {
+  assistant_id: string
+  status: 'generating' | 'ready' | 'failed' | 'applied' | 'discarded'
+  payload: {
+    category_profile?: {
+      name?: string
+      equipment_type?: string
+      focus?: string
+      notes?: string
+    }
+    parameter_schema?: ParameterSchema
+    report_parameters_prompt?: string
+    source_file_ids?: {
+      standard?: string[]
+      sample_reports?: string[]
+    }
+    model?: string
+    error?: string
+  }
+  job_id?: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface AssistantVersion {
   id: string
   assistant_id: string
@@ -264,6 +321,7 @@ export interface AssistantVersion {
   node_prompts: Record<string, { path?: string; content?: string }>
   rules: Record<string, unknown>
   retrieval_config: Record<string, unknown>
+  parameter_schema: ParameterSchema
   created_at: string
   activated_at: string | null
 }
@@ -285,12 +343,24 @@ export interface AuditReportListResponse {
   reports: AuditReportListItem[]
 }
 
+export interface AuditCaseReview {
+  report_name: string
+  case_id: string
+  status: 'confirmed' | 'corrected'
+  corrected_status: string
+  note: string
+  reviewer: string
+  created_at: string
+  updated_at: string
+}
+
 export interface AuditReportDetail {
   name: string
   kind: string
   size_bytes: number
   modified_at: number
   payload: Record<string, unknown>
+  reviews?: Record<string, AuditCaseReview>
 }
 
 export interface AuditWorkflowPrompt {
@@ -481,12 +551,48 @@ export const api = {
     }>),
 
   listAssistants: () => fetch(`${API}/assistants`).then(j<AuditAssistant[]>),
-  createAssistant: (body: { name: string; description: string }) =>
+  createAssistant: (body: { name: string; description: string; knowledge_base_id?: string }) =>
     fetch(`${API}/assistants`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }).then(j<AuditAssistant>),
+  routeAssistant: (body: { report_file_id: string; model?: string }) =>
+    fetch(`${API}/assistants/route`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<{
+      assistant_id: string
+      knowledge_base_id: string
+      confidence: number
+      reason: string
+      routed_by: string
+      fallback_used: boolean
+      candidates: Array<Record<string, unknown>>
+    }>),
+  routeAndRunAssistant: (body: {
+    report_file_id: string
+    naming_rule_file_id?: string | null
+    report_id?: string
+    model?: string
+  }) =>
+    fetch(`${API}/assistants/route-and-run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<{
+      route: {
+        assistant_id: string
+        knowledge_base_id: string
+        confidence: number
+        reason: string
+        routed_by: string
+        fallback_used: boolean
+        candidates: Array<Record<string, unknown>>
+      }
+      job: Job
+    }>),
   startAssistantRun: (
     id: string,
     body: { report_file_id: string; naming_rule_file_id?: string | null; report_id?: string },
@@ -501,9 +607,16 @@ export const api = {
     fetch(`${API}/assistants/${id}/versions/active`).then(j<AssistantVersion>),
   listAssistantVersions: (id: string) =>
     fetch(`${API}/assistants/${id}/versions`).then(j<AssistantVersion[]>),
+  activateAssistantVersion: (id: string, versionId: string) =>
+    fetch(`${API}/assistants/${id}/versions/${versionId}/activate`, {
+      method: 'POST',
+    }).then(j<AssistantVersion>),
   createAssistantVersion: (
     id: string,
-    body: Pick<AssistantVersion, 'model_config' | 'node_prompts' | 'rules' | 'retrieval_config'>,
+    body: Pick<
+      AssistantVersion,
+      'model_config' | 'node_prompts' | 'rules' | 'retrieval_config' | 'parameter_schema'
+    >,
   ) =>
     fetch(`${API}/assistants/${id}/versions`, {
       method: 'POST',
@@ -516,6 +629,46 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ knowledge_base_ids: knowledgeBaseIds }),
     }).then(j<AuditAssistant>),
+  startAssistantInit: (id: string, body: { sample_report_file_ids?: string[]; model?: string } = {}) =>
+    fetch(`${API}/assistants/${id}/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<{ job: Job; draft: AssistantInitDraft | null }>),
+  getAssistantInitDraft: (id: string) =>
+    fetch(`${API}/assistants/${id}/init-draft`).then(async res => {
+      if (res.status === 404) return null
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || res.statusText)
+      }
+      return res.json() as Promise<AssistantInitDraft>
+    }),
+  updateAssistantInitDraft: (
+    id: string,
+    body: {
+      category_profile?: Record<string, string>
+      parameter_schema?: ParameterSchema
+      report_parameters_prompt?: string
+    },
+  ) =>
+    fetch(`${API}/assistants/${id}/init-draft`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<AssistantInitDraft>),
+  applyAssistantInitDraft: (id: string) =>
+    fetch(`${API}/assistants/${id}/init-draft/apply`, { method: 'POST' }).then(
+      j<{
+        assistant_id: string
+        version_id: string
+        version: number
+        parameter_schema: ParameterSchema
+        assistant: AuditAssistant
+      }>,
+    ),
+  discardAssistantInitDraft: (id: string) =>
+    fetch(`${API}/assistants/${id}/init-draft/discard`, { method: 'POST' }).then(j<AssistantInitDraft>),
   chatAssistant: (
     id: string,
     body: { message: string; history?: Array<{ role: 'user' | 'assistant'; content: string }> },
@@ -565,6 +718,24 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }).then(j<CSFile>),
+  extractLlmSuggestionsBulk: (
+    body: { force?: boolean; limit?: number; batch_size?: number } = {},
+  ) =>
+    fetch(`${API}/extract/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<KeywordExtractionSummary>),
+  extractLlmSuggestionsForChunk: (chunkId: string, body: { force?: boolean } = {}) =>
+    fetch(`${API}/extract/${chunkId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<KeywordExtractionSummary & { skipped?: number }>),
+  getEmbeddingsStatus: () =>
+    fetch(`${API}/embeddings/status`).then(j<EmbeddingsStatus>),
+  buildEmbeddings: () =>
+    fetch(`${API}/embeddings/build`, { method: 'POST' }).then(j<Job>),
   parseFile: (id: string, opts: { delete_chunks?: boolean; force?: boolean } = {}) =>
     fetch(`${API}/files/${id}/parse`, {
       method: 'POST',
@@ -606,6 +777,7 @@ export const api = {
     const qs = params.size ? `?${params.toString()}` : ''
     return fetch(`${API}/chunks${qs}`).then(j<Chunk[]>)
   },
+  getChunk: (id: string) => fetch(`${API}/chunks/${id}`).then(j<Chunk>),
   createChunk: (body: { file_id: string; page: number; bbox: BBox }) =>
     fetch(`${API}/chunks`, {
       method: 'POST',
@@ -718,6 +890,20 @@ export const api = {
   getAuditWorkflow: (name: string, caseId: string) =>
     fetch(`${API}/audit/reports/${encodeURIComponent(name)}/workflow/${encodeURIComponent(caseId)}`)
       .then(j<AuditWorkflowTrace>),
+  putAuditCaseReview: (
+    name: string,
+    caseId: string,
+    body: { status: 'confirmed' | 'corrected'; corrected_status?: string; note?: string; reviewer?: string },
+  ) =>
+    fetch(`${API}/audit/reports/${encodeURIComponent(name)}/reviews/${encodeURIComponent(caseId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<AuditCaseReview>),
+  deleteAuditCaseReview: (name: string, caseId: string) =>
+    fetch(`${API}/audit/reports/${encodeURIComponent(name)}/reviews/${encodeURIComponent(caseId)}`, {
+      method: 'DELETE',
+    }).then(j<{ ok: boolean }>),
   getManualKnowledgeRules: () =>
     fetch(`${API}/audit/manual-rules`).then(j<ManualKnowledgeRules>),
   getLexicalIndexStatus: () =>

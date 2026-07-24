@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import ReactMarkdown from 'react-markdown'
 import {
   api,
+  type AuditCaseReview,
   type AuditReportDetail,
   type AuditReportListItem,
   type AuditWorkflowNode,
@@ -34,12 +35,18 @@ const REPORT_FILTERS: Array<{ key: ReportFilter; label: string; hint: string }> 
 ]
 
 const STATUS_LABELS: Record<string, string> = {
+  supported: '符合',
+  mismatch: '不符合',
+  insufficient_context: '上下文不足',
+  not_audited: '未完成审查',
+  // Legacy statuses from older reports.
   correct: '正确',
   incorrect: '错误',
-  insufficient_context: '上下文不足',
   evidence_not_found: '未找到证据',
   evaluated: '已评测',
   context_required: '缺上下文',
+  confirmed: '已确认',
+  corrected: '已纠正',
 }
 
 export function AuditPage({
@@ -53,6 +60,7 @@ export function AuditPage({
   const [selectedReportName, setSelectedReportName] = useState(initialReport)
   const [selectedCaseId, setSelectedCaseId] = useState('')
   const [report, setReport] = useState<AuditReportDetail | null>(null)
+  const [reviews, setReviews] = useState<Record<string, AuditCaseReview>>({})
   const [workflow, setWorkflow] = useState<AuditWorkflowTrace | null>(null)
   const [manualRules, setManualRules] = useState<ManualKnowledgeRules | null>(null)
   const [lexicalStatus, setLexicalStatus] = useState<LexicalIndexStatus | null>(null)
@@ -114,9 +122,13 @@ export function AuditPage({
     setLoadingDetail(true)
     setError('')
     api.getAuditReport(selectedReportName)
-      .then(setReport)
+      .then(detail => {
+        setReport(detail)
+        setReviews(detail.reviews || {})
+      })
       .catch(err => {
         setReport(null)
+        setReviews({})
         setError((err as Error).message)
       })
       .finally(() => setLoadingDetail(false))
@@ -144,6 +156,33 @@ export function AuditPage({
   const selectedCase = useMemo(() => (
     cases.find(item => caseId(item) === selectedCaseId) || cases[0] || null
   ), [cases, selectedCaseId])
+
+  const saveReview = useCallback(async (
+    reviewCaseId: string,
+    body: { status: 'confirmed' | 'corrected'; corrected_status?: string; note?: string },
+  ) => {
+    if (!report) return
+    try {
+      const saved = await api.putAuditCaseReview(report.name, reviewCaseId, body)
+      setReviews(prev => ({ ...prev, [reviewCaseId]: saved }))
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }, [report])
+
+  const removeReview = useCallback(async (reviewCaseId: string) => {
+    if (!report) return
+    try {
+      await api.deleteAuditCaseReview(report.name, reviewCaseId)
+      setReviews(prev => {
+        const next = { ...prev }
+        delete next[reviewCaseId]
+        return next
+      })
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }, [report])
 
   useEffect(() => {
     if (!report || !selectedCaseId || report.kind !== 'end_to_end_audit') {
@@ -316,7 +355,12 @@ export function AuditPage({
                 </section>
 
                 <aside className="audit-detail">
-                  <CaseDetail item={selectedCase} />
+                  <CaseDetail
+                    item={selectedCase}
+                    review={selectedCase ? reviews[caseId(selectedCase)] : undefined}
+                    onSaveReview={saveReview}
+                    onRemoveReview={removeReview}
+                  />
                 </aside>
               </div>
             </>
@@ -760,12 +804,13 @@ function ReportSummary({ report }: { report: AuditReportDetail }) {
   const summary = asRecord(payload.summary)
   const judgments = asRecord(summary.judgments)
   const statCandidates: Array<[string, unknown]> = [
+    ['mode', summary.mode === 'full_report' ? '全量' : summary.mode === 'case_pool' ? 'case 池' : summary.mode],
     ['cases', summary.cases],
     ['direct gold', summary.direct_gold_recalled == null ? summary.complete_case_recall : summary.direct_gold_recalled],
-    ['correct', judgments.correct],
-    ['incorrect', judgments.incorrect],
-    ['insufficient', judgments.insufficient_context],
-    ['evidence miss', judgments.evidence_not_found],
+    ['符合', judgments.supported ?? judgments.correct],
+    ['不符合', judgments.mismatch ?? judgments.incorrect],
+    ['上下文不足', judgments.insufficient_context],
+    ['未完成审查', judgments.not_audited ?? judgments.evidence_not_found],
   ]
   const stats = statCandidates.filter(([, value]) => value != null)
 
@@ -816,7 +861,15 @@ function CaseRow({ item, selected, onSelect }: {
   )
 }
 
-function CaseDetail({ item }: { item: JsonRecord | null }) {
+function CaseDetail({ item, review, onSaveReview, onRemoveReview }: {
+  item: JsonRecord | null
+  review?: AuditCaseReview
+  onSaveReview?: (
+    caseId: string,
+    body: { status: 'confirmed' | 'corrected'; corrected_status?: string; note?: string },
+  ) => Promise<void> | void
+  onRemoveReview?: (caseId: string) => Promise<void> | void
+}) {
   if (!item) {
     return <div className="audit-detail-empty">选择一个 case 查看证据链。</div>
   }
@@ -854,6 +907,16 @@ function CaseDetail({ item }: { item: JsonRecord | null }) {
             ))}
           </div>
         </section>
+      )}
+
+      {onSaveReview && (
+        <CaseReviewPanel
+          key={caseId(item)}
+          caseIdValue={caseId(item)}
+          review={review}
+          onSave={onSaveReview}
+          onRemove={onRemoveReview}
+        />
       )}
 
       {groups.length > 0 && (
@@ -906,6 +969,109 @@ function CaseDetail({ item }: { item: JsonRecord | null }) {
         </section>
       )}
     </div>
+  )
+}
+
+const REVIEWABLE_STATUSES = ['supported', 'mismatch', 'insufficient_context', 'not_audited'] as const
+
+function CaseReviewPanel({ caseIdValue, review, onSave, onRemove }: {
+  caseIdValue: string
+  review?: AuditCaseReview
+  onSave: (
+    caseId: string,
+    body: { status: 'confirmed' | 'corrected'; corrected_status?: string; note?: string },
+  ) => Promise<void> | void
+  onRemove?: (caseId: string) => Promise<void> | void
+}) {
+  const [correcting, setCorrecting] = useState(false)
+  const [correctedStatus, setCorrectedStatus] = useState<string>(review?.corrected_status || 'supported')
+  const [note, setNote] = useState(review?.note || '')
+  const [saving, setSaving] = useState(false)
+
+  const run = async (action: () => Promise<void> | void) => {
+    setSaving(true)
+    try {
+      await action()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="audit-review">
+      <h4>人工复核</h4>
+      {review && !correcting && (
+        <div className="audit-review-current">
+          <StatusBadge status={review.status} />
+          {review.status === 'corrected' && (
+            <span>纠正为 {STATUS_LABELS[review.corrected_status] || review.corrected_status}</span>
+          )}
+          {review.note && <p>{review.note}</p>}
+          <small>{review.updated_at}</small>
+        </div>
+      )}
+      {!correcting ? (
+        <div className="audit-review-actions">
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => run(() => onSave(caseIdValue, { status: 'confirmed', note }))}
+          >
+            {review?.status === 'confirmed' ? '已确认' : '确认判定'}
+          </button>
+          <button type="button" disabled={saving} onClick={() => setCorrecting(true)}>
+            纠正判定
+          </button>
+          {review && onRemove && (
+            <button type="button" disabled={saving} onClick={() => run(() => onRemove(caseIdValue))}>
+              撤销复核
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="audit-review-form">
+          <label>
+            正确状态
+            <select value={correctedStatus} onChange={e => setCorrectedStatus(e.target.value)}>
+              {REVIEWABLE_STATUSES.map(status => (
+                <option key={status} value={status}>
+                  {STATUS_LABELS[status] || status}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            备注
+            <textarea
+              rows={2}
+              value={note}
+              placeholder="说明纠正原因（可作为后续评测 case 依据）"
+              onChange={e => setNote(e.target.value)}
+            />
+          </label>
+          <div className="audit-review-actions">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() =>
+                run(async () => {
+                  await onSave(caseIdValue, {
+                    status: 'corrected',
+                    corrected_status: correctedStatus,
+                    note,
+                  })
+                  setCorrecting(false)
+                })}
+            >
+              保存纠正
+            </button>
+            <button type="button" disabled={saving} onClick={() => setCorrecting(false)}>
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
   )
 }
 

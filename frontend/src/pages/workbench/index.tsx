@@ -6,19 +6,29 @@ import { api, type CSFile, type Job } from '@/api'
 import { Badge } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { useAssistants, useKbFiles, useKnowledgeBases } from '@/hooks/use-knowledge-request'
+import { useAssistants, useKnowledgeBases } from '@/hooks/use-knowledge-request'
+import { DEFAULT_OIL_ASSISTANT_ID } from '@/lib/assistants'
 import { cn } from '@/lib/utils'
 
-const DEFAULT_ASSISTANT_ID = 'assistant_oil_transformer_audit'
 const DEFAULT_KB_ID = 'kb_uncategorized'
 
 const STATUS_LABELS: Record<string, string> = {
+  supported: '符合',
+  mismatch: '不符合',
+  insufficient_context: '依据不足',
+  not_audited: '未完成审查',
+  // Legacy statuses from older reports.
   correct: '符合',
   incorrect: '不符合',
-  insufficient_context: '依据不足',
   evidence_not_found: '未找到证据',
   evaluated: '已评测',
   unknown: '待确认',
+}
+
+function statusVariant(status: string): 'success' | 'error' | 'secondary' {
+  if (status === 'supported' || status === 'correct') return 'success'
+  if (status === 'mismatch' || status === 'incorrect') return 'error'
+  return 'secondary'
 }
 
 type Phase = 'idle' | 'uploading' | 'parsing' | 'ready' | 'running' | 'done' | 'failed'
@@ -33,28 +43,6 @@ function asArray(value: unknown): unknown[] {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {}
-}
-
-/** Files meant to be audited (factory/test reports), not standards in the KB. */
-function isAuditReportFile(file: Pick<CSFile, 'name' | 'metadata'>): boolean {
-  const meta = isRecord(file.metadata) ? file.metadata : {}
-  const kind = String(meta.doc_role || meta.doc_type || '').toLowerCase()
-  if (kind === 'report') return true
-  if (kind === 'standard' || kind === 'spec' || kind === 'naming' || kind === 'reference') {
-    return false
-  }
-
-  const name = file.name || ''
-  if (/报告|出厂|检测报告|试验报告|检验报告|型式试验|HBJC/i.test(name)) return true
-
-  // National / industry standards and similar corpus docs.
-  if (/^(GB\/?T?|GBZ|JB\/?T?|JBT|Q\/?\s*GDW|DL\/?T?|NB\/?T?|IEC|ISO)[\s\/\-._]/i.test(name)) {
-    return false
-  }
-  if (/技术规范|技术条件|技术要求|编制方法|试验导则|标准\b/.test(name) && !/报告/.test(name)) {
-    return false
-  }
-  return false
 }
 
 function sleep(ms: number) {
@@ -87,29 +75,46 @@ export default function WorkbenchPage() {
   const uploadRef = useRef<HTMLInputElement>(null)
   const { data: assistants = [], isLoading: assistantsLoading } = useAssistants()
   const { data: knowledgeBases = [] } = useKnowledgeBases()
+  const [fallbackAssistantId, setFallbackAssistantId] = useState(DEFAULT_OIL_ASSISTANT_ID)
+  const [routedLabel, setRoutedLabel] = useState('')
 
-  const assistant = useMemo(() => {
+  useEffect(() => {
+    api.getSettings().then(payload => {
+      const value = String(payload.settings['audit.default_assistant_id'] || '').trim()
+      if (value) setFallbackAssistantId(value)
+    }).catch(() => {
+      /* keep oil default */
+    })
+  }, [])
+
+  const routableAssistants = useMemo(
+    () =>
+      assistants.filter(
+        item =>
+          item.status === 'active'
+          && item.active_version
+          && item.id !== 'assistant_audit_template'
+          && item.knowledge_bases.length > 0,
+      ),
+    [assistants],
+  )
+
+  const fallbackAssistant = useMemo(() => {
     return (
-      assistants.find(item => item.id === DEFAULT_ASSISTANT_ID)
-      || assistants.find(item => item.status === 'active')
-      || assistants[0]
+      routableAssistants.find(item => item.id === fallbackAssistantId)
+      || routableAssistants.find(item => item.id === DEFAULT_OIL_ASSISTANT_ID)
+      || routableAssistants[0]
       || null
     )
-  }, [assistants])
+  }, [routableAssistants, fallbackAssistantId])
 
   const knowledgeBaseId = useMemo(() => {
-    const bound = assistant?.knowledge_bases?.[0]?.id
+    const bound = fallbackAssistant?.knowledge_bases?.[0]?.id
     if (bound) return bound
     if (knowledgeBases.some(kb => kb.id === DEFAULT_KB_ID)) return DEFAULT_KB_ID
     return knowledgeBases[0]?.id || ''
-  }, [assistant, knowledgeBases])
+  }, [fallbackAssistant, knowledgeBases])
 
-  const { data: files = [], isLoading: filesLoading } = useKbFiles(knowledgeBaseId || undefined)
-
-  const readyFiles = useMemo(
-    () => files.filter(file => file.parse_ready || file.parse_status === 'done'),
-    [files],
-  )
   // Session-local reports: history list comes later. Keep current pick + uploads here.
   const [sessionReports, setSessionReports] = useState<CSFile[]>([])
   const reportFiles = useMemo(() => {
@@ -117,10 +122,6 @@ export default function WorkbenchPage() {
     for (const file of sessionReports) byId.set(file.id, file)
     return [...byId.values()]
   }, [sessionReports])
-  const evidenceReadyCount = useMemo(
-    () => readyFiles.filter(file => !isAuditReportFile(file)).length,
-    [readyFiles],
-  )
 
   const [reportFileId, setReportFileId] = useState('')
   const [phase, setPhase] = useState<Phase>('idle')
@@ -209,35 +210,36 @@ export default function WorkbenchPage() {
   }
 
   const startAudit = async () => {
-    if (!assistant?.id) {
-      toast.error('尚未配置审查助手')
-      return
-    }
-    if (!assistant.active_version) {
-      toast.error('审查助手还没有启用版本')
-      return
-    }
-    if (!assistant.knowledge_bases?.length) {
-      toast.error('请先在高级设置里给助手绑定知识库')
+    if (!routableAssistants.length) {
+      toast.error('还没有可路由的审查配置（请先创建知识库并准备语料）')
       return
     }
     if (!reportFileId) {
       toast.error('请先上传或选择一份报告')
       return
     }
-    if (evidenceReadyCount < 1) {
-      toast.error('知识库里还需要有标准等证据文件，不能只有报告本身')
-      return
-    }
 
     setError('')
     setPhase('running')
-    setStatusText('正在审查，通常需要几分钟…')
+    setStatusText('正在识别报告品类并选择审查配置…')
     setResultCases([])
+    setRoutedLabel('')
     try {
-      const job = await api.startAssistantRun(assistant.id, {
+      const { route, job } = await api.routeAndRunAssistant({
         report_file_id: reportFileId,
       })
+      const chosen = assistants.find(item => item.id === route.assistant_id)
+      const kbName =
+        chosen?.knowledge_bases?.[0]?.name
+        || knowledgeBases.find(kb => kb.id === route.knowledge_base_id)?.name
+        || route.knowledge_base_id
+      const label = `${chosen?.name || route.assistant_id} · ${kbName}`
+      setRoutedLabel(label)
+      setStatusText(
+        route.fallback_used
+          ? `路由兜底：${label}（${route.reason}）。正在审查…`
+          : `已路由到「${label}」。正在审查…`,
+      )
       const finished = await pollJob(job.id)
       if (finished.status === 'failed') {
         throw new Error(finished.error || '审查失败')
@@ -279,13 +281,13 @@ export default function WorkbenchPage() {
             <CardHeader>
               <CardTitle className="text-[17px]">1. 准备报告</CardTitle>
               <CardDescription className="text-[15px] leading-relaxed">
-                {assistantsLoading || filesLoading
+                {assistantsLoading
                   ? '加载中…'
-                  : `使用「${assistant?.name || '未配置助手'}」· 资料库「${
-                      assistant?.knowledge_bases?.[0]?.name
-                      || knowledgeBases.find(kb => kb.id === knowledgeBaseId)?.name
-                      || '—'
-                    }」`}
+                  : routedLabel
+                    ? `本次路由：${routedLabel}`
+                    : `上传后自动识别品类并路由；兜底「${
+                        fallbackAssistant?.name || '未配置'
+                      }」· 可路由配置 ${routableAssistants.length} 个`}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -351,7 +353,7 @@ export default function WorkbenchPage() {
               <Button
                 className="w-full text-[15px]"
                 size="lg"
-                disabled={busy || !reportFileId || !assistant}
+                disabled={busy || !reportFileId || routableAssistants.length === 0}
                 onClick={() => void startAudit()}
               >
                 {phase === 'running' ? (
@@ -380,11 +382,11 @@ export default function WorkbenchPage() {
                 <Link className="mx-1 text-accent-primary hover:underline" to="/knowledge-bases">
                   知识库
                 </Link>
-                。流程细节在
-                <Link className="mx-1 text-accent-primary hover:underline" to="/assistants">
-                  助手
+                。路由失败时的兜底助手可在
+                <Link className="mx-1 text-accent-primary hover:underline" to="/settings">
+                  系统设置
                 </Link>
-                。
+                配置。
               </p>
             </CardContent>
           </Card>
@@ -427,10 +429,7 @@ export default function WorkbenchPage() {
                 <div className="min-h-0 flex-1 space-y-4 overflow-auto">
                   <div className="flex flex-wrap gap-2">
                     {Object.entries(counts).map(([status, count]) => (
-                      <Badge
-                        key={status}
-                        variant={status === 'correct' ? 'success' : status === 'incorrect' ? 'error' : 'secondary'}
-                      >
+                      <Badge key={status} variant={statusVariant(status)}>
                         {STATUS_LABELS[status] || status} {count}
                       </Badge>
                     ))}
@@ -451,15 +450,7 @@ export default function WorkbenchPage() {
                       return (
                         <article key={String(item.case_id || index)} className="rounded-xl border border-border-button p-4">
                           <div className="flex flex-wrap items-center gap-2">
-                            <Badge
-                              variant={
-                                status === 'correct'
-                                  ? 'success'
-                                  : status === 'incorrect'
-                                    ? 'error'
-                                    : 'secondary'
-                              }
-                            >
+                            <Badge variant={statusVariant(status)}>
                               {STATUS_LABELS[status] || status}
                             </Badge>
                             <strong className="text-[15px]">{title}</strong>

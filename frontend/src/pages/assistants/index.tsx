@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Bot, ChevronDown, CircleHelp, FileText, Loader2, Play, Plus, Send, Settings, Settings2, Workflow } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { ArrowLeft, Bot, CircleHelp, FileText, Loader2, Pencil, Plus, Send, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { api, type AssistantVersion, type AuditAssistant, type Job, type KnowledgeBase } from '@/api'
+import {
+  api,
+  type AssistantVersion,
+  type AuditAssistant,
+  type KnowledgeBase,
+  type ParameterSchema,
+  type ParameterSchemaField,
+} from '@/api'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -15,13 +22,13 @@ import {
 } from '@/components/ui/dialog'
 import { Input, Label, Textarea } from '@/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { EmptyState } from '@/components/empty-state'
-import { ListFilterBar } from '@/components/list-filter-bar'
-import { CardContainer, HomeCard } from '@/components/home-card'
 import { SearchableMultiSelect, SearchableSelect } from '@/components/searchable-select'
-import { useAssistants, useKnowledgeBases, useKbFiles, queryKeys } from '@/hooks/use-knowledge-request'
+import { useAssistants, useKnowledgeBase, queryKeys } from '@/hooks/use-knowledge-request'
+import { GENERIC_TEMPLATE_ASSISTANT_ID } from '@/lib/assistants'
+import { useDevMode } from '@/lib/dev-mode'
 import { helpText } from '@/lib/help-text'
 import { cn, formatDate } from '@/lib/utils'
+import { AssistantInitDraftCard } from '@/pages/assistants/init-draft-card'
 
 const RAGFLOW_TEAL = '#13c2c2'
 
@@ -37,6 +44,9 @@ const FLOW_STEPS = [
 
 type FlowStepId = (typeof FLOW_STEPS)[number]['id']
 type MainTab = 'chat' | 'workflow'
+
+const NO_PROMPT_STEPS = new Set<FlowStepId>(['candidate_retrieval', 'result_summary'])
+const EDITABLE_STEPS = FLOW_STEPS.filter(step => !NO_PROMPT_STEPS.has(step.id))
 
 const MODEL_OPTIONS = [
   { value: 'deepseek-v4-flash', label: 'deepseek-v4-flash', hint: 'ds', group: 'DeepSeek' },
@@ -119,192 +129,73 @@ function SettingSlider({
   )
 }
 
+/** Legacy /assistants routes redirect into knowledge-base or settings. */
 export default function AssistantsPage() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const client = useQueryClient()
   const { data: assistants = [], isLoading } = useAssistants()
-  const { data: knowledgeBases = [] } = useKnowledgeBases()
-  const [query, setQuery] = useState('')
-  const [createOpen, setCreateOpen] = useState(false)
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [creating, setCreating] = useState(false)
 
-  const selected = id ? assistants.find(item => item.id === id) || null : null
-
-  const filtered = assistants.filter(item =>
-    `${item.name} ${item.description}`.toLowerCase().includes(query.trim().toLowerCase()),
-  )
-
-  const create = async () => {
-    if (!name.trim()) return
-    setCreating(true)
-    try {
-      const created = await api.createAssistant({ name: name.trim(), description: description.trim() })
-      await client.invalidateQueries({ queryKey: queryKeys.assistants })
-      toast.success('助手已创建')
-      setCreateOpen(false)
-      setName('')
-      setDescription('')
-      navigate(`/assistants/${created.id}`)
-    } catch (err) {
-      toast.error((err as Error).message)
-    } finally {
-      setCreating(false)
+  useEffect(() => {
+    if (isLoading) return
+    if (!id) {
+      navigate('/knowledge-bases', { replace: true })
+      return
     }
-  }
-
-  const createDialog = (
-    <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>新建审查助手</DialogTitle>
-          <DialogDescription>
-            会复制内置油变审查流程。新品类请创建后到「工作流」改提示词，并在绑定知识库的「配置」里设置命名规则 PDF。
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label title={helpText.assistants.createName}>名称</Label>
-            <Input
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="例如：油浸式变压器审查"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label title={helpText.assistants.createDesc}>说明</Label>
-            <Textarea value={description} onChange={e => setDescription(e.target.value)} />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setCreateOpen(false)}>取消</Button>
-          <Button disabled={!name.trim() || creating} onClick={() => void create()}>
-            {creating ? '创建中…' : '创建'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-
-  if (id) {
-    if (isLoading) {
-      return <div className="flex h-full items-center justify-center text-[15px] text-text-secondary">加载中…</div>
+    if (id === GENERIC_TEMPLATE_ASSISTANT_ID) {
+      navigate('/settings/assistant-template', { replace: true })
+      return
     }
+    const selected = assistants.find(item => item.id === id)
     if (!selected) {
-      return (
-        <div className="flex h-full flex-col items-center justify-center gap-4 px-8">
-          <EmptyState
-            icon={<Bot />}
-            title="找不到这个助手"
-            description="可能已被删除，或链接不正确。"
-            actionLabel="返回助手列表"
-            onAction={() => navigate('/assistants')}
-          />
-        </div>
-      )
+      navigate('/knowledge-bases', { replace: true })
+      return
     }
-    return (
-      <>
-        <AssistantSettings
-          assistant={selected}
-          knowledgeBases={knowledgeBases}
-          onChanged={() => client.invalidateQueries({ queryKey: queryKeys.assistants })}
-        />
-        {createDialog}
-      </>
-    )
-  }
+    const kbId = selected.knowledge_bases[0]?.id
+    navigate(kbId ? `/kb/${kbId}/workflow` : '/knowledge-bases', { replace: true })
+  }, [assistants, id, isLoading, navigate])
 
   return (
-    <div className="h-full overflow-auto px-8 py-7">
-      <div className="mx-auto w-full max-w-7xl">
-        <ListFilterBar
-          title="助手"
-          titleHelp={helpText.assistants.page}
-          description="问答可直接聊知识库；调试审查提示词请进卡片后切到「工作流」。命名规则在各知识库的「配置」。"
-          search={query}
-          onSearchChange={setQuery}
-          searchPlaceholder="搜索助手"
-          rightPanel={
-            <Button onClick={() => setCreateOpen(true)} title={helpText.assistants.create}>
-              <Plus />
-              创建助手
-            </Button>
-          }
-        />
-
-        <div className="mt-8">
-          {isLoading ? (
-            <div className="py-16 text-center text-[15px] text-text-secondary">加载中…</div>
-          ) : filtered.length ? (
-            <CardContainer>
-              {filtered.map(item => (
-                <HomeCard
-                  key={item.id}
-                  title={item.name}
-                  description={item.description || '内置审查流程已封装'}
-                  onClick={() => navigate(`/assistants/${item.id}`)}
-                  actions={
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      className="size-8"
-                      title="设置"
-                      onClick={() => navigate(`/assistants/${item.id}`)}
-                    >
-                      <Settings className="size-3.5" />
-                    </Button>
-                  }
-                  meta={
-                    <>
-                      <span>v{item.active_version || '—'}</span>
-                      <span>{item.knowledge_bases.length} 个知识库</span>
-                      <span>{item.status === 'active' ? '已启用' : '草稿'}</span>
-                      <span>{formatDate(item.updated_at)}</span>
-                    </>
-                  }
-                />
-              ))}
-            </CardContainer>
-          ) : (
-            <EmptyState
-              icon={<Bot />}
-              title={query ? '没有匹配的助手' : '还没有助手'}
-              description={query ? '换个关键词试试。' : '创建一个审查助手，再绑定知识库即可开始。'}
-              actionLabel={query ? undefined : '创建助手'}
-              onAction={query ? undefined : () => setCreateOpen(true)}
-            />
-          )}
-        </div>
-      </div>
-      {createDialog}
+    <div className="flex h-full items-center justify-center text-[15px] text-text-secondary">
+      正在跳转…
     </div>
   )
 }
 
-function AssistantSettings({
+export function AssistantSettings({
   assistant,
   knowledgeBases,
   onChanged,
+  lockedKnowledgeBaseId,
+  initialTab = 'chat',
+  embedded = false,
+  backTo,
+  hideKnowledgePicker = false,
 }: {
   assistant: AuditAssistant
   knowledgeBases: KnowledgeBase[]
   onChanged: () => void
+  lockedKnowledgeBaseId?: string
+  initialTab?: MainTab
+  embedded?: boolean
+  backTo?: string
+  hideKnowledgePicker?: boolean
 }) {
   const navigate = useNavigate()
   const [version, setVersion] = useState<AssistantVersion | null>(null)
-  const [kbSelected, setKbSelected] = useState(() => new Set(assistant.knowledge_bases.map(item => item.id)))
+  const [kbSelected, setKbSelected] = useState(() =>
+    lockedKnowledgeBaseId
+      ? new Set([lockedKnowledgeBaseId])
+      : new Set(assistant.knowledge_bases.map(item => item.id)),
+  )
   const [saving, setSaving] = useState(false)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [mainTab, setMainTab] = useState<MainTab>('chat')
-  const [selectedStep, setSelectedStep] = useState<FlowStepId>('report_parameters')
-  const [trialOpen, setTrialOpen] = useState(false)
-  const [reportFileId, setReportFileId] = useState('')
-  const [namingFileId, setNamingFileId] = useState('')
-  const [trialBusy, setTrialBusy] = useState(false)
+  const [activatingVersionId, setActivatingVersionId] = useState<string | null>(null)
+  const [mainTab, setMainTab] = useState<MainTab>(initialTab)
+  const [editStepId, setEditStepId] = useState<FlowStepId | null>(null)
+  const [devMode] = useDevMode()
+  const visibleSteps = useMemo(
+    () => (devMode ? EDITABLE_STEPS : EDITABLE_STEPS.filter(step => step.id === 'report_parameters')),
+    [devMode],
+  )
   const [chatInput, setChatInput] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
   const [messages, setMessages] = useState<
@@ -321,12 +212,28 @@ function AssistantSettings({
     }>
   >([])
 
-  const primaryKbId = [...kbSelected][0] || ''
-  const { data: kbFiles = [] } = useKbFiles(primaryKbId || undefined)
-  const readyFiles = useMemo(
-    () => kbFiles.filter(file => file.parse_ready || file.parse_status === 'done'),
-    [kbFiles],
-  )
+  useEffect(() => {
+    if (!devMode && editStepId && editStepId !== 'report_parameters') {
+      setEditStepId(null)
+    }
+  }, [devMode, editStepId])
+
+  useEffect(() => {
+    setMainTab(initialTab)
+  }, [initialTab])
+
+  useEffect(() => {
+    setMainTab(initialTab)
+  }, [initialTab])
+
+  useEffect(() => {
+    if (lockedKnowledgeBaseId) {
+      setKbSelected(new Set([lockedKnowledgeBaseId]))
+    }
+  }, [lockedKnowledgeBaseId, assistant.id])
+
+  const primaryKbId = [...kbSelected][0] || lockedKnowledgeBaseId || ''
+  const { data: boundKb } = useKnowledgeBase(primaryKbId || undefined)
 
   const versionsQuery = useQuery({
     queryKey: queryKeys.assistantVersions(assistant.id),
@@ -344,6 +251,49 @@ function AssistantSettings({
   useEffect(() => {
     setKbSelected(new Set(assistant.knowledge_bases.map(item => item.id)))
   }, [assistant])
+
+  const jumpToReportParameters = () => {
+    setMainTab('workflow')
+    setEditStepId('report_parameters')
+  }
+
+  const stepBindings = useMemo(() => {
+    const namingName = boundKb?.default_naming_file_name || boundKb?.default_naming_file_id
+    const schemaCount = version?.parameter_schema?.fields?.length || 0
+    const map: Partial<Record<FlowStepId, Array<{ label: string; value: string }>>> = {
+      report_parameters: [
+        {
+          label: '参数 schema',
+          value: schemaCount ? `${schemaCount} 个字段（本步主配置）` : '尚未配置字段',
+        },
+      ],
+      model_decode: [
+        {
+          label: '命名规则 PDF',
+          value: namingName
+            ? String(namingName)
+            : '未绑定（运行时用评估兜底规则；请到知识库「配置」上传）',
+        },
+        {
+          label: '注入方式',
+          value: '运行时作为 naming_rule_markdown 传入，不写在提示词正文里',
+        },
+      ],
+      audit_judge: [
+        {
+          label: '补充规则',
+          value: '来自知识库 manual_rules / few-shot（若有）',
+        },
+      ],
+      candidate_retrieval: [
+        {
+          label: '证据范围',
+          value: '本库已启用语料文件（标准/规范）',
+        },
+      ],
+    }
+    return map
+  }, [boundKb, version])
 
   const currentModel = String(version?.model_config?.model || 'deepseek-v4-flash')
   const modelOptions = useMemo(
@@ -377,26 +327,37 @@ function AssistantSettings({
   }
 
   const updatePrompt = (content: string) => {
-    if (!version) return
+    if (!version || !editStepId) return
     setVersion({
       ...version,
       node_prompts: {
         ...version.node_prompts,
-        [selectedStep]: { ...(version.node_prompts[selectedStep] || {}), content },
+        [editStepId]: { ...(version.node_prompts[editStepId] || {}), content },
       },
     })
+  }
+
+  const updateParameterSchema = (next: ParameterSchema) => {
+    if (!version) return
+    setVersion({ ...version, parameter_schema: next })
   }
 
   const saveAll = async () => {
     if (!version) return
     setSaving(true)
     try {
-      await api.setAssistantKnowledgeBases(assistant.id, [...kbSelected])
+      if (!hideKnowledgePicker) {
+        const kbIds = lockedKnowledgeBaseId
+          ? Array.from(new Set([lockedKnowledgeBaseId, ...kbSelected]))
+          : [...kbSelected]
+        await api.setAssistantKnowledgeBases(assistant.id, kbIds)
+      }
       await api.createAssistantVersion(assistant.id, {
         model_config: version.model_config,
         node_prompts: version.node_prompts,
         rules: version.rules,
         retrieval_config: version.retrieval_config,
+        parameter_schema: version.parameter_schema,
       })
       await Promise.all([activeQuery.refetch(), versionsQuery.refetch()])
       onChanged()
@@ -408,37 +369,23 @@ function AssistantSettings({
     }
   }
 
-  const pollJob = async (jobId: string): Promise<Job> => {
-    for (let attempt = 0; attempt < 180; attempt += 1) {
-      const job = await api.getJob(jobId)
-      if (job.status === 'done' || job.status === 'failed') return job
-      await new Promise(resolve => setTimeout(resolve, 2000))
-    }
-    throw new Error('试运行超时，请稍后在结果详情中查看')
-  }
-
-  const startTrial = async () => {
-    if (!reportFileId) {
-      toast.error('请选择已解析的检测报告')
+  const selectVersion = async (item: AssistantVersion) => {
+    if (item.status === 'active') {
+      setVersion(item)
       return
     }
-    setTrialBusy(true)
+    if (activatingVersionId) return
+    setActivatingVersionId(item.id)
     try {
-      const job = await api.startAssistantRun(assistant.id, {
-        report_file_id: reportFileId,
-        naming_rule_file_id: namingFileId || null,
-      })
-      toast.message('审查已开始…')
-      const finished = await pollJob(job.id)
-      if (finished.status === 'failed') throw new Error(finished.error || '审查失败')
-      const reportName = String((finished.result as Record<string, unknown>)?.report_name || '')
-      toast.success(reportName ? `完成：${reportName}` : '审查完成')
-      setTrialOpen(false)
-      navigate(reportName ? `/?report=${encodeURIComponent(reportName)}` : '/')
+      const active = await api.activateAssistantVersion(assistant.id, item.id)
+      setVersion(active)
+      await Promise.all([activeQuery.refetch(), versionsQuery.refetch()])
+      onChanged()
+      toast.success(`已切换并启用 v${active.version}`)
     } catch (err) {
       toast.error((err as Error).message)
     } finally {
-      setTrialBusy(false)
+      setActivatingVersionId(null)
     }
   }
 
@@ -478,69 +425,62 @@ function AssistantSettings({
   const keywordWeight = Math.round((1 - vectorWeight) * 100) / 100
 
   return (
-    <div className="flex h-full overflow-hidden bg-[#f8fafc]">
+    <div className={cn('flex h-full overflow-hidden', embedded ? 'bg-transparent' : 'bg-[#f8fafc]')}>
       <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[#e5e7eb] bg-white px-8 py-4">
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[#e5e7eb] bg-white px-6 py-3">
           <div className="flex min-w-0 items-center gap-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-9 shrink-0 rounded-full"
-              onClick={() => navigate('/assistants')}
-              title="返回列表"
-            >
-              <ArrowLeft className="size-4" />
-            </Button>
+            {!embedded && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-9 shrink-0 rounded-full"
+                onClick={() => navigate(backTo || '/knowledge-bases')}
+                title="返回"
+              >
+                <ArrowLeft className="size-4" />
+              </Button>
+            )}
             <div className="min-w-0">
               <h1 className="truncate text-[18px] font-semibold text-[#111827]">{assistant.name}</h1>
               <p className="text-[15px] text-[#6b7280]">
-                {mainTab === 'chat' ? '知识库问答' : '工作流调试'} · 当前 v{assistant.active_version || '—'}
+                {mainTab === 'chat' ? '知识库问答' : '审查配置'} · 当前 v{assistant.active_version || '—'}
               </p>
             </div>
           </div>
           <div className="flex shrink-0 gap-2">
-            <div className="mr-2 hidden items-center rounded-full bg-[#f3f4f6] p-1 sm:flex">
-              <button
-                type="button"
-                className={cn(
-                  'rounded-full px-3 py-1.5 text-[14px] font-medium transition',
-                  mainTab === 'chat' ? 'bg-[#111827] text-white' : 'text-[#4b5563]',
-                )}
-                onClick={() => setMainTab('chat')}
-              >
-                问答
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  'rounded-full px-3 py-1.5 text-[14px] font-medium transition',
-                  mainTab === 'workflow' ? 'bg-[#111827] text-white' : 'text-[#4b5563]',
-                )}
-                onClick={() => setMainTab('workflow')}
-              >
-                工作流
-              </button>
-            </div>
-            <Button
-              variant="outline"
-              className="rounded-lg border-[#e5e7eb]"
-              disabled={!assistant.active_version}
-              onClick={() => {
-                setReportFileId(readyFiles[0]?.id || '')
-                setNamingFileId('')
-                setTrialOpen(true)
-              }}
-              title={helpText.assistants.trial}
-            >
-              <Play className="size-4" />
-              试运行审查
-            </Button>
-            <Button className="rounded-lg bg-[#111827] text-white hover:bg-[#1f2937]" asChild>
-              <Link to="/">去审查</Link>
-            </Button>
+            {!embedded && (
+              <div className="mr-2 hidden items-center rounded-full bg-[#f3f4f6] p-1 sm:flex">
+                <button
+                  type="button"
+                  className={cn(
+                    'rounded-full px-3 py-1.5 text-[14px] font-medium transition',
+                    mainTab === 'chat' ? 'bg-[#111827] text-white' : 'text-[#4b5563]',
+                  )}
+                  onClick={() => setMainTab('chat')}
+                >
+                  问答
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    'rounded-full px-3 py-1.5 text-[14px] font-medium transition',
+                    mainTab === 'workflow' ? 'bg-[#111827] text-white' : 'text-[#4b5563]',
+                  )}
+                  onClick={() => setMainTab('workflow')}
+                >
+                  审查配置
+                </button>
+              </div>
+            )}
+            {!embedded && (
+              <Button className="rounded-lg bg-[#111827] text-white hover:bg-[#1f2937]" asChild>
+                <Link to="/">去审查</Link>
+              </Button>
+            )}
           </div>
         </header>
 
+        {!embedded && (
         <div className="flex gap-2 border-b border-[#e5e7eb] bg-white px-6 py-2 sm:hidden">
           <button
             type="button"
@@ -560,9 +500,10 @@ function AssistantSettings({
             )}
             onClick={() => setMainTab('workflow')}
           >
-            工作流
+            审查配置
           </button>
         </div>
+        )}
 
         {mainTab === 'chat' ? (
         <div className="mx-auto flex w-full max-w-3xl min-h-0 flex-1 flex-col px-6 py-5">
@@ -573,7 +514,7 @@ function AssistantSettings({
                   <Bot className="size-10 text-[#9ca3af]" />
                   <p className="text-[16px] font-medium text-[#111827]">基于知识库提问</p>
                   <p className="max-w-md text-[15px] leading-relaxed text-[#6b7280]">
-                    这里是简单的 RAG 问答。调试审查提示词请切到「工作流」；完整审查请用「去审查」。
+                    这里是简单的 RAG 问答。改提示词与参数字段请到「审查配置」；完整审查请用「去审查」。
                   </p>
                 </div>
               )}
@@ -644,75 +585,198 @@ function AssistantSettings({
           </div>
         </div>
         ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[220px_minmax(0,1fr)]">
-          <div className="overflow-y-auto border-b border-[#e5e7eb] bg-white p-3 lg:border-b-0 lg:border-r">
-            <p className="mb-2 px-2 text-[13px] text-[#6b7280]">
-              新建助手会复制油变模板。新品类请在此改提示词，并到知识库配置命名规则。
-            </p>
-            {FLOW_STEPS.map((step, index) => (
-              <button
-                key={step.id}
-                type="button"
-                onClick={() => setSelectedStep(step.id)}
-                className={cn(
-                  'mb-0.5 flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition',
-                  selectedStep === step.id ? 'bg-[#eff6ff]' : 'hover:bg-[#f9fafb]',
-                )}
-              >
-                <span
-                  className={cn(
-                    'grid size-6 shrink-0 place-items-center rounded-full text-[11px] font-semibold',
-                    selectedStep === step.id
-                      ? 'bg-[#3b82f6] text-white'
-                      : 'bg-[#f3f4f6] text-[#6b7280]',
-                  )}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[16px] font-medium text-[#111827]">审查配置</p>
+                <p className="text-[13px] text-[#6b7280]" title={helpText.assistants.tabWorkflow}>
+                  {devMode
+                    ? '开发者模式：可编辑各步提示词。改完后保存为新版本。'
+                    : '日常只需改报告参数字段。其它步骤提示词请在系统设置打开开发者模式。'}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {(versionsQuery.data || []).map(item => {
+                  const isActive = item.status === 'active'
+                  const busy = activatingVersionId === item.id
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={cn(
+                        'rounded-lg px-2.5 py-1 text-[13px] transition disabled:opacity-60',
+                        isActive
+                          ? 'bg-[#111827] text-white'
+                          : 'bg-[#f3f4f6] text-[#4b5563] hover:bg-[#e5e7eb]',
+                      )}
+                      disabled={busy || !!activatingVersionId}
+                      onClick={() => void selectVersion(item)}
+                      title={isActive ? '当前启用版本' : '切换并启用此版本'}
+                    >
+                      v{item.version}
+                      {busy ? '…' : isActive ? ' · 当前' : ''}
+                    </button>
+                  )
+                })}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-lg border-[#e5e7eb]"
+                  disabled={saving || !version}
+                  onClick={() => {
+                    setVersion(activeQuery.data || null)
+                    setKbSelected(new Set(assistant.knowledge_bases.map(item => item.id)))
+                    toast.message('已还原为当前启用版本')
+                  }}
                 >
-                  {index + 1}
-                </span>
-                <span className="min-w-0">
-                  <strong
+                  取消
+                </Button>
+                <Button
+                  size="sm"
+                  className="rounded-lg bg-[#111827] text-white hover:bg-[#1f2937]"
+                  disabled={saving || !version}
+                  onClick={() => void saveAll()}
+                  title={helpText.assistants.saveVersion}
+                >
+                  {saving ? '保存中…' : '保存'}
+                </Button>
+              </div>
+            </div>
+
+            {(lockedKnowledgeBaseId && assistant.id !== GENERIC_TEMPLATE_ASSISTANT_ID) || visibleSteps.length > 0 ? (
+              <div className="space-y-2 rounded-xl border border-[#e5e7eb] bg-[#f8fafc] p-3">
+                {lockedKnowledgeBaseId && assistant.id !== GENERIC_TEMPLATE_ASSISTANT_ID && (
+                  <AssistantInitDraftCard
+                    bare
+                    assistantId={assistant.id}
+                    activeVersion={assistant.active_version}
+                    onJumpToReportParameters={jumpToReportParameters}
+                    onApplied={({ version: versionNo }) => {
+                      void activeQuery.refetch()
+                      void versionsQuery.refetch()
+                      onChanged()
+                      jumpToReportParameters()
+                      if (versionNo) {
+                        toast.success(`审查配置已切换到已启用版本 v${versionNo}`)
+                      }
+                    }}
+                  />
+                )}
+
+                {visibleSteps.length > 0 && (
+                  <div
                     className={cn(
-                      'block truncate text-[15px] font-medium',
-                      selectedStep === step.id ? 'text-[#1d4ed8]' : 'text-[#111827]',
+                      'space-y-1.5',
+                      lockedKnowledgeBaseId && assistant.id !== GENERIC_TEMPLATE_ASSISTANT_ID
+                        && 'border-t border-[#e5e7eb] pt-2',
                     )}
                   >
-                    {step.label}
-                  </strong>
-                  <small className="text-[13px] text-[#6b7280]">{step.kind}</small>
-                </span>
-              </button>
-            ))}
+                    {visibleSteps.map(step => {
+                      const fieldCount = version?.parameter_schema?.fields?.length || 0
+                      const summary =
+                        step.id === 'report_parameters'
+                          ? `${fieldCount} 个字段`
+                          : '系统提示词'
+                      return (
+                        <div
+                          key={step.id}
+                          className="flex items-center gap-3 rounded-lg border border-[#e5e7eb] bg-white px-3 py-2"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[14px] font-medium text-[#111827]">{step.label}</div>
+                            <div className="truncate text-[12px] text-[#9ca3af]">{summary}</div>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 shrink-0 rounded-lg"
+                            disabled={!version}
+                            onClick={() => setEditStepId(step.id)}
+                          >
+                            <Pencil className="size-3.5" />
+                            修改
+                          </Button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : null}
           </div>
-          <div className="flex min-h-0 flex-col overflow-hidden bg-white p-5">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <Workflow className="size-4 text-[#6b7280]" />
-              <span className="text-[16px] font-medium text-[#111827]">
-                {FLOW_STEPS.find(step => step.id === selectedStep)?.label}
-              </span>
-              <span className="rounded-md bg-[#f3f4f6] px-2 py-0.5 text-[13px] text-[#6b7280]">
-                {FLOW_STEPS.find(step => step.id === selectedStep)?.kind}
-              </span>
-            </div>
-            <Label className="mb-2 text-[15px] text-[#6b7280]">系统提示词</Label>
-            <Textarea
-              className="min-h-0 flex-1 resize-none rounded-xl border-[#e5e7eb] bg-[#f9fafb] font-mono text-[13px] leading-relaxed"
-              value={version?.node_prompts[selectedStep]?.content || ''}
-              onChange={e => updatePrompt(e.target.value)}
-              disabled={!version || selectedStep === 'candidate_retrieval' || selectedStep === 'result_summary'}
-              placeholder={
-                selectedStep === 'candidate_retrieval' || selectedStep === 'result_summary'
-                  ? '该步不调用大模型，无需提示词。'
-                  : '告诉大模型这一步该怎么做。改完后点右侧「保存」。'
-              }
-            />
-            <p className="mt-2 truncate text-[13px] text-[#6b7280]">
-              {version?.node_prompts[selectedStep]?.path || '该步不调用大模型 / 内置逻辑'}
-            </p>
-          </div>
+
+          <Dialog open={editStepId !== null} onOpenChange={open => !open && setEditStepId(null)}>
+            <DialogContent
+              className="flex h-[min(780px,90vh)] w-[min(820px,92vw)] max-w-none flex-col gap-0 overflow-hidden p-0"
+              aria-describedby={undefined}
+            >
+              <DialogHeader className="shrink-0 border-b border-[#e5e7eb] px-5 py-4">
+                <DialogTitle>
+                  {EDITABLE_STEPS.find(step => step.id === editStepId)?.label || '编辑步骤'}
+                </DialogTitle>
+                <DialogDescription className="sr-only">
+                  在弹窗中修改本步配置，关闭后记得点「保存」。
+                </DialogDescription>
+              </DialogHeader>
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+                {editStepId && (stepBindings[editStepId] || []).length > 0 && (
+                  <div className="space-y-1.5 rounded-xl border border-[#e5e7eb] bg-[#f8fafc] px-3 py-2.5">
+                    <div className="text-[13px] font-medium text-[#374151]">运行时绑定</div>
+                    {stepBindings[editStepId]!.map(item => (
+                      <div key={item.label} className="text-[13px] leading-relaxed text-[#6b7280]">
+                        <span className="font-medium text-[#4b5563]">{item.label}：</span>
+                        {item.value}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {editStepId === 'report_parameters' && version?.parameter_schema && (
+                  <ParameterSchemaEditor
+                    schema={version.parameter_schema}
+                    onChange={updateParameterSchema}
+                  />
+                )}
+                {editStepId === 'report_parameters' && !devMode && (
+                  <p className="text-[13px] text-[#9ca3af]">
+                    日常改上面的字段即可，保存后抽参会按新字段列表执行。系统提示词请在「设置 → 开发者模式」开启后编辑。
+                  </p>
+                )}
+                {editStepId
+                  && (devMode || editStepId !== 'report_parameters') && (
+                  <div className="space-y-2">
+                    <Label className="text-[15px] text-[#6b7280]">系统提示词</Label>
+                    <Textarea
+                      className="min-h-[16rem] resize-y rounded-xl border-[#e5e7eb] bg-[#f9fafb] font-mono text-[13px] leading-relaxed"
+                      value={version?.node_prompts[editStepId]?.content || ''}
+                      onChange={e => updatePrompt(e.target.value)}
+                      disabled={!version}
+                      placeholder="告诉大模型这一步该怎么做。改完后关闭弹窗并点「保存」。"
+                    />
+                    <p className="truncate text-[13px] text-[#6b7280]">
+                      {version?.node_prompts[editStepId]?.path || '内置逻辑'}
+                    </p>
+                    {editStepId === 'report_parameters' && (
+                      <p className="text-[12px] text-[#9ca3af]">
+                        提示：改字段列表不会自动改写这段提示词；抽参以字段 schema 为准。
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+              <DialogFooter className="shrink-0 border-t border-[#e5e7eb] px-5 py-3">
+                <Button type="button" variant="outline" onClick={() => setEditStepId(null)}>
+                  完成
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </div>
         )}
       </section>
 
+      {mainTab === 'chat' && (
       <aside className="flex w-[340px] shrink-0 flex-col border-l border-[#e5e7eb] bg-white">
         <div className="border-b border-[#e5e7eb] px-5 py-4">
           <h3 className="text-[18px] font-semibold text-[#111827]">助手设置</h3>
@@ -744,6 +808,7 @@ function AssistantSettings({
             />
           </div>
 
+          {!hideKnowledgePicker && !lockedKnowledgeBaseId && (
           <div className="space-y-2">
             <Label className="text-[15px] font-medium text-[#374151]">知识库</Label>
             <SearchableMultiSelect
@@ -785,100 +850,108 @@ function AssistantSettings({
               )
             })}
           </div>
+          )}
 
-          <div className="space-y-4">
-            <button
-              type="button"
-              className="flex w-full items-center justify-between text-[15px] font-medium text-[#374151]"
-              onClick={() => setAdvancedOpen(v => !v)}
-            >
-              <span className="inline-flex items-center gap-1.5">
-                <Settings2 className="size-3.5 text-[#6b7280]" />
-                高级设置
-              </span>
-              <ChevronDown className={cn('size-4 text-[#9ca3af] transition', advancedOpen && 'rotate-180')} />
-            </button>
-            {advancedOpen && version && (
-              <div className="space-y-5">
-                <div>
-                  <SettingHint label="相似度阈值" tip="低于该分数的候选会被过滤。数值越高，召回越严。" />
-                  <SettingSlider
-                    value={Number(version.retrieval_config.similarity_threshold ?? 0.2)}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    format={v => v.toFixed(2)}
-                    onChange={v => updateRetrieval('similarity_threshold', Math.round(v * 100) / 100)}
-                  />
-                </div>
-                <div>
-                  <SettingHint label="向量相似度权重" tip="语义检索与全文检索的混合比例。向右提高向量权重。" />
-                  <div className="mb-1.5 flex justify-between text-[15px] text-[#6b7280]">
-                    <span>vector {vectorWeight.toFixed(2)}</span>
-                    <span>full-text {keywordWeight.toFixed(2)}</span>
-                  </div>
-                  <SettingSlider
-                    value={vectorWeight}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    format={v => v.toFixed(2)}
-                    onChange={v => {
-                      const next = Math.round(v * 100) / 100
-                      updateRetrieval('vector_weight', next)
-                      updateRetrieval('keyword_weight', Math.round((1 - next) * 100) / 100)
-                    }}
-                  />
-                </div>
-                <div>
-                  <SettingHint label="Top N" tip="最终返回给判定步骤的证据条数。" />
-                  <SettingSlider
-                    value={Number(version.retrieval_config.top_k ?? 10)}
-                    min={1}
-                    max={50}
-                    step={1}
-                    format={v => String(Math.round(v))}
-                    parse={raw => Math.round(Number(raw))}
-                    onChange={v => updateRetrieval('top_k', Math.round(v))}
-                  />
-                </div>
-                <div>
-                  <SettingHint label="每路召回" tip="向量 / 全文等各路先各自召回多少条，再合并重排。" />
-                  <SettingSlider
-                    value={Number(version.retrieval_config.route_top_k ?? 30)}
-                    min={1}
-                    max={100}
-                    step={1}
-                    format={v => String(Math.round(v))}
-                    parse={raw => Math.round(Number(raw))}
-                    onChange={v => updateRetrieval('route_top_k', Math.round(v))}
-                  />
-                </div>
-                <div>
-                  <SettingHint label="温度" tip="生成随机性。审查场景建议保持较低温度。" />
-                  <SettingSlider
-                    value={Number(version.model_config.temperature ?? 0)}
-                    min={0}
-                    max={2}
-                    step={0.1}
-                    format={v => v.toFixed(1)}
-                    onChange={v => updateModel('temperature', Math.round(v * 10) / 10)}
-                  />
-                </div>
+          {version && (
+            <div className="space-y-5">
+              <div>
+                <SettingHint label="相似度阈值" tip="低于该分数的候选会被过滤。数值越高，召回越严。" />
+                <SettingSlider
+                  value={Number(version.retrieval_config.similarity_threshold ?? 0.2)}
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  format={v => v.toFixed(2)}
+                  onChange={v => updateRetrieval('similarity_threshold', Math.round(v * 100) / 100)}
+                />
               </div>
-            )}
-          </div>
+              <div>
+                <SettingHint label="向量相似度权重" tip="语义检索与全文检索的混合比例。向右提高向量权重。" />
+                <div className="mb-1.5 flex justify-between text-[15px] text-[#6b7280]">
+                  <span>vector {vectorWeight.toFixed(2)}</span>
+                  <span>full-text {keywordWeight.toFixed(2)}</span>
+                </div>
+                <SettingSlider
+                  value={vectorWeight}
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  format={v => v.toFixed(2)}
+                  onChange={v => {
+                    const next = Math.round(v * 100) / 100
+                    updateRetrieval('vector_weight', next)
+                    updateRetrieval('keyword_weight', Math.round((1 - next) * 100) / 100)
+                  }}
+                />
+              </div>
+              <div>
+                <SettingHint label="Top N" tip="最终返回给判定步骤的证据条数。" />
+                <SettingSlider
+                  value={Number(version.retrieval_config.top_k ?? 10)}
+                  min={1}
+                  max={50}
+                  step={1}
+                  format={v => String(Math.round(v))}
+                  parse={raw => Math.round(Number(raw))}
+                  onChange={v => updateRetrieval('top_k', Math.round(v))}
+                />
+              </div>
+              <div>
+                <SettingHint label="每路召回" tip="向量 / 全文等各路先各自召回多少条，再合并重排。" />
+                <SettingSlider
+                  value={Number(version.retrieval_config.route_top_k ?? 30)}
+                  min={1}
+                  max={100}
+                  step={1}
+                  format={v => String(Math.round(v))}
+                  parse={raw => Math.round(Number(raw))}
+                  onChange={v => updateRetrieval('route_top_k', Math.round(v))}
+                />
+              </div>
+              <div>
+                <SettingHint label="温度" tip="生成随机性。审查场景建议保持较低温度。" />
+                <SettingSlider
+                  value={Number(version.model_config.temperature ?? 0)}
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  format={v => v.toFixed(1)}
+                  onChange={v => updateModel('temperature', Math.round(v * 10) / 10)}
+                />
+              </div>
+            </div>
+          )}
 
           {(versionsQuery.data || []).length > 0 && (
             <div className="space-y-2">
-              <Label className="text-[15px] font-medium text-[#374151]">版本</Label>
-              <div className="space-y-1 text-[15px] text-[#6b7280]">
-                {(versionsQuery.data || []).slice(0, 4).map(item => (
-                  <div key={item.id} className="flex justify-between gap-2">
-                    <span>v{item.version}</span>
-                    <span>{item.status === 'active' ? '当前' : formatDate(item.created_at)}</span>
-                  </div>
-                ))}
+              <Label className="text-[15px] font-medium text-[#374151]" title={helpText.assistants.tabVersions}>
+                版本
+              </Label>
+              <div className="space-y-1">
+                {(versionsQuery.data || []).map(item => {
+                  const isActive = item.status === 'active'
+                  const busy = activatingVersionId === item.id
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={cn(
+                        'flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[15px] transition disabled:opacity-60',
+                        isActive
+                          ? 'bg-[#f3f4f6] text-[#111827]'
+                          : 'text-[#6b7280] hover:bg-[#f9fafb]',
+                      )}
+                      disabled={busy || !!activatingVersionId}
+                      onClick={() => void selectVersion(item)}
+                      title={isActive ? '当前启用版本' : '切换并启用此版本'}
+                    >
+                      <span className="font-medium">v{item.version}</span>
+                      <span className="shrink-0 text-[13px] text-[#9ca3af]">
+                        {busy ? '切换中…' : isActive ? '当前' : formatDate(item.created_at)}
+                      </span>
+                    </button>
+                  )
+                })}
               </div>
             </div>
           )}
@@ -907,54 +980,184 @@ function AssistantSettings({
           </Button>
         </div>
       </aside>
+      )}
+    </div>
+  )
+}
 
-      <Dialog open={trialOpen} onOpenChange={open => !trialBusy && setTrialOpen(open)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>试运行</DialogTitle>
-            <DialogDescription>选择一份已解析的检测报告。</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            {!primaryKbId && (
-              <p className="text-[15px] text-state-error">请先选择知识库并保存。</p>
-            )}
-            <div className="space-y-2">
-              <Label>检测报告</Label>
-              <select
-                className="flex h-11 w-full rounded-lg border border-[#e5e7eb] bg-white px-3 text-[15px]"
-                value={reportFileId}
-                onChange={e => setReportFileId(e.target.value)}
-                disabled={!readyFiles.length || trialBusy}
+function emptyField(): ParameterSchemaField {
+  return { key: '', label: '', required: false, hint: '' }
+}
+
+function ParameterSchemaEditor({
+  schema,
+  onChange,
+}: {
+  schema: ParameterSchema
+  onChange: (next: ParameterSchema) => void
+}) {
+  const updateField = (index: number, patch: Partial<ParameterSchemaField>) => {
+    const fields = schema.fields.map((field, i) => (i === index ? { ...field, ...patch } : field))
+    onChange({ ...schema, fields })
+  }
+
+  const removeField = (index: number) => {
+    onChange({ ...schema, fields: schema.fields.filter((_, i) => i !== index) })
+  }
+
+  const addField = () => {
+    onChange({ ...schema, fields: [...schema.fields, emptyField()] })
+  }
+
+  return (
+    <div className="mb-4 shrink-0 space-y-3 rounded-xl border border-[#e5e7eb] bg-[#f9fafb] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-[15px] font-medium text-[#111827]">报告参数字段</p>
+          <p className="text-[13px] text-[#6b7280]">
+            告诉模型要从报告里抽出哪些参数。增删改字段后点「保存」即可；不依赖下方系统提示词自动同步。
+          </p>
+        </div>
+        <div className="inline-flex items-center gap-1.5 text-[13px] text-[#374151]">
+          <label className="inline-flex items-center gap-2">
+            <input
+              type="checkbox"
+              className="size-4 rounded border-[#d1d5db]"
+              checked={Boolean(schema.allow_extra)}
+              onChange={e => onChange({ ...schema, allow_extra: e.target.checked })}
+            />
+            允许额外字段
+          </label>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex text-[#9ca3af] hover:text-[#6b7280]"
+                aria-label="允许额外字段说明"
               >
-                <option value="">选择 PDF</option>
-                {readyFiles.map(file => (
-                  <option key={file.id} value={file.id}>{file.name}</option>
-                ))}
-              </select>
+                <CircleHelp className="size-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-[260px] leading-relaxed">
+              开启后，抽参时除了列出的字段，还可保留报告里其它未声明但对审查有用的参数；关闭则只提取已声明字段。
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      </div>
+      <div className="space-y-2.5">
+        {schema.fields.map((field, index) => (
+          <div
+            key={`${index}-${field.key}`}
+            className="space-y-2 rounded-xl border border-[#e5e7eb] bg-white p-3 shadow-[0_1px_0_rgba(15,23,42,0.03)]"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[12px] font-medium text-[#9ca3af]">字段 {index + 1}</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-7 text-[#9ca3af] hover:text-[#ef4444]"
+                onClick={() => removeField(index)}
+                disabled={schema.fields.length <= 1}
+                title="删除字段"
+                aria-label="删除字段"
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
             </div>
-            <div className="space-y-2">
-              <Label>命名规则（可选）</Label>
-              <select
-                className="flex h-11 w-full rounded-lg border border-[#e5e7eb] bg-white px-3 text-[15px]"
-                value={namingFileId}
-                onChange={e => setNamingFileId(e.target.value)}
-                disabled={!readyFiles.length || trialBusy}
-              >
-                <option value="">用知识库默认</option>
-                {readyFiles.map(file => (
-                  <option key={file.id} value={file.id}>{file.name}</option>
-                ))}
-              </select>
+            <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
+              <div className="space-y-1">
+                <div className="flex items-center gap-1">
+                  <Label className="text-[12px] text-[#6b7280]">英文标识</Label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="inline-flex text-[#9ca3af] hover:text-[#6b7280]"
+                        aria-label="英文标识说明"
+                      >
+                        <CircleHelp className="size-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-[240px] leading-relaxed">
+                      给程序用的英文名（如 model），写入抽参结果 JSON，建议用小写字母和下划线。
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+                <Input
+                  className="h-9 rounded-lg bg-[#f9fafb] text-[13px]"
+                  placeholder="如 model"
+                  value={field.key}
+                  onChange={e => updateField(index, { key: e.target.value.trim() })}
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-1">
+                  <Label className="text-[12px] text-[#6b7280]">中文名称</Label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="inline-flex text-[#9ca3af] hover:text-[#6b7280]"
+                        aria-label="中文名称说明"
+                      >
+                        <CircleHelp className="size-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-[240px] leading-relaxed">
+                      给人看的名字（如「型号」），出现在审查结果和界面展示里。
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+                <Input
+                  className="h-9 rounded-lg bg-[#f9fafb] text-[13px]"
+                  placeholder="如 型号"
+                  value={field.label}
+                  onChange={e => updateField(index, { label: e.target.value })}
+                />
+              </div>
+              <label className="inline-flex h-9 items-end gap-1.5 whitespace-nowrap pb-2 text-[12px] text-[#4b5563]">
+                <input
+                  type="checkbox"
+                  className="size-3.5 rounded border-[#d1d5db]"
+                  checked={Boolean(field.required)}
+                  onChange={e => updateField(index, { required: e.target.checked })}
+                />
+                必填
+              </label>
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center gap-1">
+                <Label className="text-[12px] text-[#6b7280]">在报告里怎么找（可选）</Label>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className="inline-flex text-[#9ca3af] hover:text-[#6b7280]"
+                      aria-label="提取提示说明"
+                    >
+                      <CircleHelp className="size-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-[260px] leading-relaxed">
+                    补充说明这个值通常出现在报告哪里、长什么样，帮助模型更准地抽出。
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <Input
+                className="h-8 rounded-lg bg-[#f9fafb] text-[12px]"
+                placeholder="例如：报告首页样品型号"
+                value={field.hint}
+                onChange={e => updateField(index, { hint: e.target.value })}
+              />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" disabled={trialBusy} onClick={() => setTrialOpen(false)}>取消</Button>
-            <Button disabled={trialBusy || !reportFileId} onClick={() => void startTrial()}>
-              {trialBusy ? '运行中…' : '开始'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        ))}
+      </div>
+      <Button type="button" variant="outline" size="sm" className="h-8 rounded-lg" onClick={addField}>
+        <Plus className="size-3.5" />
+        增加字段
+      </Button>
     </div>
   )
 }

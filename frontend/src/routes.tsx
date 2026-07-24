@@ -1,7 +1,12 @@
-import { lazy, Suspense, type ReactNode } from 'react'
+import { Suspense, type ReactNode, lazy } from 'react'
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 import { RootLayout } from '@/layouts/root-layout'
 import { KnowledgeLayout } from '@/layouts/kb-layout'
+import DatasetChatPage from '@/pages/dataset/chat'
+import DatasetWorkflowPage from '@/pages/dataset/workflow'
+import SettingsPage from '@/pages/settings'
+import FieldsSettingsPage from '@/pages/settings/fields'
+import AssistantTemplateSettingsPage from '@/pages/settings/assistant-template'
 
 const WorkbenchPage = lazy(() => import('@/pages/workbench'))
 const DatasetsPage = lazy(() => import('@/pages/datasets'))
@@ -13,8 +18,6 @@ const DatasetSettingsPage = lazy(() => import('@/pages/dataset/settings'))
 const ChunkPage = lazy(() => import('@/pages/chunk'))
 const AssistantsPage = lazy(() => import('@/pages/assistants'))
 const RunsPage = lazy(() => import('@/pages/runs'))
-const SettingsPage = lazy(() => import('@/pages/settings'))
-const FieldsSettingsPage = lazy(() => import('@/pages/settings/fields'))
 
 function RouteFallback() {
   return (
@@ -47,16 +50,20 @@ export const router = createBrowserRouter([
           { path: 'overview', element: <Navigate to="../files" replace /> },
           { path: 'settings', element: withSuspense(<DatasetSettingsPage />) },
           { path: 'rules', element: <Navigate to="../settings" replace /> },
+          { path: 'chat', element: withSuspense(<DatasetChatPage />) },
+          { path: 'workflow', element: withSuspense(<DatasetWorkflowPage />) },
           // Not in the sidebar; kept routeable for deep links and file-row overflow actions.
           { path: 'chunks', element: withSuspense(<DatasetChunksPage />) },
           { path: 'metadata', element: withSuspense(<DatasetMetadataPage />) },
         ],
       },
+      // Legacy assistant routes redirect into knowledge-base / settings.
       { path: 'assistants', element: withSuspense(<AssistantsPage />) },
       { path: 'assistants/:id', element: withSuspense(<AssistantsPage />) },
       { path: 'runs', element: withSuspense(<RunsPage />) },
-      { path: 'settings', element: withSuspense(<SettingsPage />) },
-      { path: 'settings/fields', element: withSuspense(<FieldsSettingsPage />) },
+      { path: 'settings', element: <SettingsPage /> },
+      { path: 'settings/fields', element: <FieldsSettingsPage /> },
+      { path: 'settings/assistant-template', element: <AssistantTemplateSettingsPage /> },
     ],
   },
   {

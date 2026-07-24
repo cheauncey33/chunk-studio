@@ -1,12 +1,12 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
-  Bot,
   CircleHelp,
   ClipboardCheck,
   FolderOpen,
   History,
   Moon,
   Settings,
+  ShieldCheck,
   Sun,
 } from 'lucide-react'
 import { Explain, HelpModeBanner } from '@/components/explain'
@@ -19,7 +19,6 @@ import { cn } from '@/lib/utils'
 const NAV = [
   { to: '/', label: '审查', icon: ClipboardCheck, end: true, help: helpText.nav.workbench },
   { to: '/knowledge-bases', label: '知识库', icon: FolderOpen, help: helpText.nav.knowledge },
-  { to: '/assistants', label: '助手', icon: Bot, help: helpText.nav.assistants },
   { to: '/runs', label: '结果详情', icon: History, help: helpText.nav.runs },
   { to: '/settings', label: '系统设置', icon: Settings, help: helpText.nav.settings },
 ] as const
@@ -33,7 +32,6 @@ function isNavActive(to: string, pathname: string, end?: boolean) {
     )
   }
   if (to === '/settings') return pathname.startsWith('/settings')
-  if (to === '/assistants') return pathname.startsWith('/assistants')
   if (to === '/runs') return pathname === '/runs' || pathname.startsWith('/runs/')
   if (end) return pathname === to
   return pathname === to || pathname.startsWith(`${to}/`)
@@ -46,23 +44,23 @@ export function RootLayout() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-bg-canvas text-text-primary">
-      <header className="relative z-20 flex h-[4.5rem] shrink-0 items-center border-b border-[#e5e7eb] bg-white px-5 dark:border-border-button dark:bg-bg-base">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#13c2c2] text-base font-bold text-white">
-            CS
+      <header className="relative z-20 flex h-[5.75rem] shrink-0 items-center border-b border-[#e5e7eb] bg-white px-5 dark:border-border-button dark:bg-bg-base">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div
+            className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#13c2c2] text-white"
+            aria-hidden
+          >
+            <ShieldCheck className="size-5" strokeWidth={2.25} />
           </div>
           <div className="hidden min-w-0 sm:block">
-            <div className="truncate text-[16px] font-semibold tracking-tight text-[#111827] dark:text-text-primary">
-              Chunk Studio
-            </div>
-            <div className="truncate text-[13px] text-[#6b7280] dark:text-text-secondary">
-              油浸式变压器审查
+            <div className="truncate text-[19px] font-bold tracking-tight text-[#111827] dark:text-text-primary">
+              标准RAG审查
             </div>
           </div>
         </div>
 
         <nav
-          className="absolute left-1/2 top-1/2 flex max-w-[min(100%-14rem,56rem)] -translate-x-1/2 -translate-y-1/2 items-center gap-1 overflow-x-auto rounded-full bg-[#f3f4f6] p-1.5 dark:bg-bg-card"
+          className="absolute left-1/2 top-1/2 flex max-w-[min(100%-12rem,48rem)] -translate-x-1/2 -translate-y-1/2 items-center gap-0.5 overflow-x-auto rounded-full bg-[#f3f4f6] p-1 dark:bg-bg-card"
           aria-label="主导航"
         >
           {NAV.map(item => {
@@ -73,13 +71,13 @@ export function RootLayout() {
                   to={item.to}
                   end={'end' in item ? item.end : false}
                   className={cn(
-                    'inline-flex shrink-0 items-center gap-2 rounded-full px-5 py-2 text-[22px] font-bold leading-none whitespace-nowrap transition',
+                    'inline-flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-[19px] font-bold leading-none whitespace-nowrap transition',
                     active
                       ? 'bg-[#111827] text-white shadow-sm dark:bg-white dark:text-[#111827]'
                       : 'text-[#4b5563] hover:bg-white/80 hover:text-[#111827] dark:text-text-secondary dark:hover:bg-bg-base dark:hover:text-text-primary',
                   )}
                 >
-                  <item.icon className="size-5 shrink-0 opacity-90" />
+                  <item.icon className="size-4 shrink-0 opacity-90" />
                   <span>{item.label}</span>
                 </NavLink>
               </Explain>
@@ -92,22 +90,22 @@ export function RootLayout() {
             <Button
               variant={enabled ? 'default' : 'ghost'}
               size="icon"
-              className="size-10 rounded-full"
+              className="size-9 rounded-full"
               onClick={toggle}
               title={enabled ? '关闭说明模式' : '说明模式'}
             >
-              <CircleHelp className="size-5" />
+              <CircleHelp className="size-4" />
             </Button>
           </Explain>
           <Explain text={helpText.nav.theme} title="外观" side="bottom">
             <Button
               variant="ghost"
               size="icon"
-              className="size-10 rounded-full"
+              className="size-9 rounded-full"
               onClick={toggleTheme}
               title="切换主题"
             >
-              {theme === 'light' ? <Moon className="size-5" /> : <Sun className="size-5" />}
+              {theme === 'light' ? <Moon className="size-4" /> : <Sun className="size-4" />}
             </Button>
           </Explain>
         </div>

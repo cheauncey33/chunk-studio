@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Plus,
   FileText,
@@ -89,6 +89,13 @@ export default function DatasetFilesPage() {
     [knowledgeBase],
   )
 
+  // Global (not KB-scoped): dense vectors cover all approved chunks.
+  const { data: embeddingsStatus } = useQuery({
+    queryKey: ['embeddings-status'],
+    queryFn: api.getEmbeddingsStatus,
+    refetchInterval: 15000,
+  })
+
   useEffect(() => {
     if (!overrideChunk) setChunkRules(kbDefaults)
   }, [kbDefaults, overrideChunk])
@@ -136,7 +143,28 @@ export default function DatasetFilesPage() {
       label: '至少一个文件已启用参与检索',
       hint: '停用的文件不会出现在检索结果里。',
     },
+    {
+      done:
+        (embeddingsStatus?.embedded_chunks ?? 0) > 0
+        && (embeddingsStatus?.pending_chunks ?? 0) === 0,
+      label: '向量索引就绪',
+      hint: embeddingsStatus
+        ? embeddingsStatus.pending_chunks > 0
+          ? `${embeddingsStatus.pending_chunks} 段已批准内容待生成向量（批准后自动排队，也可点上方按钮立即构建）。`
+          : '批准片段后会自动生成向量索引。'
+        : '正在获取向量索引状态…',
+    },
   ]
+
+  const buildEmbeddingsNow = async () => {
+    try {
+      await api.buildEmbeddings()
+      toast.success('已提交向量索引构建任务')
+      await client.invalidateQueries({ queryKey: ['embeddings-status'] })
+    } catch (err) {
+      toast.error((err as Error).message)
+    }
+  }
 
   const markBusy = (ids: string[], on: boolean) => {
     setBusyIds(prev => {
@@ -355,21 +383,27 @@ export default function DatasetFilesPage() {
         }
       />
 
-      <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-        <section className="rounded-xl border border-border-button bg-bg-base">
-          <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border-button sm:grid-cols-4">
-            <StatCell label="文件" value={stats.fileCount} />
-            <StatCell label="内容片段" value={stats.chunkCount} />
-            <StatCell
-              label="解析就绪"
-              value={`${stats.parseReadyCount}/${stats.fileCount || 0}`}
-            />
-            <StatCell label="已批准" value={stats.approvedCount} />
-          </dl>
-        </section>
-        <section className="rounded-xl border border-border-button bg-bg-base px-4 py-3">
-          <h2 className="mb-2 text-[13px] font-medium text-text-secondary">准备情况</h2>
-          <ul className="space-y-1.5">
+      <section className="mb-4 rounded-xl border border-border-button bg-bg-base">
+        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-t-xl bg-border-button sm:grid-cols-4">
+          <StatCell label="文件" value={stats.fileCount} />
+          <StatCell label="内容片段" value={stats.chunkCount} />
+          <StatCell
+            label="解析就绪"
+            value={`${stats.parseReadyCount}/${stats.fileCount || 0}`}
+          />
+          <StatCell label="已批准" value={stats.approvedCount} />
+        </dl>
+        <div className="border-t border-border-button px-4 py-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h2 className="text-[13px] font-medium text-text-secondary">准备情况</h2>
+            {(embeddingsStatus?.pending_chunks ?? 0) > 0 && (
+              <Button size="sm" variant="outline" onClick={buildEmbeddingsNow}>
+                <RefreshCw />
+                构建向量索引（{embeddingsStatus?.pending_chunks} 段待处理）
+              </Button>
+            )}
+          </div>
+          <ul className="grid gap-1.5 sm:grid-cols-2">
             {checklist.map(item => (
               <li key={item.label} className="flex items-start gap-2">
                 <span
@@ -391,8 +425,8 @@ export default function DatasetFilesPage() {
               </li>
             ))}
           </ul>
-        </section>
-      </div>
+        </div>
+      </section>
 
       <Dialog
         open={uploadOpen}
@@ -646,7 +680,15 @@ export default function DatasetFilesPage() {
                 {file.parse_error}
               </span>
             )}
-            {needsChunk && (
+            {!file.parse_error && file.auto_chunk_error && (
+              <span
+                className="block truncate text-xs text-state-error"
+                title={file.auto_chunk_error}
+              >
+                自动切片失败：{file.auto_chunk_error}（可点「生成切片」重试）
+              </span>
+            )}
+            {needsChunk && !file.auto_chunk_error && (
               <span className="block text-xs text-state-warning">已解析但未切片</span>
             )}
           </span>
