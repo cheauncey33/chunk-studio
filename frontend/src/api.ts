@@ -322,6 +322,21 @@ export interface AssistantVersion {
   rules: Record<string, unknown>
   retrieval_config: Record<string, unknown>
   parameter_schema: ParameterSchema
+  category_profile: {
+    name?: string
+    equipment_type?: string
+    focus?: string
+    notes?: string
+  }
+  initialization_provenance: {
+    source?: string
+    standard_file_ids?: string[]
+    sample_report_file_ids?: string[]
+    model?: string
+    generated_at?: string
+    applied_at?: string
+    draft_job_id?: string | null
+  }
   created_at: string
   activated_at: string | null
 }
@@ -615,7 +630,13 @@ export const api = {
     id: string,
     body: Pick<
       AssistantVersion,
-      'model_config' | 'node_prompts' | 'rules' | 'retrieval_config' | 'parameter_schema'
+      | 'model_config'
+      | 'node_prompts'
+      | 'rules'
+      | 'retrieval_config'
+      | 'parameter_schema'
+      | 'category_profile'
+      | 'initialization_provenance'
     >,
   ) =>
     fetch(`${API}/assistants/${id}/versions`, {

@@ -300,6 +300,7 @@ def generate_init_draft(
             "sample_reports": unique_samples,
         },
         "model": model or "",
+        "generated_at": _now(),
         "error": "",
     }
 
@@ -324,6 +325,27 @@ def apply_init_draft(assistant_id: str) -> dict[str, Any]:
     node_prompts = _loads(version["node_prompts"], {})
     rules = _loads(version["rules"], {})
     retrieval_config = _loads(version["retrieval_config"], {})
+    raw_profile = payload.get("category_profile")
+    if not isinstance(raw_profile, dict):
+        raw_profile = _loads(version["category_profile"], {})
+    category_profile = {
+        "name": str(raw_profile.get("name") or "").strip(),
+        "equipment_type": str(raw_profile.get("equipment_type") or "").strip(),
+        "focus": str(raw_profile.get("focus") or "").strip(),
+        "notes": str(raw_profile.get("notes") or "").strip(),
+    }
+    source_file_ids = payload.get("source_file_ids")
+    if not isinstance(source_file_ids, dict):
+        source_file_ids = {}
+    initialization_provenance = {
+        "source": "assistant_init_draft",
+        "standard_file_ids": list(source_file_ids.get("standard") or []),
+        "sample_report_file_ids": list(source_file_ids.get("sample_reports") or []),
+        "model": str(payload.get("model") or ""),
+        "generated_at": str(payload.get("generated_at") or draft["updated_at"]),
+        "applied_at": _now(),
+        "draft_job_id": draft.get("job_id"),
+    }
     if not isinstance(node_prompts, dict):
         node_prompts = {}
     existing_rp = node_prompts.get("report_parameters")
@@ -353,8 +375,9 @@ def apply_init_draft(assistant_id: str) -> dict[str, Any]:
         conn.execute(
             """INSERT INTO assistant_versions
                (id,assistant_id,version,status,model_config,node_prompts,rules,
-                retrieval_config,parameter_schema,created_at,activated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                retrieval_config,parameter_schema,category_profile,
+                initialization_provenance,created_at,activated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 version_id,
                 assistant_id,
@@ -365,6 +388,8 @@ def apply_init_draft(assistant_id: str) -> dict[str, Any]:
                 json.dumps(rules, ensure_ascii=False),
                 json.dumps(retrieval_config, ensure_ascii=False),
                 json.dumps(schema, ensure_ascii=False),
+                json.dumps(category_profile, ensure_ascii=False),
+                json.dumps(initialization_provenance, ensure_ascii=False),
                 now,
                 now,
             ),
@@ -387,4 +412,6 @@ def apply_init_draft(assistant_id: str) -> dict[str, Any]:
         "version_id": version_id,
         "version": next_version,
         "parameter_schema": schema,
+        "category_profile": category_profile,
+        "initialization_provenance": initialization_provenance,
     }

@@ -52,7 +52,7 @@ def _seed_parsed_standard(tmp_path: Path, *, kb_id: str, file_id: str = "std1") 
         )
 
 
-def test_generate_and_apply_only_changes_schema_and_report_parameters(
+def test_generate_and_apply_versions_profile_schema_prompt_and_provenance(
     monkeypatch, tmp_path
 ) -> None:
     _init_temp_db(monkeypatch, tmp_path)
@@ -106,6 +106,12 @@ def test_generate_and_apply_only_changes_schema_and_report_parameters(
     after = assistants.get_active_version(assistant_id)
     assert after["parameter_schema"]["fields"][1]["key"] == "rated_voltage"
     assert after["node_prompts"]["report_parameters"]["content"].startswith("# 电缆专用抽参")
+    assert after["category_profile"]["name"] == "电力电缆"
+    assert after["initialization_provenance"]["source"] == "assistant_init_draft"
+    assert after["initialization_provenance"]["standard_file_ids"] == ["std1"]
+    assert after["initialization_provenance"]["sample_report_file_ids"] == []
+    assert after["initialization_provenance"]["generated_at"]
+    assert after["initialization_provenance"]["applied_at"]
     for key in ("test_items", "model_decode", "query_planner", "audit_judge"):
         assert after["node_prompts"][key]["content"] == before_nodes[key]["content"]
 
@@ -138,6 +144,46 @@ def test_apply_rejects_non_ready_draft(monkeypatch, tmp_path) -> None:
     )
     with pytest.raises(ValueError, match="ready"):
         assistant_init.apply_init_draft(assistant_id)
+    _close_temp_db(monkeypatch)
+
+
+def test_backfill_applied_legacy_draft_into_active_version(
+    monkeypatch, tmp_path
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    assistant_id = "assistant_oil_transformer_audit"
+    assistant_init.upsert_init_draft(
+        assistant_id,
+        status="applied",
+        payload={
+            "category_profile": {
+                "name": "历史画像",
+                "equipment_type": "变压器",
+                "focus": "历史初始化",
+                "notes": "",
+            },
+            "source_file_ids": {
+                "standard": ["std-old"],
+                "sample_reports": ["sample-old"],
+            },
+            "model": "deepseek-v4-flash",
+        },
+        job_id="job-old",
+    )
+    with db.transaction() as conn:
+        conn.execute(
+            """UPDATE assistant_versions
+               SET category_profile='{}', initialization_provenance='{}'
+               WHERE id='assistant_oil_transformer_audit_v1'"""
+        )
+
+    db._backfill_applied_init_profiles()
+    active = assistants.get_active_version(assistant_id)
+    assert active["category_profile"]["name"] == "历史画像"
+    assert active["initialization_provenance"]["source"] == "assistant_init_draft_backfill"
+    assert active["initialization_provenance"]["standard_file_ids"] == ["std-old"]
+    assert active["initialization_provenance"]["sample_report_file_ids"] == ["sample-old"]
+    assert active["initialization_provenance"]["draft_job_id"] == "job-old"
     _close_temp_db(monkeypatch)
 
 
@@ -182,6 +228,9 @@ def test_init_api_apply_flow(monkeypatch, tmp_path) -> None:
     assert applied["assistant"]["id"] == assistant_id
     active = assistants.get_active_version(assistant_id)
     assert active["node_prompts"]["report_parameters"]["content"] == "人工确认后的提示词"
+    assert active["category_profile"]["name"] == "改名"
+    assert active["initialization_provenance"]["source"] == "assistant_init_draft"
+    assert active["initialization_provenance"]["standard_file_ids"] == ["std_api"]
 
     with pytest.raises(HTTPException) as exc:
         assistants.apply_assistant_init_draft(assistant_id)

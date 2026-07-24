@@ -39,6 +39,8 @@ class AssistantVersionCreate(BaseModel):
     rules: dict[str, Any] = Field(default_factory=dict)
     retrieval_config: dict[str, Any] = Field(default_factory=dict)
     parameter_schema: dict[str, Any] = Field(default_factory=dict)
+    category_profile: dict[str, Any] = Field(default_factory=dict)
+    initialization_provenance: dict[str, Any] = Field(default_factory=dict)
     activate: bool = True
 
 
@@ -108,6 +110,8 @@ def _version_out(row: Any) -> dict[str, Any]:
         "rules": _loads(row["rules"]),
         "retrieval_config": retrieval_config,
         "parameter_schema": resolve_parameter_schema(_loads(row["parameter_schema"])),
+        "category_profile": _loads(row["category_profile"]),
+        "initialization_provenance": _loads(row["initialization_provenance"]),
     }
 
 
@@ -148,7 +152,8 @@ def _assistant_out(row: Any) -> dict[str, Any]:
 
 def _initial_version_template() -> Any:
     row = db.get_conn().execute(
-        """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema
+        """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema,
+                  category_profile, initialization_provenance
            FROM assistant_versions
            WHERE id='assistant_audit_template_v1'"""
     ).fetchone()
@@ -201,8 +206,9 @@ def create_assistant(body: AssistantCreate):
         conn.execute(
             """INSERT INTO assistant_versions
                (id,assistant_id,version,status,model_config,node_prompts,rules,
-                retrieval_config,parameter_schema,created_at,activated_at)
-               VALUES (?,?,1,'active',?,?,?,?,?,?,?)""",
+                retrieval_config,parameter_schema,category_profile,
+                initialization_provenance,created_at,activated_at)
+               VALUES (?,?,1,'active',?,?,?,?,?,?,?,?,?)""",
             (
                 version_id,
                 assistant_id,
@@ -211,6 +217,8 @@ def create_assistant(body: AssistantCreate):
                 template["rules"],
                 template["retrieval_config"],
                 json.dumps(parameter_schema, ensure_ascii=False),
+                template["category_profile"],
+                template["initialization_provenance"],
                 now,
                 now,
             ),
@@ -368,8 +376,9 @@ def create_version(assistant_id: str, body: AssistantVersionCreate):
         conn.execute(
             """INSERT INTO assistant_versions
                (id,assistant_id,version,status,model_config,node_prompts,rules,
-                retrieval_config,parameter_schema,created_at,activated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                retrieval_config,parameter_schema,category_profile,
+                initialization_provenance,created_at,activated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 version_id,
                 assistant_id,
@@ -380,6 +389,8 @@ def create_version(assistant_id: str, body: AssistantVersionCreate):
                 json.dumps(body.rules, ensure_ascii=False),
                 json.dumps(body.retrieval_config, ensure_ascii=False),
                 json.dumps(parameter_schema, ensure_ascii=False),
+                json.dumps(body.category_profile, ensure_ascii=False),
+                json.dumps(body.initialization_provenance, ensure_ascii=False),
                 now,
                 now if body.activate else None,
             ),

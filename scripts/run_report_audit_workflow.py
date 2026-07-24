@@ -89,7 +89,15 @@ def _load_assistant_version(assistant_id: str) -> dict[str, Any]:
     if not row:
         raise ValueError(f"active assistant version not found: {assistant_id}")
     payload = dict(row)
-    for key in ("model_config", "node_prompts", "rules", "retrieval_config", "parameter_schema"):
+    for key in (
+        "model_config",
+        "node_prompts",
+        "rules",
+        "retrieval_config",
+        "parameter_schema",
+        "category_profile",
+        "initialization_provenance",
+    ):
         raw = payload.get(key)
         if raw is None:
             payload[key] = {}
@@ -774,6 +782,8 @@ def main() -> None:
             "version": 1,
             "assistant_id": args.assistant_id,
             "assistant_version_id": profile["id"],
+            "category_profile": profile["category_profile"],
+            "initialization_provenance": profile["initialization_provenance"],
             "provider_config": llm.public_config(model=judge_model),
             "retrieval_config": {
                 "backend": "hybrid_search",

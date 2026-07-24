@@ -359,6 +359,8 @@ export function AssistantSettings({
         rules: version.rules,
         retrieval_config: version.retrieval_config,
         parameter_schema: version.parameter_schema,
+        category_profile: version.category_profile,
+        initialization_provenance: version.initialization_provenance,
       })
       await Promise.all([activeQuery.refetch(), versionsQuery.refetch()])
       onChanged()

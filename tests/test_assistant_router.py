@@ -31,6 +31,12 @@ def test_list_routable_candidates_excludes_template(monkeypatch, tmp_path) -> No
     assert "assistant_audit_template" not in ids
     assert "assistant_oil_transformer_audit" in ids
     assert created["assistant_id"] in ids
+    oil = next(
+        item
+        for item in candidates
+        if item["assistant_id"] == "assistant_oil_transformer_audit"
+    )
+    assert oil["category_profile"]["name"] == "油浸式变压器"
     _close_temp_db(monkeypatch)
 
 

@@ -102,6 +102,16 @@ def test_runtime_retrieval_config_and_selection_apply_version_values() -> None:
     assert defaults["expand_references"] is False
 
 
+def test_load_assistant_version_includes_category_provenance(
+    monkeypatch, tmp_path
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    profile = workflow._load_assistant_version("assistant_oil_transformer_audit")
+    assert profile["category_profile"]["name"] == "油浸式变压器"
+    assert profile["initialization_provenance"]["source"] == "built_in_seed"
+    _close_temp_db(monkeypatch)
+
+
 def test_extract_parameters_uses_schema_and_open_list(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

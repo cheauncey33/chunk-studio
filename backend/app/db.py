@@ -208,6 +208,8 @@ CREATE TABLE IF NOT EXISTS assistant_versions (
     rules             TEXT NOT NULL DEFAULT '{}',
     retrieval_config  TEXT NOT NULL DEFAULT '{}',
     parameter_schema  TEXT NOT NULL DEFAULT '{}',
+    category_profile  TEXT NOT NULL DEFAULT '{}',
+    initialization_provenance TEXT NOT NULL DEFAULT '{}',
     created_at        TEXT NOT NULL,
     activated_at      TEXT,
     UNIQUE (assistant_id, version),
@@ -268,10 +270,12 @@ def init_db() -> None:
     _migrate_knowledge_base_corpus_rules()
     _migrate_knowledge_base_corpus_kind()
     _migrate_assistant_parameter_schema()
+    _migrate_assistant_category_profile()
     _migrate_assistant_init_drafts()
     _backfill_chunk_layers()
     _backfill_auto_metadata()
     _seed_knowledge_base_and_assistant()
+    _backfill_applied_init_profiles()
     _migrate_assistant_kb_one_to_one()
     _ensure_knowledge_base_assistants()
     _conn.commit()
@@ -291,6 +295,25 @@ def _migrate_assistant_parameter_schema() -> None:
         )
 
 
+def _migrate_assistant_category_profile() -> None:
+    """Add versioned category identity and initialization provenance."""
+    assert _conn is not None
+    cols = {
+        row["name"]
+        for row in _conn.execute("PRAGMA table_info(assistant_versions)").fetchall()
+    }
+    if "category_profile" not in cols:
+        _conn.execute(
+            """ALTER TABLE assistant_versions
+               ADD COLUMN category_profile TEXT NOT NULL DEFAULT '{}'"""
+        )
+    if "initialization_provenance" not in cols:
+        _conn.execute(
+            """ALTER TABLE assistant_versions
+               ADD COLUMN initialization_provenance TEXT NOT NULL DEFAULT '{}'"""
+        )
+
+
 def _migrate_assistant_init_drafts() -> None:
     """Ensure assistant_init_drafts exists on older databases."""
     assert _conn is not None
@@ -306,6 +329,48 @@ def _migrate_assistant_init_drafts() -> None:
                FOREIGN KEY (assistant_id) REFERENCES audit_assistants(id) ON DELETE CASCADE
            )"""
     )
+
+
+def _backfill_applied_init_profiles() -> None:
+    """Recover version identity from applied pre-versioning initialization drafts."""
+    assert _conn is not None
+    rows = _conn.execute(
+        """SELECT d.assistant_id, d.payload, d.job_id, d.updated_at,
+                  v.id AS version_id, v.category_profile
+           FROM assistant_init_drafts d
+           JOIN audit_assistants a ON a.id=d.assistant_id
+           JOIN assistant_versions v ON v.id=a.active_version_id
+           WHERE d.status='applied'"""
+    ).fetchall()
+    for row in rows:
+        if _loads_json(row["category_profile"], {}):
+            continue
+        payload = _loads_json(row["payload"], {})
+        profile = payload.get("category_profile")
+        if not isinstance(profile, dict) or not profile:
+            continue
+        source_file_ids = payload.get("source_file_ids")
+        if not isinstance(source_file_ids, dict):
+            source_file_ids = {}
+        provenance = {
+            "source": "assistant_init_draft_backfill",
+            "standard_file_ids": list(source_file_ids.get("standard") or []),
+            "sample_report_file_ids": list(source_file_ids.get("sample_reports") or []),
+            "model": str(payload.get("model") or ""),
+            "generated_at": str(payload.get("generated_at") or row["updated_at"]),
+            "applied_at": row["updated_at"],
+            "draft_job_id": row["job_id"],
+        }
+        _conn.execute(
+            """UPDATE assistant_versions
+               SET category_profile=?, initialization_provenance=?
+               WHERE id=?""",
+            (
+                json.dumps(profile, ensure_ascii=False),
+                json.dumps(provenance, ensure_ascii=False),
+                row["version_id"],
+            ),
+        )
 
 
 def _backup_database_for_migration(migration_name: str) -> str:
@@ -369,8 +434,9 @@ def _clone_assistant_for_knowledge_base(
         _conn.execute(
             """INSERT INTO assistant_versions
                (id,assistant_id,version,status,model_config,node_prompts,rules,
-                retrieval_config,parameter_schema,created_at,activated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                retrieval_config,parameter_schema,category_profile,
+                initialization_provenance,created_at,activated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 clone_version_id,
                 clone_id,
@@ -381,6 +447,8 @@ def _clone_assistant_for_knowledge_base(
                 version["rules"],
                 version["retrieval_config"],
                 version["parameter_schema"],
+                version["category_profile"],
+                version["initialization_provenance"],
                 version["created_at"],
                 version["activated_at"],
             ),
@@ -646,7 +714,8 @@ def ensure_assistant_for_knowledge_base(
             return dict(row)
 
     template = conn.execute(
-        """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema
+        """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema,
+                  category_profile, initialization_provenance
            FROM assistant_versions
            WHERE id='assistant_audit_template_v1'"""
     ).fetchone()
@@ -693,8 +762,9 @@ def ensure_assistant_for_knowledge_base(
         tx.execute(
             """INSERT INTO assistant_versions
                (id,assistant_id,version,status,model_config,node_prompts,rules,
-                retrieval_config,parameter_schema,created_at,activated_at)
-               VALUES (?,?,1,'active',?,?,?,?,?,?,?)""",
+                retrieval_config,parameter_schema,category_profile,
+                initialization_provenance,created_at,activated_at)
+               VALUES (?,?,1,'active',?,?,?,?,?,?,?,?,?)""",
             (
                 version_id,
                 assistant_id,
@@ -703,6 +773,8 @@ def ensure_assistant_for_knowledge_base(
                 template["rules"],
                 template["retrieval_config"],
                 json.dumps(parameter_schema, ensure_ascii=False),
+                template["category_profile"],
+                template["initialization_provenance"],
                 now,
                 now,
             ),
@@ -791,6 +863,7 @@ def _seed_assistant_version(
     node_prompts: dict[str, Any],
     rules: dict[str, Any],
     parameter_schema: dict[str, Any],
+    category_profile: dict[str, Any],
     now: str,
 ) -> None:
     assert _conn is not None
@@ -803,8 +876,9 @@ def _seed_assistant_version(
     _conn.execute(
         """INSERT OR IGNORE INTO assistant_versions
            (id, assistant_id, version, status, model_config, node_prompts,
-            rules, retrieval_config, parameter_schema, created_at, activated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            rules, retrieval_config, parameter_schema, category_profile,
+            initialization_provenance, created_at, activated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             version_id,
             assistant_id,
@@ -815,6 +889,8 @@ def _seed_assistant_version(
             json.dumps(rules, ensure_ascii=False),
             json.dumps(_default_retrieval_config(), ensure_ascii=False),
             json.dumps(parameter_schema, ensure_ascii=False),
+            json.dumps(category_profile, ensure_ascii=False),
+            json.dumps({"source": "built_in_seed"}, ensure_ascii=False),
             now,
             now,
         ),
@@ -837,6 +913,23 @@ def _seed_assistant_version(
         _conn.execute(
             "UPDATE assistant_versions SET parameter_schema=? WHERE id=?",
             (json.dumps(parameter_schema, ensure_ascii=False), version_id),
+        )
+    row = _conn.execute(
+        """SELECT category_profile, initialization_provenance
+           FROM assistant_versions WHERE id=?""",
+        (version_id,),
+    ).fetchone()
+    existing_profile = _loads_json(row["category_profile"] if row else None, {})
+    if not existing_profile:
+        _conn.execute(
+            """UPDATE assistant_versions
+               SET category_profile=?, initialization_provenance=?
+               WHERE id=?""",
+            (
+                json.dumps(category_profile, ensure_ascii=False),
+                json.dumps({"source": "built_in_seed"}, ensure_ascii=False),
+                version_id,
+            ),
         )
 
 
@@ -990,6 +1083,12 @@ def _seed_knowledge_base_and_assistant() -> None:
         node_prompts=template_prompts,
         rules={},
         parameter_schema=generic_parameter_schema(),
+        category_profile={
+            "name": "通用审查",
+            "equipment_type": "",
+            "focus": "按知识库配置执行报告审查",
+            "notes": "内置通用模板",
+        },
         now=now,
     )
     _seed_assistant_version(
@@ -1000,6 +1099,12 @@ def _seed_knowledge_base_and_assistant() -> None:
         node_prompts=oil_prompts,
         rules=seed_manual_rules,
         parameter_schema=oil_parameter_schema(),
+        category_profile={
+            "name": "油浸式变压器",
+            "equipment_type": "油浸式变压器",
+            "focus": "检测报告参数、项目、型号规则和标准值",
+            "notes": "内置初始品类",
+        },
         now=now,
     )
     _conn.execute(
