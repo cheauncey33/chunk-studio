@@ -80,7 +80,7 @@ const KNOWN_INJECT_KEYS = new Set<string>([
 const INJECT_TITLES: Record<PromptInjectKey, string> = {
   parameter_schema: '当前参数字段',
   parameter_schema_json: '参数 schema JSON',
-  manual_rules: '补充规则',
+  manual_rules: '判定约定',
   kb_name: '知识库名称',
   kb_description: '知识库说明',
   kb_context: '绑定知识库',
@@ -174,10 +174,10 @@ function stepRulesVariableParts(stepRules?: StepRuleDraft[] | null): BriefPrevie
   const lines = formatStepRulesLines(stepRules || [])
   return [
     { kind: 'framework', text: '' },
-    { kind: 'framework', text: '补充规则（人工配置）：' },
+    { kind: 'framework', text: '本步补充规则（人工配置）：' },
     {
       kind: 'variable',
-      label: '补充规则',
+      label: '本步补充规则',
       text: lines,
     },
   ]
@@ -507,12 +507,12 @@ export function buildAuditJudgeBriefParts(input: {
         '- few_shot_examples：只对齐输出口径与状态选择，不是标准证据。',
         '- sample_context：已提取样品参数，仅作检索/适用性锚点，勿当作已证标准事实。',
         '',
-        '补充规则配置摘要（完整条文见输入 manual_knowledge_rules，此处不重复正文）：',
+        '判定约定摘要（完整条文见输入 manual_knowledge_rules，此处不重复正文）：',
       ].join('\n'),
     },
     {
       kind: 'variable',
-      label: '补充规则',
+      label: '判定约定',
       text: ruleLines.length ? ruleLines.join('\n') : '- （未配置）',
     },
   ]

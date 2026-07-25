@@ -156,7 +156,7 @@ const PRODUCT_FLOW_STEPS: Array<{
   {
     id: 'audit_judge',
     label: '对照标准判定',
-    summary: '用候选证据与补充规则判定该条要求',
+    summary: '用候选证据与判定约定判定该条要求',
     kind: 'AI',
     editStepId: 'audit_judge',
   },
@@ -459,7 +459,7 @@ export function AssistantSettings({
       ],
       audit_judge: [
         {
-          label: '补充规则',
+          label: '判定约定',
           value: draftManualRules.length
             ? `${draftManualRules.length} 条（本步左侧编辑，写入知识库）`
             : '未配置（可选；本步左侧可添加）',
@@ -927,11 +927,11 @@ export function AssistantSettings({
                       const canEdit = Boolean(step.editStepId)
                       const editTitle =
                         step.editStepId === 'report_parameters'
-                          ? '修改字段与补充规则'
+                          ? '修改字段与本步补充规则'
                           : step.editStepId === 'query_planner'
-                            ? '修改改写形式与补充规则'
+                            ? '修改改写形式与本步补充规则'
                             : step.editStepId === 'audit_judge'
-                              ? '修改补充规则与提示词'
+                              ? '修改判定约定与提示词'
                               : step.editStepId
                                 ? '修改本步补充规则'
                                 : ''
@@ -996,9 +996,9 @@ export function AssistantSettings({
                 <section className="py-4">
                   <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
                     <div>
-                      <h2 className="text-[17px] font-semibold text-[#111827]">补充规则</h2>
+                      <h2 className="text-[17px] font-semibold text-[#111827]">判定约定</h2>
                       <p className="mt-1 text-[13px] text-[#6b7280]">
-                        {draftManualRules.length} 条 · 在「审查判定」步骤中编辑
+                        {draftManualRules.length} 条 · 写入本库；在「对照标准判定」步骤中编辑（知识库「配置」页也可改）
                       </p>
                     </div>
                     <Button
@@ -1070,12 +1070,12 @@ export function AssistantSettings({
                 </DialogTitle>
                 <DialogDescription className="text-[13px] text-[#6b7280]">
                   {editStepId === 'report_parameters'
-                    ? '左侧改字段或人工补充规则，右侧为本步预览提示词。关闭后记得点「保存」。'
+                    ? '左侧改字段或本步补充规则，右侧为本步预览提示词。关闭后记得点「保存」。'
                     : editStepId === 'query_planner'
-                      ? '左侧勾选改写形式或添加人工补充规则，右侧为本步预览提示词。关闭后记得点「保存」。'
+                      ? '左侧勾选改写形式或添加本步补充规则，右侧为本步预览提示词。关闭后记得点「保存」。'
                       : editStepId === 'audit_judge'
-                        ? '左侧编辑知识库补充规则（人工），右侧为本步预览提示词。关闭后记得点「保存」。'
-                        : '左侧添加本步人工补充规则，右侧为本步预览提示词（琥珀色为变量）。关闭后记得点「保存」。'}
+                        ? '左侧编辑本库判定约定（人工），右侧为本步预览提示词。关闭后记得点「保存」。'
+                        : '左侧添加本步补充规则，右侧为本步预览提示词（琥珀色为变量）。关闭后记得点「保存」。'}
                 </DialogDescription>
               </DialogHeader>
               {editStepId === 'report_parameters' && version?.parameter_schema ? (
@@ -1083,7 +1083,7 @@ export function AssistantSettings({
                   <div className="flex shrink-0 gap-1 border-b border-[#e5e7eb] px-5 py-2 md:hidden">
                     {([
                       ['fields', '字段'],
-                      ['rules', '补充规则'],
+                      ['rules', '本步补充规则'],
                       ['prompt', '预览'],
                     ] as const).map(([key, label]) => (
                       <button
@@ -1112,7 +1112,7 @@ export function AssistantSettings({
                       <div className="mb-3 hidden shrink-0 gap-1 md:flex">
                         {([
                           ['fields', '字段'],
-                          ['rules', '补充规则'],
+                          ['rules', '本步补充规则'],
                         ] as const).map(([key, label]) => {
                           const active = reportParamsPane === key
                             || (reportParamsPane === 'prompt' && key === 'fields')
@@ -1175,7 +1175,7 @@ export function AssistantSettings({
                   <div className="flex shrink-0 gap-1 border-b border-[#e5e7eb] px-5 py-2 md:hidden">
                     {([
                       ['routes', '改写形式'],
-                      ['rules', '补充规则'],
+                      ['rules', '本步补充规则'],
                       ['prompt', '预览'],
                     ] as const).map(([key, label]) => (
                       <button
@@ -1204,7 +1204,7 @@ export function AssistantSettings({
                       <div className="mb-3 hidden shrink-0 gap-1 md:flex">
                         {([
                           ['routes', '改写形式'],
-                          ['rules', '补充规则'],
+                          ['rules', '本步补充规则'],
                         ] as const).map(([key, label]) => {
                           const active = queryPlannerPane === key
                             || (queryPlannerPane === 'prompt' && key === 'routes')
@@ -1266,7 +1266,7 @@ export function AssistantSettings({
                 <div className="flex min-h-0 flex-1 flex-col">
                   <div className="flex shrink-0 gap-1 border-b border-[#e5e7eb] px-5 py-2 md:hidden">
                     {([
-                      ['rules', '补充规则'],
+                      ['rules', '判定约定'],
                       ['prompt', '预览'],
                     ] as const).map(([key, label]) => (
                       <button
@@ -1296,11 +1296,11 @@ export function AssistantSettings({
                           rules={draftManualRules}
                           onChange={setDraftManualRules}
                           kbName={boundKb?.name || ''}
-                          hint="人工补充规则，写入绑定知识库；完整条文进入判定输入的 manual_knowledge_rules，右侧预览显示摘要。"
+                          hint="判定约定写入绑定知识库；完整条文进入判定输入的 manual_knowledge_rules，右侧预览显示摘要。知识库「配置」页为同一份数据。"
                         />
                       ) : (
                         <p className="text-[13px] leading-relaxed text-[#6b7280]">
-                          尚未绑定知识库。补充规则保存在知识库中，请先绑定后再编辑。
+                          尚未绑定知识库。判定约定保存在知识库中，请先绑定后再编辑。
                         </p>
                       )}
                     </div>
@@ -1330,7 +1330,7 @@ export function AssistantSettings({
                 <div className="flex min-h-0 flex-1 flex-col">
                   <div className="flex shrink-0 gap-1 border-b border-[#e5e7eb] px-5 py-2 md:hidden">
                     {([
-                      ['rules', '补充规则'],
+                      ['rules', '本步补充规则'],
                       ['prompt', '预览'],
                     ] as const).map(([key, label]) => (
                       <button
@@ -1746,7 +1746,7 @@ function ManualRulesEditor({
         ))}
         {!rules.length && (
           <div className="rounded-lg border border-dashed border-[#e5e7eb] px-3 py-8 text-center text-[13px] text-[#9ca3af]">
-            暂无补充规则；多数判定可仅靠候选证据完成。
+            暂无判定约定；多数判定可仅靠候选证据完成。
           </div>
         )}
       </div>

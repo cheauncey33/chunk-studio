@@ -212,7 +212,7 @@ export default function DatasetSettingsPage() {
           <section className="space-y-3 rounded-xl border border-border-button bg-bg-base p-5">
             <h2 className="text-[16px] font-semibold">审查补充</h2>
             <p className="text-[14px] text-text-secondary">
-              型号命名规则是库属性，不参与检索。补充规则会全量注入审查助手的「对照标准判定」节点，由判定提示词按 allowed_use 约束使用。
+              型号命名规则是库属性，不参与检索。判定约定会全量注入审查助手的「对照标准判定」节点，由判定提示词按 allowed_use 约束使用；与审查配置里判定步左侧为同一份数据。
             </p>
               <div className="space-y-2">
                 <Label>型号命名规则 PDF</Label>
@@ -261,9 +261,9 @@ export default function DatasetSettingsPage() {
           <section className="space-y-3 rounded-xl border border-border-button bg-bg-base p-5">
             <div className="flex items-center justify-between gap-2">
               <div>
-                <Label>补充规则</Label>
+                <Label>判定约定</Label>
                 <p className="mt-0.5 text-[13px] text-text-secondary">
-                  写入判定节点上下文。规则宜写清适用条件与用法边界（可参考总损耗公式那条）。
+                  写入判定节点上下文（非各步提示词补充）。宜写清适用条件与用法边界（可参考总损耗公式那条）。
                 </p>
               </div>
               <Button

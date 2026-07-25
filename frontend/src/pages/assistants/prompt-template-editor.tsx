@@ -74,7 +74,7 @@ export function PromptTemplateEditor({
   queryPlannerRoutes,
   stepRules,
   fillHeight = false,
-  /** When true, only show runtime preview (left pane owns 补充规则). */
+  /** When true, only show runtime preview (left pane owns rules / 判定约定). */
   previewOnly = false,
 }: {
   stepId: string
@@ -183,7 +183,7 @@ export function PromptTemplateEditor({
               onClick={() => setEditingStatic(open => !open)}
               className="text-[12px] font-medium text-[#0f9f9f] hover:text-[#0b7f7f] disabled:opacity-50"
             >
-              {editingStatic ? '收起补充规则' : '编辑补充规则（可选）'}
+              {editingStatic ? '收起品类约束' : '编辑品类约束（可选）'}
             </button>
           )}
         </div>
@@ -275,7 +275,7 @@ export function PromptTemplateEditor({
                       )}
                     >
                       <div className="mb-1 font-sans text-[10px] font-semibold tracking-wide text-[#9ca3af]">
-                        {isFrameworkPreamble ? '框架 · 任务场景 / 本步任务' : '补充规则'}
+                        {isFrameworkPreamble ? '框架 · 任务场景 / 本步任务' : '本步补充规则'}
                       </div>
                       {segment.text}
                     </div>
@@ -317,7 +317,7 @@ export function PromptTemplateEditor({
 
       {!previewOnly && (
         <div className={cn('space-y-2', !editingStatic && 'hidden')}>
-          <Label className="text-[15px] text-[#6b7280]">补充规则（可选）</Label>
+          <Label className="text-[15px] text-[#6b7280]">品类约束（可选）</Label>
           <Textarea
             className="min-h-[8rem] resize-y rounded-xl border-[#e5e7eb] bg-white font-mono text-[13px] leading-relaxed"
             value={value}
@@ -329,8 +329,8 @@ export function PromptTemplateEditor({
                 : isQueryPlanner
                   ? '只写短品类约束（如表型区分、易混线索）；不要粘贴完整 Query Planner 或输出 JSON。'
                   : isAuditJudge
-                    ? '只写短品类判定提醒；不要粘贴完整 Judge 提示词或知识库补充规则正文（规则在左侧编辑）。'
-                    : '写本步可选补充规则；任务场景与本步任务由系统框架自动前置。'
+                    ? '只写短品类判定提醒；不要粘贴完整 Judge 提示词或判定约定正文（约定在左侧编辑）。'
+                    : '写本步可选品类约束；任务场景与本步任务由系统框架自动前置。本步结构化规则请在左侧「本步补充规则」编辑。'
             }
           />
         </div>

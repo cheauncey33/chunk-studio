@@ -42,7 +42,7 @@ STEP_AUTO_INJECT: dict[str, tuple[str, ...]] = {
 INJECT_TITLES: dict[str, str] = {
     "parameter_schema": "当前参数字段（系统注入）",
     "parameter_schema_json": "参数 schema JSON（系统注入）",
-    "manual_rules": "补充规则（系统注入）",
+    "manual_rules": "判定约定（系统注入）",
     "kb_name": "知识库名称（系统注入）",
     "kb_description": "知识库说明（系统注入）",
     "kb_context": "绑定知识库（系统注入）",
@@ -196,7 +196,7 @@ def format_step_rules_section(rules_payload: Any) -> list[str]:
     body = format_manual_rules(rules_payload)
     if body == EMPTY_VALUE:
         body = "（未配置）"
-    return ["", "补充规则（人工配置）：", body]
+    return ["", "本步补充规则（人工配置）：", body]
 
 
 def format_kb_context(kb_name: str | None, kb_description: str | None) -> str:
@@ -446,7 +446,7 @@ def format_audit_judge_brief(
         "- few_shot_examples：只对齐输出口径与状态选择，不是标准证据。",
         "- sample_context：已提取样品参数，仅作检索/适用性锚点，勿当作已证标准事实。",
         "",
-        "补充规则配置摘要（完整条文见输入 manual_knowledge_rules，此处不重复正文）：",
+        "判定约定摘要（完整条文见输入 manual_knowledge_rules，此处不重复正文）：",
     ]
     if rule_lines:
         parts.extend(rule_lines)
@@ -655,7 +655,7 @@ def build_runtime_prompt_segments(
         segments.append(
             {
                 "kind": "static",
-                "text": f"补充规则（人工配置）：\n{rules_body}",
+                "text": f"本步补充规则（人工配置）：\n{rules_body}",
                 "key": "",
                 "title": "",
             }

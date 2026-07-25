@@ -145,6 +145,7 @@ def test_audit_judge_brief_single_block_with_rules_summary() -> None:
     assert "`r1`" in out
     assert "总损耗 = 空载 + 负载" in out
     assert "## 补充规则" not in out
+    assert "## 判定约定" not in out
     assert "## 当前参数字段" not in out
     assert "必须出现在输出的 parameters" not in out
     assert "- model（" not in out
@@ -229,14 +230,14 @@ def test_step_rules_fold_into_briefs_and_notes_only_steps() -> None:
         assistant_rules=assistant_rules,
     )
     extraction = compose_runtime_prompt("", step_id="report_parameters", context=context)
-    assert "补充规则（人工配置）：" in extraction
+    assert "本步补充规则（人工配置）：" in extraction
     assert "- cool: 冷却方式未记载时不得臆测" in extraction
 
     planner = compose_runtime_prompt("", step_id="query_planner", context=context)
     assert "- tbl: 优先区分能效表与性能表" in planner
 
     test_items = compose_runtime_prompt("legacy notes", step_id="test_items", context=context)
-    assert "补充规则（人工配置）：" in test_items
+    assert "本步补充规则（人工配置）：" in test_items
     assert "- cont: 跨页续表继承项目名" in test_items
     assert "legacy notes" not in test_items
 
@@ -252,7 +253,7 @@ def test_test_items_model_decode_ignore_legacy_notes_without_step_rules() -> Non
     legacy = "# 通用检测报告项目提取 v1\n你是检测报告结构化提取器。"
     out = compose_runtime_prompt(legacy, step_id="test_items", context=context)
     assert "任务场景：" in out
-    assert "补充规则（人工配置）：" in out
+    assert "本步补充规则（人工配置）：" in out
     assert legacy not in out
     decode = compose_runtime_prompt(
         "只依据报告原始型号解析型号。严格输出 JSON：",
