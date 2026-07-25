@@ -1,13 +1,26 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, Bot, CircleHelp, FileText, Loader2, Pencil, Plus, Send, Trash2 } from 'lucide-react'
+import { Link, useBlocker, useNavigate, useParams } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  ArrowLeft,
+  Bot,
+  CheckCircle2,
+  ChevronRight,
+  CircleHelp,
+  FileText,
+  Loader2,
+  Pencil,
+  Plus,
+  Send,
+  Trash2,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import {
   api,
   type AssistantVersion,
   type AuditAssistant,
   type KnowledgeBase,
+  type ManualKnowledgeRules,
   type ParameterSchema,
   type ParameterSchemaField,
 } from '@/api'
@@ -21,15 +34,23 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input, Label, Textarea } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { SearchableMultiSelect, SearchableSelect } from '@/components/searchable-select'
 import { useAssistants, useKnowledgeBase, queryKeys } from '@/hooks/use-knowledge-request'
 import { GENERIC_TEMPLATE_ASSISTANT_ID } from '@/lib/assistants'
-import { useDevMode } from '@/lib/dev-mode'
 import { helpText } from '@/lib/help-text'
-import { cn, formatDate } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import {
+  resolveQueryPlannerRoutes,
+  type QueryPlannerRoute,
+} from '@/lib/query-planner-routes'
 import { AssistantInitDraftCard } from '@/pages/assistants/init-draft-card'
+import { PromptTemplateEditor } from '@/pages/assistants/prompt-template-editor'
+import {
+  getStepRulesFromVersionRules,
+  setStepRulesOnVersionRules,
+  type StepRuleDraft,
+} from '@/lib/step-rules'
 
 const RAGFLOW_TEAL = '#13c2c2'
 
@@ -45,9 +66,107 @@ const FLOW_STEPS = [
 
 type FlowStepId = (typeof FLOW_STEPS)[number]['id']
 type MainTab = 'chat' | 'workflow'
+type ManualRuleDraft = NonNullable<ManualKnowledgeRules['rules']>[number]
+
+function normalizeManualRuleDrafts(payload: ManualKnowledgeRules | null | undefined): ManualRuleDraft[] {
+  const rules = Array.isArray(payload?.rules) ? payload.rules : []
+  return rules
+    .filter((item): item is ManualRuleDraft => Boolean(item && typeof item === 'object'))
+    .map(item => ({ ...item }))
+}
+
+function emptyManualRule(): ManualRuleDraft {
+  return {
+    rule_id: `rule_${Date.now().toString(36)}`,
+    rule_text: '',
+    domain: 'standard_value_audit',
+    rule_type: 'manual',
+  }
+}
+
+function manualRulesSignature(rules: ManualRuleDraft[]): string {
+  return JSON.stringify(rules.map(item => ({
+    rule_id: String(item.rule_id || ''),
+    rule_text: String(item.rule_text || ''),
+    domain: String(item.domain || ''),
+    rule_type: String(item.rule_type || ''),
+    allowed_use: item.allowed_use ?? null,
+    applies_when: item.applies_when ?? null,
+  })))
+}
+
+function versionDraftSignature(version: AssistantVersion | null, knowledgeBaseIds: Iterable<string>) {
+  if (!version) return ''
+  return JSON.stringify({
+    model_config: version.model_config,
+    node_prompts: version.node_prompts,
+    rules: version.rules,
+    retrieval_config: version.retrieval_config,
+    parameter_schema: version.parameter_schema,
+    initialization_provenance: version.initialization_provenance,
+    knowledge_base_ids: [...knowledgeBaseIds].sort(),
+  })
+}
 
 const NO_PROMPT_STEPS = new Set<FlowStepId>(['candidate_retrieval', 'result_summary'])
 const EDITABLE_STEPS = FLOW_STEPS.filter(step => !NO_PROMPT_STEPS.has(step.id))
+
+const PRODUCT_FLOW_STEPS: Array<{
+  id: FlowStepId
+  label: string
+  summary: string
+  kind: 'AI' | '检索' | '汇总'
+  /** Open editor when set; omit for steps without editable prompts. */
+  editStepId?: FlowStepId
+}> = [
+  {
+    id: 'report_parameters',
+    label: '提取报告参数',
+    summary: '抽取样品/报告级参数，供后续适用性与检索锚点',
+    kind: 'AI',
+    editStepId: 'report_parameters',
+  },
+  {
+    id: 'test_items',
+    label: '提取检测项目',
+    summary: '从汇总表提取检测项目与报告标准要求',
+    kind: 'AI',
+    editStepId: 'test_items',
+  },
+  {
+    id: 'model_decode',
+    label: '解析型号规则',
+    summary: '按命名规则解析型号，产出检索用语（可选）',
+    kind: 'AI',
+    editStepId: 'model_decode',
+  },
+  {
+    id: 'query_planner',
+    label: '规划检索问题',
+    summary: '为单条标准要求生成多路检索 Query',
+    kind: 'AI',
+    editStepId: 'query_planner',
+  },
+  {
+    id: 'candidate_retrieval',
+    label: '查找候选证据',
+    summary: '按规划结果在本库检索标准 Chunk（无独立提示词）',
+    kind: '检索',
+  },
+  {
+    id: 'audit_judge',
+    label: '对照标准判定',
+    summary: '用候选证据与补充规则判定该条要求',
+    kind: 'AI',
+    editStepId: 'audit_judge',
+  },
+  {
+    id: 'result_summary',
+    label: '汇总结果',
+    summary: '汇总各条判定与证据说明（无独立提示词）',
+    kind: '汇总',
+  },
+]
 
 const MODEL_OPTIONS = [
   { value: 'deepseek-v4-flash', label: 'deepseek-v4-flash', hint: 'ds', group: 'DeepSeek' },
@@ -182,21 +301,26 @@ export function AssistantSettings({
   hideKnowledgePicker?: boolean
 }) {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [version, setVersion] = useState<AssistantVersion | null>(null)
+  const [baselineVersion, setBaselineVersion] = useState<AssistantVersion | null>(null)
   const [kbSelected, setKbSelected] = useState(() =>
     lockedKnowledgeBaseId
       ? new Set([lockedKnowledgeBaseId])
       : new Set(assistant.knowledge_bases.map(item => item.id)),
   )
+  const [draftManualRules, setDraftManualRules] = useState<ManualRuleDraft[]>([])
+  const [baselineManualRules, setBaselineManualRules] = useState<ManualRuleDraft[]>([])
   const [saving, setSaving] = useState(false)
-  const [activatingVersionId, setActivatingVersionId] = useState<string | null>(null)
   const [mainTab, setMainTab] = useState<MainTab>(initialTab)
   const [editStepId, setEditStepId] = useState<FlowStepId | null>(null)
-  const [devMode] = useDevMode()
-  const visibleSteps = useMemo(
-    () => (devMode ? EDITABLE_STEPS : EDITABLE_STEPS.filter(step => step.id === 'report_parameters')),
-    [devMode],
-  )
+  const [queryPlannerPane, setQueryPlannerPane] = useState<'routes' | 'rules' | 'prompt'>('routes')
+  const [auditJudgePane, setAuditJudgePane] = useState<'rules' | 'prompt'>('rules')
+  const [reportParamsPane, setReportParamsPane] = useState<'fields' | 'rules' | 'prompt'>('fields')
+  const [notesOnlyPane, setNotesOnlyPane] = useState<'rules' | 'prompt'>('rules')
+  const [confirmAction, setConfirmAction] = useState<'reinitialize' | null>(null)
+  const [initializing, setInitializing] = useState(false)
+  const [pendingInitialization, setPendingInitialization] = useState(false)
   const [chatInput, setChatInput] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
   const [messages, setMessages] = useState<
@@ -214,16 +338,6 @@ export function AssistantSettings({
   >([])
 
   useEffect(() => {
-    if (!devMode && editStepId && editStepId !== 'report_parameters') {
-      setEditStepId(null)
-    }
-  }, [devMode, editStepId])
-
-  useEffect(() => {
-    setMainTab(initialTab)
-  }, [initialTab])
-
-  useEffect(() => {
     setMainTab(initialTab)
   }, [initialTab])
 
@@ -236,22 +350,75 @@ export function AssistantSettings({
   const primaryKbId = [...kbSelected][0] || lockedKnowledgeBaseId || ''
   const { data: boundKb } = useKnowledgeBase(primaryKbId || undefined)
 
-  const versionsQuery = useQuery({
-    queryKey: queryKeys.assistantVersions(assistant.id),
-    queryFn: () => api.listAssistantVersions(assistant.id),
-  })
+  useEffect(() => {
+    if (!boundKb) {
+      setDraftManualRules([])
+      setBaselineManualRules([])
+      return
+    }
+    const next = normalizeManualRuleDrafts(boundKb.manual_rules)
+    setDraftManualRules(next)
+    setBaselineManualRules(next)
+  }, [boundKb?.id, boundKb?.updated_at])
+
   const activeQuery = useQuery({
     queryKey: queryKeys.assistantVersion(assistant.id),
     queryFn: () => api.getActiveAssistantVersion(assistant.id),
   })
+  const hasActiveVersion = Boolean(activeQuery.data || assistant.active_version)
+  const showInitializationPage = Boolean(
+    lockedKnowledgeBaseId
+    && assistant.id !== GENERIC_TEMPLATE_ASSISTANT_ID
+    && (initializing || !hasActiveVersion),
+  )
 
   useEffect(() => {
-    setVersion(activeQuery.data || null)
+    const active = activeQuery.data || null
+    setVersion(active)
+    setBaselineVersion(active)
   }, [activeQuery.data])
 
   useEffect(() => {
     setKbSelected(new Set(assistant.knowledge_bases.map(item => item.id)))
   }, [assistant])
+
+  useEffect(() => {
+    setInitializing(false)
+    setConfirmAction(null)
+    setPendingInitialization(false)
+  }, [assistant.id])
+
+  const isDirty = useMemo(() => {
+    const versionDirty = versionDraftSignature(version, kbSelected)
+      !== versionDraftSignature(
+        baselineVersion,
+        assistant.knowledge_bases.map(item => item.id),
+      )
+    const rulesDirty = manualRulesSignature(draftManualRules)
+      !== manualRulesSignature(baselineManualRules)
+    return versionDirty || rulesDirty
+  }, [
+    assistant.knowledge_bases,
+    baselineManualRules,
+    baselineVersion,
+    draftManualRules,
+    kbSelected,
+    version,
+  ])
+  const navigationBlocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      isDirty && currentLocation.pathname !== nextLocation.pathname,
+  )
+
+  useEffect(() => {
+    if (!isDirty) return
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warnBeforeUnload)
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload)
+  }, [isDirty])
 
   const jumpToReportParameters = () => {
     setMainTab('workflow')
@@ -266,6 +433,16 @@ export function AssistantSettings({
         {
           label: '参数 schema',
           value: schemaCount ? `${schemaCount} 个字段（本步主配置）` : '尚未配置字段',
+        },
+      ],
+      test_items: [
+        {
+          label: '输入',
+          value: '报告 Markdown（检测结果汇总及跨页续表）',
+        },
+        {
+          label: '产出',
+          value: '检测项目列表 + 各条报告标准要求 + sample_context',
         },
       ],
       model_decode: [
@@ -283,7 +460,9 @@ export function AssistantSettings({
       audit_judge: [
         {
           label: '补充规则',
-          value: '来自知识库 manual_rules / few-shot（若有）',
+          value: draftManualRules.length
+            ? `${draftManualRules.length} 条（本步左侧编辑，写入知识库）`
+            : '未配置（可选；本步左侧可添加）',
         },
       ],
       candidate_retrieval: [
@@ -294,7 +473,7 @@ export function AssistantSettings({
       ],
     }
     return map
-  }, [boundKb, version])
+  }, [boundKb, draftManualRules.length, version])
 
   const currentModel = String(version?.model_config?.model || 'deepseek-v4-flash')
   const modelOptions = useMemo(
@@ -343,8 +522,34 @@ export function AssistantSettings({
     setVersion({ ...version, parameter_schema: next })
   }
 
-  const saveAll = async () => {
+  const updateQueryPlannerRoutes = (next: QueryPlannerRoute[]) => {
     if (!version) return
+    setVersion({
+      ...version,
+      retrieval_config: {
+        ...version.retrieval_config,
+        query_planner_routes: resolveQueryPlannerRoutes(next),
+      },
+    })
+  }
+
+  const updateStepRules = (stepId: string, rules: StepRuleDraft[]) => {
+    if (!version) return
+    setVersion({
+      ...version,
+      rules: setStepRulesOnVersionRules(version.rules, stepId, rules),
+    })
+  }
+
+  const stepRulesFor = (stepId: string) => getStepRulesFromVersionRules(version?.rules, stepId)
+
+  const queryPlannerRoutes = useMemo(
+    () => resolveQueryPlannerRoutes(version?.retrieval_config?.query_planner_routes),
+    [version?.retrieval_config?.query_planner_routes],
+  )
+
+  const saveAll = async (): Promise<boolean> => {
+    if (!version) return false
     setSaving(true)
     try {
       if (!hideKnowledgePicker) {
@@ -353,43 +558,78 @@ export function AssistantSettings({
           : [...kbSelected]
         await api.setAssistantKnowledgeBases(assistant.id, kbIds)
       }
-      await api.createAssistantVersion(assistant.id, {
+      if (primaryKbId) {
+        const savedKb = await api.updateKnowledgeBase(primaryKbId, {
+          manual_rules: {
+            version: Number(boundKb?.manual_rules?.version || 1),
+            scope: 'knowledge_base_manual_rules',
+            status: String(boundKb?.manual_rules?.status || 'draft'),
+            rules: draftManualRules,
+          },
+        })
+        setDraftManualRules(normalizeManualRuleDrafts(savedKb.manual_rules))
+        setBaselineManualRules(normalizeManualRuleDrafts(savedKb.manual_rules))
+        await queryClient.invalidateQueries({ queryKey: queryKeys.knowledgeBases })
+      }
+      const saved = await api.updateActiveAssistantVersion(assistant.id, {
         model_config: version.model_config,
         node_prompts: version.node_prompts,
         rules: version.rules,
         retrieval_config: version.retrieval_config,
         parameter_schema: version.parameter_schema,
-        category_profile: version.category_profile,
         initialization_provenance: version.initialization_provenance,
       })
-      await Promise.all([activeQuery.refetch(), versionsQuery.refetch()])
+      setVersion(saved)
+      setBaselineVersion(saved)
+      await activeQuery.refetch()
       onChanged()
       toast.success('已保存')
+      return true
     } catch (err) {
       toast.error((err as Error).message)
+      return false
     } finally {
       setSaving(false)
     }
   }
 
-  const selectVersion = async (item: AssistantVersion) => {
-    if (item.status === 'active') {
-      setVersion(item)
+  const requestReinitialize = () => {
+    if (showInitializationPage) return
+    if (isDirty) {
+      setPendingInitialization(true)
       return
     }
-    if (activatingVersionId) return
-    setActivatingVersionId(item.id)
-    try {
-      const active = await api.activateAssistantVersion(assistant.id, item.id)
-      setVersion(active)
-      await Promise.all([activeQuery.refetch(), versionsQuery.refetch()])
-      onChanged()
-      toast.success(`已切换并启用 v${active.version}`)
-    } catch (err) {
-      toast.error((err as Error).message)
-    } finally {
-      setActivatingVersionId(null)
+    setConfirmAction('reinitialize')
+  }
+
+  const cancelUnsavedTransition = () => {
+    setPendingInitialization(false)
+    if (navigationBlocker.state === 'blocked') navigationBlocker.reset()
+  }
+
+  const discardUnsavedAndContinue = async () => {
+    const shouldInitialize = pendingInitialization
+    setPendingInitialization(false)
+    if (shouldInitialize) {
+      setVersion(baselineVersion)
+      setKbSelected(new Set(assistant.knowledge_bases.map(item => item.id)))
+      setDraftManualRules(baselineManualRules)
+      setConfirmAction('reinitialize')
+      return
     }
+    if (navigationBlocker.state === 'blocked') navigationBlocker.proceed()
+  }
+
+  const saveUnsavedAndContinue = async () => {
+    const shouldInitialize = pendingInitialization
+    const saved = await saveAll()
+    if (!saved) return
+    setPendingInitialization(false)
+    if (shouldInitialize) {
+      setConfirmAction('reinitialize')
+      return
+    }
+    if (navigationBlocker.state === 'blocked') navigationBlocker.proceed()
   }
 
   const sendChat = async () => {
@@ -426,6 +666,16 @@ export function AssistantSettings({
 
   const vectorWeight = Number(version?.retrieval_config.vector_weight ?? 0.7)
   const keywordWeight = Math.round((1 - vectorWeight) * 100) / 100
+  const manualRulesPayload = useMemo(
+    (): ManualKnowledgeRules => ({
+      version: Number(boundKb?.manual_rules?.version || 1),
+      scope: 'knowledge_base_manual_rules',
+      status: String(boundKb?.manual_rules?.status || 'draft'),
+      rules: draftManualRules,
+    }),
+    [boundKb?.manual_rules?.status, boundKb?.manual_rules?.version, draftManualRules],
+  )
+  const ruleReviewStatus = String(boundKb?.manual_rules?.status || version?.rules?.status || '')
 
   return (
     <div className={cn('flex h-full overflow-hidden', embedded ? 'bg-transparent' : 'bg-[#f8fafc]')}>
@@ -444,9 +694,13 @@ export function AssistantSettings({
               </Button>
             )}
             <div className="min-w-0">
-              <h1 className="truncate text-[18px] font-semibold text-[#111827]">{assistant.name}</h1>
-              <p className="text-[15px] text-[#6b7280]">
-                {mainTab === 'chat' ? '知识库问答' : '审查配置'} · 当前 v{assistant.active_version || '—'}
+              <h1 className="truncate text-[24px] font-semibold tracking-tight text-[#111827]">
+                {mainTab === 'workflow' && embedded ? '审查配置' : assistant.name}
+              </h1>
+              <p className="text-[14px] text-[#6b7280]">
+                {mainTab === 'chat'
+                  ? '知识库问答 · 使用已保存的审查配置'
+                  : '配置本知识库的报告识别、审查流程与补充约定。'}
               </p>
             </div>
           </div>
@@ -589,189 +843,639 @@ export function AssistantSettings({
         </div>
         ) : (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[16px] font-medium text-[#111827]">审查配置</p>
-                <p className="text-[13px] text-[#6b7280]" title={helpText.assistants.tabWorkflow}>
-                  {devMode
-                    ? '开发者模式：可编辑各步提示词。改完后保存为新版本。'
-                    : '日常只需改报告参数字段。其它步骤提示词请在系统设置打开开发者模式。'}
-                </p>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e7eb] pb-4">
+              <div className="flex items-center gap-2 text-[14px] text-[#4b5563]">
+                <span
+                  className={cn(
+                    'size-2 rounded-full',
+                    showInitializationPage ? 'bg-[#f59e0b]' : 'bg-[#13c2c2]',
+                  )}
+                />
+                <span className="font-medium text-[#111827]">
+                  {showInitializationPage ? '初始化审查配置' : '审查配置'}
+                </span>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {(versionsQuery.data || []).map(item => {
-                  const isActive = item.status === 'active'
-                  const busy = activatingVersionId === item.id
-                  return (
-                    <button
-                      key={item.id}
+              <div className="flex items-center gap-2">
+                {showInitializationPage && hasActiveVersion ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="rounded-lg"
+                    onClick={() => setInitializing(false)}
+                  >
+                    返回配置
+                  </Button>
+                ) : null}
+                {!showInitializationPage && (
+                  <>
+                    <Button
                       type="button"
-                      className={cn(
-                        'rounded-lg px-2.5 py-1 text-[13px] transition disabled:opacity-60',
-                        isActive
-                          ? 'bg-[#111827] text-white'
-                          : 'bg-[#f3f4f6] text-[#4b5563] hover:bg-[#e5e7eb]',
-                      )}
-                      disabled={busy || !!activatingVersionId}
-                      onClick={() => void selectVersion(item)}
-                      title={isActive ? '当前启用版本' : '切换并启用此版本'}
+                      size="sm"
+                      variant="outline"
+                      className="rounded-lg"
+                      disabled={saving || !version}
+                      onClick={requestReinitialize}
                     >
-                      v{item.version}
-                      {busy ? '…' : isActive ? ' · 当前' : ''}
-                    </button>
-                  )
-                })}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="rounded-lg border-[#e5e7eb]"
-                  disabled={saving || !version}
-                  onClick={() => {
-                    setVersion(activeQuery.data || null)
-                    setKbSelected(new Set(assistant.knowledge_bases.map(item => item.id)))
-                    toast.message('已还原为当前启用版本')
-                  }}
-                >
-                  取消
-                </Button>
-                <Button
-                  size="sm"
-                  className="rounded-lg bg-[#111827] text-white hover:bg-[#1f2937]"
-                  disabled={saving || !version}
-                  onClick={() => void saveAll()}
-                  title={helpText.assistants.saveVersion}
-                >
-                  {saving ? '保存中…' : '保存'}
-                </Button>
+                      重新初始化
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="rounded-lg bg-[#13c2c2] text-white hover:bg-[#0fb3b3]"
+                      disabled={saving || !version}
+                      onClick={() => void saveAll()}
+                      title={helpText.assistants.saveVersion}
+                    >
+                      {saving ? '保存中…' : '保存'}
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
 
-            {(lockedKnowledgeBaseId && assistant.id !== GENERIC_TEMPLATE_ASSISTANT_ID) || visibleSteps.length > 0 ? (
-              <div className="space-y-2 rounded-xl border border-[#e5e7eb] bg-[#f8fafc] p-3">
-                {lockedKnowledgeBaseId && assistant.id !== GENERIC_TEMPLATE_ASSISTANT_ID && (
-                  <AssistantInitDraftCard
-                    bare
-                    assistantId={assistant.id}
-                    activeVersion={assistant.active_version}
-                    onJumpToReportParameters={jumpToReportParameters}
-                    onApplied={({ version: versionNo }) => {
-                      void activeQuery.refetch()
-                      void versionsQuery.refetch()
-                      onChanged()
-                      jumpToReportParameters()
-                      if (versionNo) {
-                        toast.success(`审查配置已切换到已启用版本 v${versionNo}`)
-                      }
-                    }}
-                  />
-                )}
-
-                {visibleSteps.length > 0 && (
-                  <div
-                    className={cn(
-                      'space-y-1.5',
-                      lockedKnowledgeBaseId && assistant.id !== GENERIC_TEMPLATE_ASSISTANT_ID
-                        && 'border-t border-[#e5e7eb] pt-2',
-                    )}
-                  >
-                    {visibleSteps.map(step => {
-                      const fieldCount = version?.parameter_schema?.fields?.length || 0
-                      const summary =
-                        step.id === 'report_parameters'
-                          ? `${fieldCount} 个字段`
-                          : '系统提示词'
+            {showInitializationPage ? (
+              <div className="mx-auto max-w-3xl py-4">
+                <AssistantInitDraftCard
+                  bare
+                  initializationOnly
+                  assistantId={assistant.id}
+                  activeVersion={assistant.active_version}
+                  onJumpToReportParameters={jumpToReportParameters}
+                  onApplied={() => {
+                    setInitializing(false)
+                    void activeQuery.refetch()
+                    onChanged()
+                    jumpToReportParameters()
+                    toast.success('已更新审查配置')
+                  }}
+                />
+              </div>
+            ) : (
+            <>
+            <div className="min-w-0">
+              <div className="min-w-0">
+                <section className="border-b border-[#e5e7eb] py-4 first:pt-0">
+                  <div className="mb-3">
+                    <h2 className="text-[17px] font-semibold text-[#111827]">审查流程</h2>
+                    <p className="mt-1 text-[13px] text-[#6b7280]">
+                      完整审查流水线共 {PRODUCT_FLOW_STEPS.length} 步；点击 AI 步骤可编辑配置与预览提示词，改完后点右上角「保存」。
+                    </p>
+                  </div>
+                  <ol className="divide-y divide-[#e5e7eb] border-y border-[#e5e7eb]">
+                    {PRODUCT_FLOW_STEPS.map((step, index) => {
+                      const canEdit = Boolean(step.editStepId)
+                      const editTitle =
+                        step.editStepId === 'report_parameters'
+                          ? '修改字段与补充规则'
+                          : step.editStepId === 'query_planner'
+                            ? '修改改写形式与补充规则'
+                            : step.editStepId === 'audit_judge'
+                              ? '修改补充规则与提示词'
+                              : step.editStepId
+                                ? '修改本步补充规则'
+                                : ''
                       return (
-                        <div
+                        <li
                           key={step.id}
-                          className="flex items-center gap-3 rounded-lg border border-[#e5e7eb] bg-white px-3 py-2"
+                          className={cn(
+                            'group grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-3 py-3 sm:grid-cols-[2rem_minmax(0,1fr)_8rem]',
+                            canEdit && version && 'cursor-pointer rounded-lg hover:bg-[#f8fafc]',
+                          )}
+                          onClick={() => {
+                            if (canEdit && version) setEditStepId(step.editStepId || null)
+                          }}
                         >
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate text-[14px] font-medium text-[#111827]">{step.label}</div>
-                            <div className="truncate text-[12px] text-[#9ca3af]">{summary}</div>
+                          <span className="grid size-7 place-items-center rounded-full border border-[#13c2c2] text-[12px] font-medium text-[#0f9f9f]">
+                            {index + 1}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-[14px] font-medium text-[#374151]">{step.label}</span>
+                              <span className="rounded bg-[#f3f4f6] px-1.5 py-0.5 text-[11px] text-[#6b7280]">
+                                {step.kind}
+                              </span>
+                            </div>
+                            <div className="truncate text-[12px] text-[#9ca3af]">{step.summary}</div>
                           </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-8 shrink-0 rounded-lg"
-                            disabled={!version}
-                            onClick={() => setEditStepId(step.id)}
-                          >
-                            <Pencil className="size-3.5" />
-                            修改
-                          </Button>
-                        </div>
+                          <div className="flex items-center justify-end sm:grid sm:grid-cols-[4.5rem_2rem] sm:gap-2">
+                            <span className="hidden items-center gap-1 text-[12px] text-[#6b7280] sm:flex">
+                              {canEdit ? (
+                                <>
+                                  <CheckCircle2 className="size-3.5 text-[#13c2c2]" />
+                                  可配置
+                                </>
+                              ) : (
+                                <span className="text-[#9ca3af]">系统步骤</span>
+                              )}
+                            </span>
+                            {canEdit ? (
+                              <button
+                                type="button"
+                                className="grid size-7 place-items-center justify-self-end rounded-md text-[#0f9f9f] transition hover:bg-[#ecfdfd] hover:text-[#0b7f7f] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#13c2c2]/30 disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={!version}
+                                onClick={event => {
+                                  event.stopPropagation()
+                                  setEditStepId(step.editStepId || null)
+                                }}
+                                title={editTitle}
+                                aria-label={editTitle}
+                              >
+                                <Pencil className="size-3.5" />
+                              </button>
+                            ) : (
+                              <span aria-hidden className="hidden sm:block" />
+                            )}
+                          </div>
+                        </li>
                       )
                     })}
+                  </ol>
+                </section>
+
+                <section className="py-4">
+                  <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+                    <div>
+                      <h2 className="text-[17px] font-semibold text-[#111827]">补充规则</h2>
+                      <p className="mt-1 text-[13px] text-[#6b7280]">
+                        {draftManualRules.length} 条 · 在「审查判定」步骤中编辑
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 text-[#0f9f9f]"
+                      onClick={() => setEditStepId('audit_judge')}
+                    >
+                      编辑规则
+                    </Button>
                   </div>
-                )}
+                  <div className="divide-y divide-[#e5e7eb] rounded-lg border border-[#e5e7eb]">
+                    {draftManualRules.map((rule, index) => (
+                      <details key={String(rule.rule_id || index)} className="group bg-white">
+                        <summary className="grid cursor-pointer list-none grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-3">
+                          <ChevronRight className="size-4 text-[#9ca3af] transition group-open:rotate-90" />
+                          <span className="truncate text-[14px] text-[#374151]">
+                            {String(rule.rule_text || rule.rule_id || `补充约定 ${index + 1}`)}
+                          </span>
+                          <span className="flex items-center gap-1.5 text-[12px] text-[#a16207]">
+                            <span className="size-2 rounded-full bg-[#f59e0b]" />
+                            {ruleReviewStatus.includes('pending') ? '待领域复核' : '已配置'}
+                          </span>
+                        </summary>
+                        <div className="border-t border-[#e5e7eb] bg-[#f8fafc] px-10 py-3 text-[13px] leading-relaxed text-[#6b7280]">
+                          <p>{String(rule.rule_text || '')}</p>
+                          {Array.isArray(rule.applies_when) && (
+                            <ul className="mt-2 list-disc space-y-1 pl-5">
+                              {rule.applies_when.map(item => <li key={String(item)}>{String(item)}</li>)}
+                            </ul>
+                          )}
+                        </div>
+                      </details>
+                    ))}
+                    {!draftManualRules.length && (
+                      <div className="px-3 py-8 text-center text-[13px] text-[#9ca3af]">暂无补充约定</div>
+                    )}
+                  </div>
+                </section>
               </div>
-            ) : null}
+
+            </div>
+            </>
+            )}
           </div>
 
-          <Dialog open={editStepId !== null} onOpenChange={open => !open && setEditStepId(null)}>
+          <Dialog
+            open={editStepId !== null}
+            onOpenChange={open => {
+              if (!open) {
+                setEditStepId(null)
+                setReportParamsPane('fields')
+                setQueryPlannerPane('routes')
+                setAuditJudgePane('rules')
+                setNotesOnlyPane('rules')
+              }
+            }}
+          >
             <DialogContent
-              className="flex h-[min(780px,90vh)] w-[min(820px,92vw)] max-w-none flex-col gap-0 overflow-hidden p-0"
+              className="flex h-[min(860px,92vh)] w-[min(1280px,96vw)] max-w-none flex-col gap-0 overflow-hidden p-0"
               aria-describedby={undefined}
             >
               <DialogHeader className="shrink-0 border-b border-[#e5e7eb] px-5 py-4">
                 <DialogTitle>
-                  {EDITABLE_STEPS.find(step => step.id === editStepId)?.label || '编辑步骤'}
+                  {PRODUCT_FLOW_STEPS.find(step => step.id === editStepId)?.label
+                    || EDITABLE_STEPS.find(step => step.id === editStepId)?.label
+                    || '编辑步骤'}
                 </DialogTitle>
-                <DialogDescription className="sr-only">
-                  在弹窗中修改本步配置，关闭后记得点「保存」。
+                <DialogDescription className="text-[13px] text-[#6b7280]">
+                  {editStepId === 'report_parameters'
+                    ? '左侧改字段或人工补充规则，右侧为本步预览提示词。关闭后记得点「保存」。'
+                    : editStepId === 'query_planner'
+                      ? '左侧勾选改写形式或添加人工补充规则，右侧为本步预览提示词。关闭后记得点「保存」。'
+                      : editStepId === 'audit_judge'
+                        ? '左侧编辑知识库补充规则（人工），右侧为本步预览提示词。关闭后记得点「保存」。'
+                        : '左侧添加本步人工补充规则，右侧为本步预览提示词（琥珀色为变量）。关闭后记得点「保存」。'}
                 </DialogDescription>
               </DialogHeader>
-              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-                {editStepId && (stepBindings[editStepId] || []).length > 0 && (
-                  <div className="space-y-1.5 rounded-xl border border-[#e5e7eb] bg-[#f8fafc] px-3 py-2.5">
-                    <div className="text-[13px] font-medium text-[#374151]">运行时绑定</div>
-                    {stepBindings[editStepId]!.map(item => (
-                      <div key={item.label} className="text-[13px] leading-relaxed text-[#6b7280]">
-                        <span className="font-medium text-[#4b5563]">{item.label}：</span>
-                        {item.value}
-                      </div>
+              {editStepId === 'report_parameters' && version?.parameter_schema ? (
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="flex shrink-0 gap-1 border-b border-[#e5e7eb] px-5 py-2 md:hidden">
+                    {([
+                      ['fields', '字段'],
+                      ['rules', '补充规则'],
+                      ['prompt', '预览'],
+                    ] as const).map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className={cn(
+                          'rounded-md px-3 py-1.5 text-[13px]',
+                          reportParamsPane === key
+                            ? 'bg-[#ecfdfd] font-medium text-[#0f766e]'
+                            : 'text-[#6b7280] hover:bg-[#f3f4f6]',
+                        )}
+                        onClick={() => setReportParamsPane(key)}
+                      >
+                        {label}
+                      </button>
                     ))}
                   </div>
-                )}
-                {editStepId === 'report_parameters' && version?.parameter_schema && (
-                  <ParameterSchemaEditor
-                    schema={version.parameter_schema}
-                    onChange={updateParameterSchema}
-                  />
-                )}
-                {editStepId === 'report_parameters' && !devMode && (
-                  <p className="text-[13px] text-[#9ca3af]">
-                    日常改上面的字段即可，保存后抽参会按新字段列表执行。系统提示词请在「设置 → 开发者模式」开启后编辑。
-                  </p>
-                )}
-                {editStepId
-                  && (devMode || editStepId !== 'report_parameters') && (
-                  <div className="space-y-2">
-                    <Label className="text-[15px] text-[#6b7280]">系统提示词</Label>
-                    <Textarea
-                      className="min-h-[16rem] resize-y rounded-xl border-[#e5e7eb] bg-[#f9fafb] font-mono text-[13px] leading-relaxed"
-                      value={version?.node_prompts[editStepId]?.content || ''}
-                      onChange={e => updatePrompt(e.target.value)}
-                      disabled={!version}
-                      placeholder="告诉大模型这一步该怎么做。改完后关闭弹窗并点「保存」。"
-                    />
-                    <p className="truncate text-[13px] text-[#6b7280]">
-                      {version?.node_prompts[editStepId]?.path || '内置逻辑'}
-                    </p>
-                    {editStepId === 'report_parameters' && (
-                      <p className="text-[12px] text-[#9ca3af]">
-                        提示：改字段列表不会自动改写这段提示词；抽参以字段 schema 为准。
-                      </p>
-                    )}
+                  <div className="grid min-h-0 flex-1 md:grid-cols-2">
+                    <div
+                      className={cn(
+                        'min-h-0 border-[#e5e7eb] px-5 py-4 md:border-r',
+                        reportParamsPane === 'prompt' ? 'hidden md:flex md:flex-col' : 'flex flex-col',
+                        reportParamsPane === 'rules' ? 'overflow-hidden' : 'overflow-y-auto',
+                      )}
+                    >
+                      <div className="mb-3 hidden shrink-0 gap-1 md:flex">
+                        {([
+                          ['fields', '字段'],
+                          ['rules', '补充规则'],
+                        ] as const).map(([key, label]) => {
+                          const active = reportParamsPane === key
+                            || (reportParamsPane === 'prompt' && key === 'fields')
+                          return (
+                            <button
+                              key={key}
+                              type="button"
+                              className={cn(
+                                'rounded-md px-3 py-1.5 text-[13px]',
+                                active
+                                  ? 'bg-[#ecfdfd] font-medium text-[#0f766e]'
+                                  : 'text-[#6b7280] hover:bg-[#f3f4f6]',
+                              )}
+                              onClick={() => setReportParamsPane(key)}
+                            >
+                              {label}
+                            </button>
+                          )
+                        })}
+                      </div>
+                      {reportParamsPane === 'rules' ? (
+                        <ManualRulesEditor
+                          rules={stepRulesFor('report_parameters')}
+                          onChange={rules => updateStepRules('report_parameters', rules)}
+                          hint="人工为本步添加的规则（标识 + 正文），写入助手配置并出现在右侧琥珀色变量区。"
+                        />
+                      ) : (
+                        <ParameterSchemaEditor
+                          schema={version.parameter_schema}
+                          onChange={updateParameterSchema}
+                          splitPane
+                        />
+                      )}
+                    </div>
+                    <div
+                      className={cn(
+                        'min-h-0 overflow-hidden px-5 py-4',
+                        reportParamsPane === 'prompt' ? 'flex flex-col' : 'hidden md:flex md:flex-col',
+                      )}
+                    >
+                      <PromptTemplateEditor
+                        stepId="report_parameters"
+                        value={version.node_prompts.report_parameters?.content || ''}
+                        onChange={updatePrompt}
+                        disabled={!version}
+                        pathHint={version.node_prompts.report_parameters?.path || '内置逻辑'}
+                        parameterSchema={version.parameter_schema}
+                        manualRules={manualRulesPayload}
+                        stepRules={stepRulesFor('report_parameters')}
+                        kbName={boundKb?.name || assistant.knowledge_bases.find(kb => kb.id === primaryKbId)?.name}
+                        kbDescription={boundKb?.description || ''}
+                        fillHeight
+                        previewOnly
+                      />
+                    </div>
                   </div>
-                )}
-              </div>
+                </div>
+              ) : editStepId === 'query_planner' && version ? (
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="flex shrink-0 gap-1 border-b border-[#e5e7eb] px-5 py-2 md:hidden">
+                    {([
+                      ['routes', '改写形式'],
+                      ['rules', '补充规则'],
+                      ['prompt', '预览'],
+                    ] as const).map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className={cn(
+                          'rounded-md px-3 py-1.5 text-[13px]',
+                          queryPlannerPane === key
+                            ? 'bg-[#ecfdfd] font-medium text-[#0f766e]'
+                            : 'text-[#6b7280] hover:bg-[#f3f4f6]',
+                        )}
+                        onClick={() => setQueryPlannerPane(key)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid min-h-0 flex-1 md:grid-cols-2">
+                    <div
+                      className={cn(
+                        'min-h-0 border-[#e5e7eb] px-5 py-4 md:border-r',
+                        queryPlannerPane === 'prompt' ? 'hidden md:flex md:flex-col' : 'flex flex-col',
+                        queryPlannerPane === 'rules' ? 'overflow-hidden' : 'overflow-y-auto',
+                      )}
+                    >
+                      <div className="mb-3 hidden shrink-0 gap-1 md:flex">
+                        {([
+                          ['routes', '改写形式'],
+                          ['rules', '补充规则'],
+                        ] as const).map(([key, label]) => {
+                          const active = queryPlannerPane === key
+                            || (queryPlannerPane === 'prompt' && key === 'routes')
+                          return (
+                            <button
+                              key={key}
+                              type="button"
+                              className={cn(
+                                'rounded-md px-3 py-1.5 text-[13px]',
+                                active
+                                  ? 'bg-[#ecfdfd] font-medium text-[#0f766e]'
+                                  : 'text-[#6b7280] hover:bg-[#f3f4f6]',
+                              )}
+                              onClick={() => setQueryPlannerPane(key)}
+                            >
+                              {label}
+                            </button>
+                          )
+                        })}
+                      </div>
+                      {queryPlannerPane === 'rules' ? (
+                        <ManualRulesEditor
+                          rules={stepRulesFor('query_planner')}
+                          onChange={rules => updateStepRules('query_planner', rules)}
+                          hint="人工为本步添加的规则（标识 + 正文），写入助手配置并出现在右侧琥珀色变量区。"
+                        />
+                      ) : (
+                        <QueryPlannerRoutesEditor
+                          routes={queryPlannerRoutes}
+                          onChange={updateQueryPlannerRoutes}
+                        />
+                      )}
+                    </div>
+                    <div
+                      className={cn(
+                        'min-h-0 overflow-hidden px-5 py-4',
+                        queryPlannerPane === 'prompt' ? 'flex flex-col' : 'hidden md:flex md:flex-col',
+                      )}
+                    >
+                      <PromptTemplateEditor
+                        stepId="query_planner"
+                        value={version.node_prompts.query_planner?.content || ''}
+                        onChange={updatePrompt}
+                        disabled={!version}
+                        pathHint={version.node_prompts.query_planner?.path || '内置逻辑'}
+                        parameterSchema={version.parameter_schema}
+                        manualRules={manualRulesPayload}
+                        stepRules={stepRulesFor('query_planner')}
+                        kbName={boundKb?.name || assistant.knowledge_bases.find(kb => kb.id === primaryKbId)?.name}
+                        kbDescription={boundKb?.description || ''}
+                        queryPlannerRoutes={queryPlannerRoutes}
+                        fillHeight
+                        previewOnly
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : editStepId === 'audit_judge' && version ? (
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="flex shrink-0 gap-1 border-b border-[#e5e7eb] px-5 py-2 md:hidden">
+                    {([
+                      ['rules', '补充规则'],
+                      ['prompt', '预览'],
+                    ] as const).map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className={cn(
+                          'rounded-md px-3 py-1.5 text-[13px]',
+                          auditJudgePane === key
+                            ? 'bg-[#ecfdfd] font-medium text-[#0f766e]'
+                            : 'text-[#6b7280] hover:bg-[#f3f4f6]',
+                        )}
+                        onClick={() => setAuditJudgePane(key)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid min-h-0 flex-1 md:grid-cols-2">
+                    <div
+                      className={cn(
+                        'min-h-0 overflow-y-auto border-[#e5e7eb] px-5 py-4 md:border-r',
+                        auditJudgePane === 'prompt' ? 'hidden md:block' : 'block',
+                      )}
+                    >
+                      {primaryKbId ? (
+                        <ManualRulesEditor
+                          rules={draftManualRules}
+                          onChange={setDraftManualRules}
+                          kbName={boundKb?.name || ''}
+                          hint="人工补充规则，写入绑定知识库；完整条文进入判定输入的 manual_knowledge_rules，右侧预览显示摘要。"
+                        />
+                      ) : (
+                        <p className="text-[13px] leading-relaxed text-[#6b7280]">
+                          尚未绑定知识库。补充规则保存在知识库中，请先绑定后再编辑。
+                        </p>
+                      )}
+                    </div>
+                    <div
+                      className={cn(
+                        'min-h-0 overflow-hidden px-5 py-4',
+                        auditJudgePane === 'prompt' ? 'flex flex-col' : 'hidden md:flex md:flex-col',
+                      )}
+                    >
+                      <PromptTemplateEditor
+                        stepId="audit_judge"
+                        value={version.node_prompts.audit_judge?.content || ''}
+                        onChange={updatePrompt}
+                        disabled={!version}
+                        pathHint={version.node_prompts.audit_judge?.path || '内置逻辑'}
+                        parameterSchema={version.parameter_schema}
+                        manualRules={manualRulesPayload}
+                        kbName={boundKb?.name || assistant.knowledge_bases.find(kb => kb.id === primaryKbId)?.name}
+                        kbDescription={boundKb?.description || ''}
+                        fillHeight
+                        previewOnly
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : editStepId && version && (editStepId === 'test_items' || editStepId === 'model_decode') ? (
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="flex shrink-0 gap-1 border-b border-[#e5e7eb] px-5 py-2 md:hidden">
+                    {([
+                      ['rules', '补充规则'],
+                      ['prompt', '预览'],
+                    ] as const).map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className={cn(
+                          'rounded-md px-3 py-1.5 text-[13px]',
+                          notesOnlyPane === key
+                            ? 'bg-[#ecfdfd] font-medium text-[#0f766e]'
+                            : 'text-[#6b7280] hover:bg-[#f3f4f6]',
+                        )}
+                        onClick={() => setNotesOnlyPane(key)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid min-h-0 flex-1 md:grid-cols-2">
+                    <div
+                      className={cn(
+                        'min-h-0 overflow-y-auto border-[#e5e7eb] px-5 py-4 md:border-r',
+                        notesOnlyPane === 'prompt' ? 'hidden md:block' : 'block',
+                      )}
+                    >
+                      {(stepBindings[editStepId] || []).length > 0 && (
+                        <div className="mb-3 space-y-1.5 rounded-xl border border-[#e5e7eb] bg-[#f8fafc] px-3 py-2.5">
+                          <div className="text-[13px] font-medium text-[#374151]">运行时绑定</div>
+                          {stepBindings[editStepId]!.map(item => (
+                            <div key={item.label} className="text-[13px] leading-relaxed text-[#6b7280]">
+                              <span className="font-medium text-[#4b5563]">{item.label}：</span>
+                              {item.value}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <ManualRulesEditor
+                        rules={stepRulesFor(editStepId)}
+                        onChange={rules => updateStepRules(editStepId, rules)}
+                        hint="人工为本步添加的规则（标识 + 正文），写入助手配置并出现在右侧琥珀色变量区。"
+                      />
+                    </div>
+                    <div
+                      className={cn(
+                        'min-h-0 overflow-hidden px-5 py-4',
+                        notesOnlyPane === 'prompt' ? 'flex flex-col' : 'hidden md:flex md:flex-col',
+                      )}
+                    >
+                      <PromptTemplateEditor
+                        stepId={editStepId}
+                        value={version.node_prompts[editStepId]?.content || ''}
+                        onChange={updatePrompt}
+                        disabled={!version}
+                        pathHint={version.node_prompts[editStepId]?.path || '内置逻辑'}
+                        parameterSchema={version.parameter_schema}
+                        manualRules={manualRulesPayload}
+                        stepRules={stepRulesFor(editStepId)}
+                        kbName={boundKb?.name || assistant.knowledge_bases.find(kb => kb.id === primaryKbId)?.name}
+                        kbDescription={boundKb?.description || ''}
+                        queryPlannerRoutes={queryPlannerRoutes}
+                        fillHeight
+                        previewOnly
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+                  <p className="text-[13px] text-[#6b7280]">该步骤暂无可编辑配置。</p>
+                </div>
+              )}
               <DialogFooter className="shrink-0 border-t border-[#e5e7eb] px-5 py-3">
-                <Button type="button" variant="outline" onClick={() => setEditStepId(null)}>
+                <Button
+                  type="button"
+                  className="bg-[#13c2c2] text-white hover:bg-[#0faaaa]"
+                  onClick={() => setEditStepId(null)}
+                >
                   完成
                 </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={confirmAction !== null} onOpenChange={open => !open && setConfirmAction(null)}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>重新初始化审查配置？</DialogTitle>
+                <DialogDescription className="leading-relaxed text-[#6b7280]">
+                  将进入初始化流程，根据样例报告重新生成参数 schema 与抽参品类约束。
+                  确认启用后会覆盖当前审查配置，此操作不可撤销。
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setConfirmAction(null)}>
+                  取消
+                </Button>
+                <Button
+                  type="button"
+                  className="bg-[#dc2626] text-white hover:bg-[#b91c1c]"
+                  onClick={() => {
+                    setInitializing(true)
+                    setConfirmAction(null)
+                  }}
+                >
+                  重新初始化
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog
+            open={pendingInitialization || navigationBlocker.state === 'blocked'}
+            onOpenChange={open => !open && cancelUnsavedTransition()}
+          >
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>是否保存当前修改？</DialogTitle>
+                <DialogDescription className="leading-relaxed text-[#6b7280]">
+                  当前配置有未保存的字段、规则或提示词修改。
+                  {pendingInitialization
+                    ? ' 保存后将进入重新初始化。'
+                    : ' 保存后将继续离开当前页面。'}
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter className="sm:justify-between">
+                <Button type="button" variant="outline" onClick={cancelUnsavedTransition}>
+                  取消
+                </Button>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="text-[#b42318] hover:bg-[#fef2f2] hover:text-[#b42318]"
+                    onClick={() => void discardUnsavedAndContinue()}
+                  >
+                    放弃修改
+                  </Button>
+                  <Button
+                    type="button"
+                    className="bg-[#13c2c2] text-white hover:bg-[#0faaaa]"
+                    disabled={saving}
+                    onClick={() => void saveUnsavedAndContinue()}
+                  >
+                    {saving ? '保存中…' : '保存并继续'}
+                  </Button>
+                </div>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -911,30 +1615,6 @@ export function AssistantSettings({
                   onChange={v => updateRetrieval('route_top_k', Math.round(v))}
                 />
               </div>
-              {devMode && (
-                <div className="space-y-3 rounded-xl border border-[#e5e7eb] bg-[#f9fafb] p-3">
-                  <div className="flex items-center justify-between gap-4">
-                    <SettingHint
-                      label="续表聚合（实验 B）"
-                      tip="补全并合并同一表格的续表片段。默认关闭，随助手版本保存。"
-                    />
-                    <Switch
-                      checked={Boolean(version.retrieval_config.aggregate_continuation_tables ?? false)}
-                      onCheckedChange={checked => updateRetrieval('aggregate_continuation_tables', checked)}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between gap-4">
-                    <SettingHint
-                      label="引用表扩展（实验 C）"
-                      tip="章节命中“见表 N”时补充对应表格。默认关闭，随助手版本保存。"
-                    />
-                    <Switch
-                      checked={Boolean(version.retrieval_config.expand_references ?? false)}
-                      onCheckedChange={checked => updateRetrieval('expand_references', checked)}
-                    />
-                  </div>
-                </div>
-              )}
               <div>
                 <SettingHint label="温度" tip="生成随机性。审查场景建议保持较低温度。" />
                 <SettingSlider
@@ -949,39 +1629,6 @@ export function AssistantSettings({
             </div>
           )}
 
-          {(versionsQuery.data || []).length > 0 && (
-            <div className="space-y-2">
-              <Label className="text-[15px] font-medium text-[#374151]" title={helpText.assistants.tabVersions}>
-                版本
-              </Label>
-              <div className="space-y-1">
-                {(versionsQuery.data || []).map(item => {
-                  const isActive = item.status === 'active'
-                  const busy = activatingVersionId === item.id
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={cn(
-                        'flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[15px] transition disabled:opacity-60',
-                        isActive
-                          ? 'bg-[#f3f4f6] text-[#111827]'
-                          : 'text-[#6b7280] hover:bg-[#f9fafb]',
-                      )}
-                      disabled={busy || !!activatingVersionId}
-                      onClick={() => void selectVersion(item)}
-                      title={isActive ? '当前启用版本' : '切换并启用此版本'}
-                    >
-                      <span className="font-medium">v{item.version}</span>
-                      <span className="shrink-0 text-[13px] text-[#9ca3af]">
-                        {busy ? '切换中…' : isActive ? '当前' : formatDate(item.created_at)}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          )}
         </div>
 
         <div className="flex gap-2 border-t border-[#e5e7eb] px-5 py-4">
@@ -992,6 +1639,7 @@ export function AssistantSettings({
             onClick={() => {
               setVersion(activeQuery.data || null)
               setKbSelected(new Set(assistant.knowledge_bases.map(item => item.id)))
+              setDraftManualRules(baselineManualRules.map(item => ({ ...item })))
               toast.message('已还原为当前启用版本')
             }}
           >
@@ -1016,12 +1664,171 @@ function emptyField(): ParameterSchemaField {
   return { key: '', label: '', required: false, hint: '' }
 }
 
+function ManualRulesEditor({
+  rules,
+  onChange,
+  kbName,
+  hint,
+}: {
+  rules: ManualRuleDraft[]
+  onChange: (next: ManualRuleDraft[]) => void
+  kbName?: string
+  /** Overrides the default KB-scoped help copy. */
+  hint?: string
+}) {
+  const updateRule = (index: number, patch: Partial<ManualRuleDraft>) => {
+    onChange(rules.map((item, i) => (i === index ? { ...item, ...patch } : item)))
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <p className="text-[13px] text-[#6b7280]">
+          {hint || (
+            <>
+              可选；写入绑定知识库{kbName ? `「${kbName}」` : ''}。
+              规则正文会进入判定输入的 manual_knowledge_rules，右侧仅显示摘要。
+            </>
+          )}
+          {' '}当前 {rules.length} 条。
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 rounded-md"
+          onClick={() => onChange([...rules, emptyManualRule()])}
+        >
+          <Plus className="size-3.5" />
+          添加规则
+        </Button>
+      </div>
+      <div className="space-y-3">
+        {rules.map((rule, index) => (
+          <div
+            key={`${String(rule.rule_id || index)}-${index}`}
+            className="space-y-2.5 rounded-lg border border-[#e5e7eb] bg-white px-3 py-3"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <label className="min-w-0 flex-1 space-y-1">
+                <span className="text-[12px] text-[#6b7280]">规则标识</span>
+                <Input
+                  className="h-9 rounded-md border-[#e5e7eb] bg-white px-2 font-mono text-[12px]"
+                  value={String(rule.rule_id || '')}
+                  onChange={e => updateRule(index, { rule_id: e.target.value.trim() })}
+                  aria-label={`规则 ${index + 1} 标识`}
+                  placeholder="如 total_loss"
+                />
+              </label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="mt-6 size-8 text-[#9ca3af] hover:bg-[#fef2f2] hover:text-[#ef4444]"
+                onClick={() => onChange(rules.filter((_, i) => i !== index))}
+                title="删除规则"
+                aria-label={`删除规则 ${index + 1}`}
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
+            </div>
+            <label className="block space-y-1">
+              <span className="text-[12px] text-[#6b7280]">规则正文</span>
+              <Textarea
+                className="min-h-[5rem] resize-y rounded-md border-[#e5e7eb] bg-white px-2 py-2 text-[13px] leading-relaxed"
+                value={String(rule.rule_text || '')}
+                onChange={e => updateRule(index, { rule_text: e.target.value })}
+                aria-label={`规则 ${index + 1} 正文`}
+                placeholder="例如：总损耗 = 空载损耗 + 负载损耗；仅用于派生计算，不提供标准限值。"
+              />
+            </label>
+          </div>
+        ))}
+        {!rules.length && (
+          <div className="rounded-lg border border-dashed border-[#e5e7eb] px-3 py-8 text-center text-[13px] text-[#9ca3af]">
+            暂无补充规则；多数判定可仅靠候选证据完成。
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function QueryPlannerRoutesEditor({
+  routes,
+  onChange,
+}: {
+  routes: QueryPlannerRoute[]
+  onChange: (next: QueryPlannerRoute[]) => void
+}) {
+  const enabledCount = routes.filter(item => item.enabled).length
+
+  const updateRoute = (index: number, patch: Partial<QueryPlannerRoute>) => {
+    const next = routes.map((item, i) => (i === index ? { ...item, ...patch } : item))
+    onChange(resolveQueryPlannerRoutes(next))
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-[13px] text-[#6b7280]">
+        固定 4 路改写；至少启用 1 路。关闭的路不会要求模型生成，也不会参与检索。
+        当前已启用 {enabledCount} 路；右侧预览随改动即时更新。
+      </p>
+      <div className="space-y-3">
+        {routes.map((route, index) => (
+          <div
+            key={route.id}
+            className="space-y-2.5 rounded-lg border border-[#e5e7eb] bg-white px-3 py-3"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <label className="inline-flex items-center gap-2 pt-0.5">
+                <input
+                  type="checkbox"
+                  className="size-4 rounded border-[#d1d5db]"
+                  checked={route.enabled}
+                  disabled={route.enabled && enabledCount <= 1}
+                  onChange={e => updateRoute(index, { enabled: e.target.checked })}
+                  aria-label={`启用 ${route.label || route.id}`}
+                />
+                <span className="text-[13px] font-medium text-[#111827]">启用</span>
+              </label>
+              <span className="rounded bg-[#f3f4f6] px-2 py-0.5 font-mono text-[11px] text-[#6b7280]">
+                {route.id}
+              </span>
+            </div>
+            <label className="block space-y-1">
+              <span className="text-[12px] text-[#6b7280]">显示名称</span>
+              <Input
+                className="h-9 rounded-md border-[#e5e7eb] bg-white px-2 text-[13px]"
+                value={route.label}
+                onChange={e => updateRoute(index, { label: e.target.value })}
+                aria-label={`${route.id} 显示名称`}
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-[12px] text-[#6b7280]">改写说明</span>
+              <Textarea
+                className="min-h-[4.5rem] resize-y rounded-md border-[#e5e7eb] bg-white px-2 py-2 text-[13px] leading-relaxed"
+                value={route.instruction}
+                onChange={e => updateRoute(index, { instruction: e.target.value })}
+                aria-label={`${route.id} 改写说明`}
+              />
+            </label>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ParameterSchemaEditor({
   schema,
   onChange,
+  splitPane = false,
 }: {
   schema: ParameterSchema
   onChange: (next: ParameterSchema) => void
+  splitPane?: boolean
 }) {
   const updateField = (index: number, patch: Partial<ParameterSchemaField>) => {
     const fields = schema.fields.map((field, i) => (i === index ? { ...field, ...patch } : field))
@@ -1036,155 +1843,181 @@ function ParameterSchemaEditor({
     onChange({ ...schema, fields: [...schema.fields, emptyField()] })
   }
 
+  const tableColumns = 'grid-cols-[minmax(8rem,0.8fr)_minmax(10rem,1fr)_4.5rem_minmax(16rem,1.8fr)_2.5rem]'
+
   return (
-    <div className="mb-4 shrink-0 space-y-3 rounded-xl border border-[#e5e7eb] bg-[#f9fafb] p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-[15px] font-medium text-[#111827]">报告参数字段</p>
-          <p className="text-[13px] text-[#6b7280]">
-            告诉模型要从报告里抽出哪些参数。增删改字段后点「保存」即可；不依赖下方系统提示词自动同步。
-          </p>
-        </div>
-        <div className="inline-flex items-center gap-1.5 text-[13px] text-[#374151]">
-          <label className="inline-flex items-center gap-2">
-            <input
-              type="checkbox"
-              className="size-4 rounded border-[#d1d5db]"
-              checked={Boolean(schema.allow_extra)}
-              onChange={e => onChange({ ...schema, allow_extra: e.target.checked })}
-            />
-            允许额外字段
-          </label>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                className="inline-flex text-[#9ca3af] hover:text-[#6b7280]"
-                aria-label="允许额外字段说明"
-              >
-                <CircleHelp className="size-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent className="max-w-[260px] leading-relaxed">
-              开启后，抽参时除了列出的字段，还可保留报告里其它未声明但对审查有用的参数；关闭则只提取已声明字段。
-            </TooltipContent>
-          </Tooltip>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-[13px] text-[#6b7280]">
+          {splitPane
+            ? `共 ${schema.fields.length} 项；右侧预览提示词随改动即时更新。`
+            : `共 ${schema.fields.length} 项；勾选与字段修改会即时重写预览提示词。`}
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="inline-flex items-center gap-1.5">
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                className="size-4 rounded border-[#d1d5db]"
+                checked={Boolean(schema.allow_extra)}
+                onChange={e => onChange({ ...schema, allow_extra: e.target.checked })}
+              />
+              <span className="text-[13px] text-[#374151]">允许额外字段</span>
+            </label>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex text-[#9ca3af] hover:text-[#6b7280]"
+                  aria-label="允许额外字段说明"
+                >
+                  <CircleHelp className="size-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-[260px] leading-relaxed">
+                开启后，抽参时除了列出的字段，还可保留报告里其它未声明但对审查有用的参数；关闭则只提取已声明字段。
+              </TooltipContent>
+            </Tooltip>
+          </div>
+          <Button type="button" variant="outline" size="sm" className="h-8 rounded-md" onClick={addField}>
+            <Plus className="size-3.5" />
+            增加字段
+          </Button>
         </div>
       </div>
-      <div className="space-y-2.5">
-        {schema.fields.map((field, index) => (
-          <div
-            key={`${index}-${field.key}`}
-            className="space-y-2 rounded-xl border border-[#e5e7eb] bg-white p-3 shadow-[0_1px_0_rgba(15,23,42,0.03)]"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[12px] font-medium text-[#9ca3af]">字段 {index + 1}</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-7 text-[#9ca3af] hover:text-[#ef4444]"
-                onClick={() => removeField(index)}
-                disabled={schema.fields.length <= 1}
-                title="删除字段"
-                aria-label="删除字段"
-              >
-                <Trash2 className="size-3.5" />
-              </Button>
-            </div>
-            <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
-              <div className="space-y-1">
-                <div className="flex items-center gap-1">
-                  <Label className="text-[12px] text-[#6b7280]">英文标识</Label>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        className="inline-flex text-[#9ca3af] hover:text-[#6b7280]"
-                        aria-label="英文标识说明"
-                      >
-                        <CircleHelp className="size-3.5" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent className="max-w-[240px] leading-relaxed">
-                      给程序用的英文名（如 model），写入抽参结果 JSON，建议用小写字母和下划线。
-                    </TooltipContent>
-                  </Tooltip>
+
+      {splitPane ? (
+        <div className="space-y-3">
+          {schema.fields.map((field, index) => (
+            <div
+              key={`${index}-${field.key}`}
+              className="space-y-2.5 rounded-lg border border-[#e5e7eb] bg-white px-3 py-3"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="grid min-w-0 flex-1 grid-cols-2 gap-2">
+                  <label className="min-w-0 space-y-1">
+                    <span className="text-[12px] text-[#6b7280]">字段名称</span>
+                    <Input
+                      className="h-9 rounded-md border-[#e5e7eb] bg-white px-2 text-[13px]"
+                      aria-label={`字段 ${index + 1} 名称`}
+                      placeholder="如 型号"
+                      value={field.label}
+                      onChange={e => updateField(index, { label: e.target.value })}
+                    />
+                  </label>
+                  <label className="min-w-0 space-y-1">
+                    <span className="text-[12px] text-[#6b7280]">字段标识</span>
+                    <Input
+                      className="h-9 rounded-md border-[#e5e7eb] bg-white px-2 font-mono text-[12px]"
+                      aria-label={`字段 ${index + 1} 标识`}
+                      placeholder="如 model"
+                      value={field.key}
+                      onChange={e => updateField(index, { key: e.target.value.trim() })}
+                    />
+                  </label>
                 </div>
-                <Input
-                  className="h-9 rounded-lg bg-[#f9fafb] text-[13px]"
-                  placeholder="如 model"
-                  value={field.key}
-                  onChange={e => updateField(index, { key: e.target.value.trim() })}
-                />
-              </div>
-              <div className="space-y-1">
-                <div className="flex items-center gap-1">
-                  <Label className="text-[12px] text-[#6b7280]">中文名称</Label>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        className="inline-flex text-[#9ca3af] hover:text-[#6b7280]"
-                        aria-label="中文名称说明"
-                      >
-                        <CircleHelp className="size-3.5" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent className="max-w-[240px] leading-relaxed">
-                      给人看的名字（如「型号」），出现在审查结果和界面展示里。
-                    </TooltipContent>
-                  </Tooltip>
+                <div className="flex shrink-0 items-center gap-2 pt-6">
+                  <label className="inline-flex items-center gap-1.5 text-[12px] text-[#374151]">
+                    <input
+                      type="checkbox"
+                      className="size-4 rounded border-[#d1d5db]"
+                      aria-label={`字段 ${index + 1} 必填`}
+                      checked={Boolean(field.required)}
+                      onChange={e => updateField(index, { required: e.target.checked })}
+                    />
+                    必填
+                  </label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 text-[#9ca3af] hover:bg-[#fef2f2] hover:text-[#ef4444]"
+                    onClick={() => removeField(index)}
+                    disabled={schema.fields.length <= 1}
+                    title="删除字段"
+                    aria-label={`删除字段 ${index + 1}`}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
                 </div>
-                <Input
-                  className="h-9 rounded-lg bg-[#f9fafb] text-[13px]"
-                  placeholder="如 型号"
-                  value={field.label}
-                  onChange={e => updateField(index, { label: e.target.value })}
-                />
               </div>
-              <label className="inline-flex h-9 items-end gap-1.5 whitespace-nowrap pb-2 text-[12px] text-[#4b5563]">
-                <input
-                  type="checkbox"
-                  className="size-3.5 rounded border-[#d1d5db]"
-                  checked={Boolean(field.required)}
-                  onChange={e => updateField(index, { required: e.target.checked })}
+              <label className="block space-y-1">
+                <span className="text-[12px] text-[#6b7280]">提取说明</span>
+                <Textarea
+                  className="min-h-[4.5rem] resize-y rounded-md border-[#e5e7eb] bg-white px-2 py-2 text-[13px] leading-relaxed"
+                  aria-label={`字段 ${index + 1} 提取说明`}
+                  placeholder="例如：报告首页样品型号，如 S20-"
+                  value={field.hint}
+                  onChange={e => updateField(index, { hint: e.target.value })}
                 />
-                必填
               </label>
             </div>
-            <div className="space-y-1">
-              <div className="flex items-center gap-1">
-                <Label className="text-[12px] text-[#6b7280]">在报告里怎么找（可选）</Label>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      className="inline-flex text-[#9ca3af] hover:text-[#6b7280]"
-                      aria-label="提取提示说明"
-                    >
-                      <CircleHelp className="size-3.5" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent className="max-w-[260px] leading-relaxed">
-                    补充说明这个值通常出现在报告哪里、长什么样，帮助模型更准地抽出。
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-              <Input
-                className="h-8 rounded-lg bg-[#f9fafb] text-[12px]"
-                placeholder="例如：报告首页样品型号"
-                value={field.hint}
-                onChange={e => updateField(index, { hint: e.target.value })}
-              />
+          ))}
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-[#e5e7eb] bg-white">
+          <div className="min-w-[820px]">
+            <div className={`grid ${tableColumns} items-center gap-3 border-b border-[#e5e7eb] bg-[#f8fafc] px-3 py-2 text-[12px] font-medium text-[#6b7280]`}>
+              <span>字段名称</span>
+              <span>字段标识</span>
+              <span className="text-center">必填</span>
+              <span>提取说明</span>
+              <span />
+            </div>
+            <div className="divide-y divide-[#e5e7eb]">
+              {schema.fields.map((field, index) => (
+                <div
+                  key={`${index}-${field.key}`}
+                  className={`grid ${tableColumns} items-center gap-3 px-3 py-2.5`}
+                >
+                  <Input
+                    className="h-9 rounded-md border-[#e5e7eb] bg-white px-2 text-[13px]"
+                    aria-label={`字段 ${index + 1} 名称`}
+                    placeholder="如 型号"
+                    value={field.label}
+                    onChange={e => updateField(index, { label: e.target.value })}
+                  />
+                  <Input
+                    className="h-9 rounded-md border-[#e5e7eb] bg-white px-2 font-mono text-[12px]"
+                    aria-label={`字段 ${index + 1} 标识`}
+                    placeholder="如 model"
+                    value={field.key}
+                    onChange={e => updateField(index, { key: e.target.value.trim() })}
+                  />
+                  <label className="inline-flex justify-center">
+                    <input
+                      type="checkbox"
+                      className="size-4 rounded border-[#d1d5db]"
+                      aria-label={`字段 ${index + 1} 必填`}
+                      checked={Boolean(field.required)}
+                      onChange={e => updateField(index, { required: e.target.checked })}
+                    />
+                  </label>
+                  <Input
+                    className="h-9 rounded-md border-[#e5e7eb] bg-white px-2 text-[13px]"
+                    aria-label={`字段 ${index + 1} 提取说明`}
+                    placeholder="例如：报告首页样品型号"
+                    value={field.hint}
+                    onChange={e => updateField(index, { hint: e.target.value })}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 text-[#9ca3af] hover:bg-[#fef2f2] hover:text-[#ef4444]"
+                    onClick={() => removeField(index)}
+                    disabled={schema.fields.length <= 1}
+                    title="删除字段"
+                    aria-label={`删除字段 ${index + 1}`}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </div>
+              ))}
             </div>
           </div>
-        ))}
-      </div>
-      <Button type="button" variant="outline" size="sm" className="h-8 rounded-lg" onClick={addField}>
-        <Plus className="size-3.5" />
-        增加字段
-      </Button>
+        </div>
+      )}
     </div>
   )
 }

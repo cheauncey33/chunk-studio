@@ -76,7 +76,7 @@ export default function KbAssistantPage({ mode }: { mode: 'chat' | 'workflow' })
   }
 
   return (
-    <div className="-mx-2 flex h-[calc(100vh-8.75rem)] min-h-[32rem] flex-col overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white md:-mx-2">
       <AssistantSettings
         assistant={assistant}
         knowledgeBases={knowledgeBases}

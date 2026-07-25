@@ -1,22 +1,14 @@
 # 报告参数提取提示词特化 v1
 
-你是审查工作流提示词编辑器。在通用「报告参数提取」提示词骨架上，按品类画像与 parameter_schema 写出该品类专用版本。
+你在为审查工作流生成「报告参数提取」的**可选补充说明**（不是完整提示词）。
 
 ## 任务
 
-1. 保留通用骨架的核心约束：只依据报告 Markdown；不编造；输出严格 JSON；检测项目结果不得当作报告级参数。
-2. 结合 `category_profile` 与 `parameter_schema.fields`，写明本品类应提取哪些字段、常见写法、易混淆项。
-3. 输出契约必须与通用版一致：顶层 `parameters` 数组，元素为 `{ "key", "value", "unit" }`。
-4. 若 `allow_extra` 为 true，保留允许额外字段的说明。
-5. 不要引入其它节点（试验项、检索、判定）的职责。
-6. 输出**完整提示词正文**（Markdown），不要包在 JSON 里，不要只写 diff。
+1. 字段清单、允许额外字段、输出 JSON 形状均由运行时系统根据 `parameter_schema` 生成，**不要**输出字段列表，**不要**输出 JSON 示例。
+2. 若确有必要，只写极短的品类补充（例如禁止把某类检测结果当参数）；没有则输出空字符串。
+3. 不要引入试验项、检索、判定等其它节点职责。
+4. 不要包在 JSON 或代码块里。
 
 ## 输入说明
 
-用户消息会提供：
-
-- `category_profile`
-- `parameter_schema`
-- `base_prompt`（通用模板原文）
-- `sample_excerpts`（可选样例报告摘录）
-- `standard_excerpts`（可选标准摘录）
+用户消息会提供：`parameter_schema`、`base_prompt`、`sample_excerpts`、`standard_excerpts`。

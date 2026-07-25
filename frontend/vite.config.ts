@@ -15,6 +15,9 @@ export default defineConfig({
     },
   },
   server: {
+    // Bind IPv4 explicitly: default can be [::1] only, so http://127.0.0.1:5173
+    // fails with ERR_CONNECTION_REFUSED while http://localhost:5173 still works.
+    host: '127.0.0.1',
     port: 5173,
     proxy: {
       '/api': apiTarget,

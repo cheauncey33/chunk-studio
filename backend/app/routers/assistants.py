@@ -1,4 +1,4 @@
-"""Versioned audit-assistant configuration APIs."""
+"""Audit-assistant configuration APIs (single active config per assistant)."""
 from __future__ import annotations
 
 import json
@@ -33,7 +33,9 @@ class AssistantUpdate(BaseModel):
     status: str | None = None
 
 
-class AssistantVersionCreate(BaseModel):
+class AssistantVersionConfigUpdate(BaseModel):
+    """Overwrite the single active assistant config row."""
+
     model_settings: dict[str, Any] = Field(alias="model_config")
     node_prompts: dict[str, Any]
     rules: dict[str, Any] = Field(default_factory=dict)
@@ -41,7 +43,6 @@ class AssistantVersionCreate(BaseModel):
     parameter_schema: dict[str, Any] = Field(default_factory=dict)
     category_profile: dict[str, Any] = Field(default_factory=dict)
     initialization_provenance: dict[str, Any] = Field(default_factory=dict)
-    activate: bool = True
 
 
 class KnowledgeBaseSelection(BaseModel):
@@ -74,7 +75,6 @@ class AssistantInitRequest(BaseModel):
 
 
 class AssistantInitDraftUpdate(BaseModel):
-    category_profile: dict[str, Any] | None = None
     parameter_schema: dict[str, Any] | None = None
     report_parameters_prompt: str | None = None
 
@@ -97,16 +97,55 @@ def _loads(value: str | None) -> dict[str, Any]:
         return {}
 
 
+def _version_name(row: Any) -> str:
+    try:
+        return str(row["name"] or "").strip()
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
 def _version_out(row: Any) -> dict[str, Any]:
     from ..parameter_schema import resolve_parameter_schema
+    from ..query_planner_routes import (
+        looks_like_full_query_planner_prompt,
+        resolve_query_planner_routes,
+    )
 
     retrieval_config = _loads(row["retrieval_config"])
     retrieval_config.setdefault("aggregate_continuation_tables", False)
     retrieval_config.setdefault("expand_references", False)
+    retrieval_config["query_planner_routes"] = resolve_query_planner_routes(
+        retrieval_config.get("query_planner_routes"),
+    )
+    from ..audit_judge_notes import looks_like_full_audit_judge_prompt
+
+    node_prompts = _loads(row["node_prompts"])
+    if isinstance(node_prompts, dict):
+        planner = node_prompts.get("query_planner")
+        if isinstance(planner, dict) and looks_like_full_query_planner_prompt(
+            str(planner.get("content") or "")
+        ):
+            # Do not surface nested full Planner as editable "品类约束".
+            node_prompts = {
+                **node_prompts,
+                "query_planner": {**planner, "content": ""},
+            }
+        judge = node_prompts.get("audit_judge")
+        if isinstance(judge, dict) and looks_like_full_audit_judge_prompt(
+            str(judge.get("content") or "")
+        ):
+            node_prompts = {
+                **node_prompts,
+                "audit_judge": {**judge, "content": ""},
+            }
+    version_no = int(row["version"])
+    name = _version_name(row)
     return {
         **dict(row),
+        "name": name,
+        "label": name or f"v{version_no}",
         "model_config": _loads(row["model_config"]),
-        "node_prompts": _loads(row["node_prompts"]),
+        "node_prompts": node_prompts,
         "rules": _loads(row["rules"]),
         "retrieval_config": retrieval_config,
         "parameter_schema": resolve_parameter_schema(_loads(row["parameter_schema"])),
@@ -205,10 +244,10 @@ def create_assistant(body: AssistantCreate):
         )
         conn.execute(
             """INSERT INTO assistant_versions
-               (id,assistant_id,version,status,model_config,node_prompts,rules,
+               (id,assistant_id,version,name,status,model_config,node_prompts,rules,
                 retrieval_config,parameter_schema,category_profile,
                 initialization_provenance,created_at,activated_at)
-               VALUES (?,?,1,'active',?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,1,'','active',?,?,?,?,?,?,?,?,?)""",
             (
                 version_id,
                 assistant_id,
@@ -299,17 +338,6 @@ def update_assistant(assistant_id: str, body: AssistantUpdate):
     return _assistant_out(_assistant_row(assistant_id))
 
 
-@router.get("/{assistant_id}/versions")
-def list_versions(assistant_id: str):
-    _assistant_row(assistant_id)
-    rows = db.get_conn().execute(
-        """SELECT * FROM assistant_versions
-           WHERE assistant_id=? ORDER BY version DESC""",
-        (assistant_id,),
-    ).fetchall()
-    return [_version_out(row) for row in rows]
-
-
 @router.get("/{assistant_id}/versions/active")
 def get_active_version(assistant_id: str):
     assistant = _assistant_row(assistant_id)
@@ -322,87 +350,87 @@ def get_active_version(assistant_id: str):
     return _version_out(row)
 
 
-@router.post("/{assistant_id}/versions/{version_id}/activate")
-def activate_version(assistant_id: str, version_id: str):
-    _assistant_row(assistant_id)
-    now = time.strftime("%Y-%m-%dT%H:%M:%S")
-    with db.transaction() as conn:
-        row = conn.execute(
-            "SELECT * FROM assistant_versions WHERE id=? AND assistant_id=?",
-            (version_id, assistant_id),
-        ).fetchone()
-        if not row:
-            raise HTTPException(404, "version not found")
-        if row["status"] != "active":
-            conn.execute(
-                "UPDATE assistant_versions SET status='retired' WHERE assistant_id=? AND status='active'",
-                (assistant_id,),
-            )
-            conn.execute(
-                "UPDATE assistant_versions SET status='active', activated_at=? WHERE id=?",
-                (now, version_id),
-            )
-            conn.execute(
-                """UPDATE audit_assistants
-                   SET active_version_id=?, status='active', updated_at=?
-                   WHERE id=?""",
-                (version_id, now, assistant_id),
-            )
-    return get_active_version(assistant_id)
-
-
-@router.post("/{assistant_id}/versions")
-def create_version(assistant_id: str, body: AssistantVersionCreate):
+@router.put("/{assistant_id}/versions/active")
+def update_active_version(assistant_id: str, body: AssistantVersionConfigUpdate):
+    """Overwrite the single active config row (no new version insert)."""
     from ..parameter_schema import resolve_parameter_schema
 
-    _assistant_row(assistant_id)
+    assistant = _assistant_row(assistant_id)
     provider = str(body.model_settings.get("provider") or "").lower()
     if provider != "deepseek":
         raise HTTPException(422, "only DeepSeek assistant versions are supported")
     parameter_schema = resolve_parameter_schema(body.parameter_schema)
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     with db.transaction() as conn:
-        row = conn.execute(
-            "SELECT COALESCE(MAX(version),0)+1 AS next_version FROM assistant_versions WHERE assistant_id=?",
-            (assistant_id,),
-        ).fetchone()
-        version = int(row["next_version"])
-        version_id = f"{assistant_id}_v{version}_{uuid.uuid4().hex[:8]}"
-        if body.activate:
-            conn.execute(
-                "UPDATE assistant_versions SET status='retired' WHERE assistant_id=? AND status='active'",
+        version_id = assistant["active_version_id"]
+        if version_id:
+            row = conn.execute(
+                "SELECT id FROM assistant_versions WHERE id=? AND assistant_id=?",
+                (version_id, assistant_id),
+            ).fetchone()
+            if not row:
+                version_id = None
+        if not version_id:
+            latest = conn.execute(
+                """SELECT id FROM assistant_versions
+                   WHERE assistant_id=? ORDER BY version DESC LIMIT 1""",
                 (assistant_id,),
+            ).fetchone()
+            version_id = latest["id"] if latest else None
+        if version_id:
+            conn.execute(
+                """UPDATE assistant_versions
+                   SET status='active',
+                       model_config=?, node_prompts=?, rules=?,
+                       retrieval_config=?, parameter_schema=?,
+                       category_profile='{}',
+                       initialization_provenance=?,
+                       activated_at=COALESCE(activated_at, ?)
+                   WHERE id=? AND assistant_id=?""",
+                (
+                    json.dumps(body.model_settings, ensure_ascii=False),
+                    json.dumps(body.node_prompts, ensure_ascii=False),
+                    json.dumps(body.rules, ensure_ascii=False),
+                    json.dumps(body.retrieval_config, ensure_ascii=False),
+                    json.dumps(parameter_schema, ensure_ascii=False),
+                    json.dumps(body.initialization_provenance, ensure_ascii=False),
+                    now,
+                    version_id,
+                    assistant_id,
+                ),
+            )
+            conn.execute(
+                "DELETE FROM assistant_versions WHERE assistant_id=? AND id!=?",
+                (assistant_id, version_id),
+            )
+        else:
+            version_id = f"{assistant_id}_v1_{uuid.uuid4().hex[:8]}"
+            conn.execute(
+                """INSERT INTO assistant_versions
+                   (id,assistant_id,version,name,status,model_config,node_prompts,rules,
+                    retrieval_config,parameter_schema,category_profile,
+                    initialization_provenance,created_at,activated_at)
+                   VALUES (?,?,1,'','active',?,?,?,?,?,'{}',?,?,?)""",
+                (
+                    version_id,
+                    assistant_id,
+                    json.dumps(body.model_settings, ensure_ascii=False),
+                    json.dumps(body.node_prompts, ensure_ascii=False),
+                    json.dumps(body.rules, ensure_ascii=False),
+                    json.dumps(body.retrieval_config, ensure_ascii=False),
+                    json.dumps(parameter_schema, ensure_ascii=False),
+                    json.dumps(body.initialization_provenance, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
         conn.execute(
-            """INSERT INTO assistant_versions
-               (id,assistant_id,version,status,model_config,node_prompts,rules,
-                retrieval_config,parameter_schema,category_profile,
-                initialization_provenance,created_at,activated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                version_id,
-                assistant_id,
-                version,
-                "active" if body.activate else "draft",
-                json.dumps(body.model_settings, ensure_ascii=False),
-                json.dumps(body.node_prompts, ensure_ascii=False),
-                json.dumps(body.rules, ensure_ascii=False),
-                json.dumps(body.retrieval_config, ensure_ascii=False),
-                json.dumps(parameter_schema, ensure_ascii=False),
-                json.dumps(body.category_profile, ensure_ascii=False),
-                json.dumps(body.initialization_provenance, ensure_ascii=False),
-                now,
-                now if body.activate else None,
-            ),
+            """UPDATE audit_assistants
+               SET active_version_id=?, status='active', updated_at=?
+               WHERE id=?""",
+            (version_id, now, assistant_id),
         )
-        if body.activate:
-            conn.execute(
-                """UPDATE audit_assistants
-                   SET active_version_id=?, status='active', updated_at=?
-                   WHERE id=?""",
-                (version_id, now, assistant_id),
-            )
-    return get_active_version(assistant_id) if body.activate else {"id": version_id, "version": version}
+    return get_active_version(assistant_id)
 
 
 @router.put("/{assistant_id}/knowledge-bases")
@@ -505,8 +533,6 @@ def update_assistant_init_draft(assistant_id: str, body: AssistantInitDraftUpdat
     from .. import assistant_init
 
     patch: dict[str, Any] = {}
-    if body.category_profile is not None:
-        patch["category_profile"] = body.category_profile
     if body.parameter_schema is not None:
         patch["parameter_schema"] = body.parameter_schema
     if body.report_parameters_prompt is not None:

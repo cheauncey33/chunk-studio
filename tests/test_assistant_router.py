@@ -36,7 +36,8 @@ def test_list_routable_candidates_excludes_template(monkeypatch, tmp_path) -> No
         for item in candidates
         if item["assistant_id"] == "assistant_oil_transformer_audit"
     )
-    assert oil["category_profile"]["name"] == "油浸式变压器"
+    assert "category_profile" not in oil
+    assert oil["knowledge_base_name"]
     _close_temp_db(monkeypatch)
 
 

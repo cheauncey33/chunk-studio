@@ -8,7 +8,6 @@ export const queryKeys = {
   kbChunks: (id: string) => ['knowledgeBases', id, 'chunks'] as const,
   assistants: ['assistants'] as const,
   assistantVersion: (id: string) => ['assistants', id, 'version'] as const,
-  assistantVersions: (id: string) => ['assistants', id, 'versions'] as const,
   files: ['files'] as const,
   chunks: (fileId: string) => ['chunks', fileId] as const,
   fields: ['fields'] as const,

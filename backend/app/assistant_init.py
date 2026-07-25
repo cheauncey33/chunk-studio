@@ -152,15 +152,11 @@ def update_init_draft_payload(assistant_id: str, patch: dict[str, Any]) -> dict[
         if draft["status"] == "applied":
             raise ValueError("draft already applied; start a new init to edit")
     payload = dict(draft["payload"] or {})
-    if "category_profile" in patch and isinstance(patch["category_profile"], dict):
-        payload["category_profile"] = patch["category_profile"]
     if "parameter_schema" in patch:
         payload["parameter_schema"] = resolve_parameter_schema(patch["parameter_schema"])
     if "report_parameters_prompt" in patch:
-        text = str(patch["report_parameters_prompt"] or "").strip()
-        if not text:
-            raise ValueError("report_parameters_prompt cannot be empty")
-        payload["report_parameters_prompt"] = text
+        # Optional notes only; runnable brief is built from parameter_schema at runtime.
+        payload["report_parameters_prompt"] = str(patch["report_parameters_prompt"] or "").strip()
     status = "ready" if draft["status"] in {"ready", "failed", "discarded"} else draft["status"]
     return upsert_init_draft(assistant_id, status=status, payload=payload)
 
@@ -245,14 +241,6 @@ def generate_init_draft(
         ],
         model=model,
     )
-    profile = induction.get("category_profile")
-    if not isinstance(profile, dict):
-        profile = {
-            "name": "",
-            "equipment_type": "",
-            "focus": "",
-            "notes": "模型未返回画像",
-        }
     schema = resolve_parameter_schema(induction.get("parameter_schema"))
 
     specialized = llm.chat_text(
@@ -262,7 +250,6 @@ def generate_init_draft(
                 "role": "user",
                 "content": json.dumps(
                     {
-                        "category_profile": profile,
                         "parameter_schema": schema,
                         "base_prompt": base_prompt,
                         "sample_excerpts": sample_excerpts,
@@ -283,16 +270,11 @@ def generate_init_draft(
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         prompt_text = "\n".join(lines).strip()
-    if not prompt_text:
-        raise RuntimeError("specialization returned empty prompt")
+    # Treat "no notes" markers as empty optional notes.
+    if prompt_text in {"（无）", "(无)", "无", "无补充", "（无补充）", "N/A", "n/a"}:
+        prompt_text = ""
 
     return {
-        "category_profile": {
-            "name": str(profile.get("name") or "").strip(),
-            "equipment_type": str(profile.get("equipment_type") or "").strip(),
-            "focus": str(profile.get("focus") or "").strip(),
-            "notes": str(profile.get("notes") or "").strip(),
-        },
         "parameter_schema": schema,
         "report_parameters_prompt": prompt_text,
         "source_file_ids": {
@@ -305,9 +287,33 @@ def generate_init_draft(
     }
 
 
+def _sanitize_copied_node_prompt(step_id: str, node: Any) -> dict[str, Any]:
+    """Keep path; blank content when it looks like a full legacy system prompt."""
+    from .audit_judge_notes import looks_like_full_audit_judge_prompt
+    from .query_planner_routes import looks_like_full_query_planner_prompt
+    from .report_parameters_prompt import looks_like_full_extraction_prompt
+
+    if not isinstance(node, dict):
+        return {"path": "", "content": ""}
+    path = str(node.get("path") or "")
+    content = str(node.get("content") or "").strip()
+    if step_id == "query_planner" and looks_like_full_query_planner_prompt(content):
+        content = ""
+    elif step_id == "audit_judge" and looks_like_full_audit_judge_prompt(content):
+        content = ""
+    elif step_id == "report_parameters" and looks_like_full_extraction_prompt(content):
+        content = ""
+    return {"path": path, "content": content}
+
+
 def apply_init_draft(assistant_id: str) -> dict[str, Any]:
-    """Create and activate a new assistant version from the ready draft."""
+    """Overwrite the active assistant config from the ready draft.
+
+    Init variable package is only ``parameter_schema`` + optional report_parameters
+    notes. Other steps copy prior config; full legacy prompts in notes are stripped.
+    """
     from .parameter_schema import resolve_parameter_schema as resolve_schema
+    from .report_parameters_prompt import looks_like_full_extraction_prompt
 
     draft = get_init_draft(assistant_id)
     if not draft:
@@ -316,24 +322,20 @@ def apply_init_draft(assistant_id: str) -> dict[str, Any]:
         raise ValueError(f"draft status must be ready, got {draft['status']}")
     payload = draft["payload"] or {}
     schema = resolve_schema(payload.get("parameter_schema"))
-    prompt_text = str(payload.get("report_parameters_prompt") or "").strip()
-    if not prompt_text:
+    if "report_parameters_prompt" not in payload:
         raise ValueError("draft missing report_parameters_prompt")
+    prompt_text = str(payload.get("report_parameters_prompt") or "").strip()
+    if looks_like_full_extraction_prompt(prompt_text):
+        prompt_text = ""
 
-    version = _active_version_row(assistant_id)
-    model_config = _loads(version["model_config"], {})
-    node_prompts = _loads(version["node_prompts"], {})
-    rules = _loads(version["rules"], {})
-    retrieval_config = _loads(version["retrieval_config"], {})
-    raw_profile = payload.get("category_profile")
-    if not isinstance(raw_profile, dict):
-        raw_profile = _loads(version["category_profile"], {})
-    category_profile = {
-        "name": str(raw_profile.get("name") or "").strip(),
-        "equipment_type": str(raw_profile.get("equipment_type") or "").strip(),
-        "focus": str(raw_profile.get("focus") or "").strip(),
-        "notes": str(raw_profile.get("notes") or "").strip(),
-    }
+    try:
+        version = _active_version_row(assistant_id)
+    except ValueError:
+        version = None
+    model_config = _loads(version["model_config"], {}) if version else {}
+    node_prompts = _loads(version["node_prompts"], {}) if version else {}
+    rules = _loads(version["rules"], {}) if version else {}
+    retrieval_config = _loads(version["retrieval_config"], {}) if version else {}
     source_file_ids = payload.get("source_file_ids")
     if not isinstance(source_file_ids, dict):
         source_file_ids = {}
@@ -348,52 +350,76 @@ def apply_init_draft(assistant_id: str) -> dict[str, Any]:
     }
     if not isinstance(node_prompts, dict):
         node_prompts = {}
-    existing_rp = node_prompts.get("report_parameters")
+    sanitized: dict[str, Any] = {}
+    for key, value in node_prompts.items():
+        if key in {"query_planner", "audit_judge", "report_parameters"}:
+            sanitized[key] = _sanitize_copied_node_prompt(key, value)
+        else:
+            sanitized[key] = value
+    existing_rp = sanitized.get("report_parameters")
     path = ""
     if isinstance(existing_rp, dict):
         path = str(existing_rp.get("path") or "")
     node_prompts = {
-        **node_prompts,
+        **sanitized,
         "report_parameters": {
-            "path": path or "evaluation/prompts/generic/report_parameter_extraction_generic_v1.md",
+            "path": path or "unified/extraction_brief_v1",
             "content": prompt_text,
         },
     }
 
     now = _now()
     with db.transaction() as conn:
-        row = conn.execute(
-            "SELECT COALESCE(MAX(version),0)+1 AS next_version FROM assistant_versions WHERE assistant_id=?",
-            (assistant_id,),
-        ).fetchone()
-        next_version = int(row["next_version"])
-        version_id = f"{assistant_id}_v{next_version}_{__import__('uuid').uuid4().hex[:8]}"
-        conn.execute(
-            "UPDATE assistant_versions SET status='retired' WHERE assistant_id=? AND status='active'",
-            (assistant_id,),
-        )
-        conn.execute(
-            """INSERT INTO assistant_versions
-               (id,assistant_id,version,status,model_config,node_prompts,rules,
-                retrieval_config,parameter_schema,category_profile,
-                initialization_provenance,created_at,activated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                version_id,
-                assistant_id,
-                next_version,
-                "active",
-                json.dumps(model_config, ensure_ascii=False),
-                json.dumps(node_prompts, ensure_ascii=False),
-                json.dumps(rules, ensure_ascii=False),
-                json.dumps(retrieval_config, ensure_ascii=False),
-                json.dumps(schema, ensure_ascii=False),
-                json.dumps(category_profile, ensure_ascii=False),
-                json.dumps(initialization_provenance, ensure_ascii=False),
-                now,
-                now,
-            ),
-        )
+        version_id = version["id"] if version else None
+        version_no = int(version["version"]) if version else 1
+        if version_id:
+            conn.execute(
+                """UPDATE assistant_versions
+                   SET status='active',
+                       model_config=?, node_prompts=?, rules=?,
+                       retrieval_config=?, parameter_schema=?,
+                       category_profile='{}',
+                       initialization_provenance=?,
+                       activated_at=?
+                   WHERE id=? AND assistant_id=?""",
+                (
+                    json.dumps(model_config, ensure_ascii=False),
+                    json.dumps(node_prompts, ensure_ascii=False),
+                    json.dumps(rules, ensure_ascii=False),
+                    json.dumps(retrieval_config, ensure_ascii=False),
+                    json.dumps(schema, ensure_ascii=False),
+                    json.dumps(initialization_provenance, ensure_ascii=False),
+                    now,
+                    version_id,
+                    assistant_id,
+                ),
+            )
+            conn.execute(
+                "DELETE FROM assistant_versions WHERE assistant_id=? AND id!=?",
+                (assistant_id, version_id),
+            )
+        else:
+            version_id = f"{assistant_id}_v1_{__import__('uuid').uuid4().hex[:8]}"
+            version_no = 1
+            conn.execute(
+                """INSERT INTO assistant_versions
+                   (id,assistant_id,version,name,status,model_config,node_prompts,rules,
+                    retrieval_config,parameter_schema,category_profile,
+                    initialization_provenance,created_at,activated_at)
+                   VALUES (?,?,1,'','active',?,?,?,?,?,'{}',?,?,?)""",
+                (
+                    version_id,
+                    assistant_id,
+                    json.dumps(model_config, ensure_ascii=False),
+                    json.dumps(node_prompts, ensure_ascii=False),
+                    json.dumps(rules, ensure_ascii=False),
+                    json.dumps(retrieval_config, ensure_ascii=False),
+                    json.dumps(schema, ensure_ascii=False),
+                    json.dumps(initialization_provenance, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
         conn.execute(
             """UPDATE audit_assistants
                SET active_version_id=?, status='active', updated_at=?
@@ -410,8 +436,7 @@ def apply_init_draft(assistant_id: str) -> dict[str, Any]:
     return {
         "assistant_id": assistant_id,
         "version_id": version_id,
-        "version": next_version,
+        "version": version_no,
         "parameter_schema": schema,
-        "category_profile": category_profile,
         "initialization_provenance": initialization_provenance,
     }

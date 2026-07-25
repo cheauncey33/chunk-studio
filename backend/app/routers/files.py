@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import config, db, jobs, pdf
 
@@ -25,6 +25,7 @@ _NON_CORPUS_ROLES = frozenset({"report", "naming", "sample_report"})
 
 
 class FileUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
     metadata: dict[str, Any] | None = None
 
 
@@ -177,12 +178,26 @@ def update_file(file_id: str, body: FileUpdate):
     row = db.get_conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
     if not row:
         raise HTTPException(404, "file not found")
+    updates: list[str] = []
+    params: list[Any] = []
+    if body.name is not None:
+        safe_name = Path(body.name.strip()).name
+        if not safe_name or safe_name in {".", ".."}:
+            raise HTTPException(422, "invalid file name")
+        if Path(safe_name).suffix.lower() != ".pdf":
+            raise HTTPException(422, "file name must end with .pdf")
+        updates.append("name=?")
+        params.append(safe_name)
     if body.metadata is not None:
         metadata = {k: v for k, v in body.metadata.items() if v not in ("", None, [], {})}
+        updates.append("metadata=?")
+        params.append(json.dumps(metadata, ensure_ascii=False))
+    if updates:
+        params.append(file_id)
         with db.transaction() as conn:
             conn.execute(
-                "UPDATE files SET metadata=? WHERE id=?",
-                (json.dumps(metadata, ensure_ascii=False), file_id),
+                f"UPDATE files SET {', '.join(updates)} WHERE id=?",
+                params,
             )
     updated = db.get_conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
     return _file_out(dict(updated), include_parse=True)

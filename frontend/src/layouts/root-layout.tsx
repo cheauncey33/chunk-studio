@@ -44,7 +44,7 @@ export function RootLayout() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-bg-canvas text-text-primary">
-      <header className="relative z-20 flex h-[5.75rem] shrink-0 items-center border-b border-[#e5e7eb] bg-white px-5 dark:border-border-button dark:bg-bg-base">
+      <header className="relative z-20 flex h-16 shrink-0 items-center border-b border-[#e5e7eb] bg-white px-5 dark:border-border-button dark:bg-bg-base">
         <div className="flex min-w-0 items-center gap-2.5">
           <div
             className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#13c2c2] text-white"
@@ -53,14 +53,14 @@ export function RootLayout() {
             <ShieldCheck className="size-5" strokeWidth={2.25} />
           </div>
           <div className="hidden min-w-0 sm:block">
-            <div className="truncate text-[19px] font-bold tracking-tight text-[#111827] dark:text-text-primary">
+            <div className="truncate text-[17px] font-bold tracking-tight text-[#111827] dark:text-text-primary">
               标准RAG审查
             </div>
           </div>
         </div>
 
         <nav
-          className="absolute left-1/2 top-1/2 flex max-w-[min(100%-12rem,48rem)] -translate-x-1/2 -translate-y-1/2 items-center gap-0.5 overflow-x-auto rounded-full bg-[#f3f4f6] p-1 dark:bg-bg-card"
+          className="ml-3 flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto rounded-full bg-[#f3f4f6] p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden dark:bg-bg-card sm:absolute sm:left-1/2 sm:top-1/2 sm:ml-0 sm:max-w-[min(100%-12rem,48rem)] sm:-translate-x-1/2 sm:-translate-y-1/2"
           aria-label="主导航"
         >
           {NAV.map(item => {
@@ -71,7 +71,7 @@ export function RootLayout() {
                   to={item.to}
                   end={'end' in item ? item.end : false}
                   className={cn(
-                    'inline-flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-[19px] font-bold leading-none whitespace-nowrap transition',
+                    'inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[14px] font-semibold leading-none whitespace-nowrap transition sm:px-3.5 sm:text-[15px]',
                     active
                       ? 'bg-[#111827] text-white shadow-sm dark:bg-white dark:text-[#111827]'
                       : 'text-[#4b5563] hover:bg-white/80 hover:text-[#111827] dark:text-text-secondary dark:hover:bg-bg-base dark:hover:text-text-primary',
@@ -85,12 +85,12 @@ export function RootLayout() {
           })}
         </nav>
 
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-2 flex shrink-0 items-center gap-1 sm:ml-auto">
           <Explain text={helpText.nav.helpMode} title="说明模式" side="bottom">
             <Button
               variant={enabled ? 'default' : 'ghost'}
               size="icon"
-              className="size-9 rounded-full"
+              className="hidden size-9 rounded-full sm:inline-flex"
               onClick={toggle}
               title={enabled ? '关闭说明模式' : '说明模式'}
             >

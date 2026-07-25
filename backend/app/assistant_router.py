@@ -34,7 +34,6 @@ def list_routable_candidates() -> list[dict[str, Any]]:
         """SELECT a.id AS assistant_id, a.name AS assistant_name,
                   a.description AS assistant_description,
                   a.active_version_id,
-                  v.category_profile,
                   kb.id AS knowledge_base_id, kb.name AS knowledge_base_name,
                   kb.description AS knowledge_base_description
            FROM audit_assistants a
@@ -57,18 +56,11 @@ def list_routable_candidates() -> list[dict[str, Any]]:
         if assistant_id in seen:
             continue
         seen.add(assistant_id)
-        try:
-            category_profile = json.loads(row["category_profile"] or "{}")
-        except (json.JSONDecodeError, TypeError):
-            category_profile = {}
-        if not isinstance(category_profile, dict):
-            category_profile = {}
         out.append(
             {
                 "assistant_id": assistant_id,
                 "assistant_name": row["assistant_name"],
                 "assistant_description": row["assistant_description"] or "",
-                "category_profile": category_profile,
                 "knowledge_base_id": row["knowledge_base_id"],
                 "knowledge_base_name": row["knowledge_base_name"],
                 "knowledge_base_description": row["knowledge_base_description"] or "",

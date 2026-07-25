@@ -292,12 +292,6 @@ export interface AssistantInitDraft {
   assistant_id: string
   status: 'generating' | 'ready' | 'failed' | 'applied' | 'discarded'
   payload: {
-    category_profile?: {
-      name?: string
-      equipment_type?: string
-      focus?: string
-      notes?: string
-    }
     parameter_schema?: ParameterSchema
     report_parameters_prompt?: string
     source_file_ids?: {
@@ -316,18 +310,18 @@ export interface AssistantVersion {
   id: string
   assistant_id: string
   version: number
+  /** User-editable label; empty means fall back to v{version}. */
+  name: string
+  /** API convenience: name || `v{version}`. */
+  label: string
   status: 'draft' | 'active' | 'retired'
   model_config: Record<string, unknown>
   node_prompts: Record<string, { path?: string; content?: string }>
   rules: Record<string, unknown>
   retrieval_config: Record<string, unknown>
   parameter_schema: ParameterSchema
-  category_profile: {
-    name?: string
-    equipment_type?: string
-    focus?: string
-    notes?: string
-  }
+  /** Deprecated empty object retained for version JSON compatibility. */
+  category_profile: Record<string, unknown>
   initialization_provenance: {
     source?: string
     standard_file_ids?: string[]
@@ -620,13 +614,7 @@ export const api = {
   getJob: (id: string) => fetch(`${API}/jobs/${id}`).then(j<Job>),
   getActiveAssistantVersion: (id: string) =>
     fetch(`${API}/assistants/${id}/versions/active`).then(j<AssistantVersion>),
-  listAssistantVersions: (id: string) =>
-    fetch(`${API}/assistants/${id}/versions`).then(j<AssistantVersion[]>),
-  activateAssistantVersion: (id: string, versionId: string) =>
-    fetch(`${API}/assistants/${id}/versions/${versionId}/activate`, {
-      method: 'POST',
-    }).then(j<AssistantVersion>),
-  createAssistantVersion: (
+  updateActiveAssistantVersion: (
     id: string,
     body: Pick<
       AssistantVersion,
@@ -635,14 +623,13 @@ export const api = {
       | 'rules'
       | 'retrieval_config'
       | 'parameter_schema'
-      | 'category_profile'
       | 'initialization_provenance'
     >,
   ) =>
-    fetch(`${API}/assistants/${id}/versions`, {
-      method: 'POST',
+    fetch(`${API}/assistants/${id}/versions/active`, {
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...body, activate: true }),
+      body: JSON.stringify(body),
     }).then(j<AssistantVersion>),
   setAssistantKnowledgeBases: (id: string, knowledgeBaseIds: string[]) =>
     fetch(`${API}/assistants/${id}/knowledge-bases`, {
@@ -668,7 +655,6 @@ export const api = {
   updateAssistantInitDraft: (
     id: string,
     body: {
-      category_profile?: Record<string, string>
       parameter_schema?: ParameterSchema
       report_parameters_prompt?: string
     },
@@ -733,7 +719,7 @@ export const api = {
     return fetch(`${API}/files`, { method: 'POST', body: fd }).then(j<CSFile>)
   },
   deleteFile: (id: string) => fetch(`${API}/files/${id}`, { method: 'DELETE' }).then(j),
-  updateFile: (id: string, body: Partial<{ metadata: Record<string, unknown> }>) =>
+  updateFile: (id: string, body: Partial<{ name: string; metadata: Record<string, unknown> }>) =>
     fetch(`${API}/files/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

@@ -201,6 +201,7 @@ CREATE TABLE IF NOT EXISTS assistant_versions (
     id                TEXT PRIMARY KEY,
     assistant_id      TEXT NOT NULL,
     version           INTEGER NOT NULL,
+    name              TEXT NOT NULL DEFAULT '',
     status            TEXT NOT NULL DEFAULT 'draft'
                       CHECK (status IN ('draft','active','retired')),
     model_config      TEXT NOT NULL DEFAULT '{}',
@@ -271,14 +272,61 @@ def init_db() -> None:
     _migrate_knowledge_base_corpus_kind()
     _migrate_assistant_parameter_schema()
     _migrate_assistant_category_profile()
+    _migrate_assistant_version_name()
     _migrate_assistant_init_drafts()
+    _migrate_query_planner_category_notes()
+    _migrate_audit_judge_category_notes()
     _backfill_chunk_layers()
     _backfill_auto_metadata()
     _seed_knowledge_base_and_assistant()
     _backfill_applied_init_profiles()
     _migrate_assistant_kb_one_to_one()
+    _migrate_assistant_single_version()
     _ensure_knowledge_base_assistants()
     _conn.commit()
+
+
+def _migrate_assistant_single_version() -> None:
+    """Keep one active config row per assistant; drop retired/history rows."""
+    assert _conn is not None
+    assistants = _conn.execute(
+        "SELECT id, active_version_id FROM audit_assistants"
+    ).fetchall()
+    for assistant in assistants:
+        assistant_id = assistant["id"]
+        keep_id = assistant["active_version_id"]
+        if keep_id:
+            exists = _conn.execute(
+                "SELECT id FROM assistant_versions WHERE id=? AND assistant_id=?",
+                (keep_id, assistant_id),
+            ).fetchone()
+            if not exists:
+                keep_id = None
+        if not keep_id:
+            latest = _conn.execute(
+                """SELECT id FROM assistant_versions
+                   WHERE assistant_id=?
+                   ORDER BY CASE WHEN status='active' THEN 0 ELSE 1 END,
+                            version DESC
+                   LIMIT 1""",
+                (assistant_id,),
+            ).fetchone()
+            keep_id = latest["id"] if latest else None
+            if keep_id:
+                _conn.execute(
+                    "UPDATE audit_assistants SET active_version_id=? WHERE id=?",
+                    (keep_id, assistant_id),
+                )
+        if not keep_id:
+            continue
+        _conn.execute(
+            "DELETE FROM assistant_versions WHERE assistant_id=? AND id!=?",
+            (assistant_id, keep_id),
+        )
+        _conn.execute(
+            "UPDATE assistant_versions SET status='active' WHERE id=?",
+            (keep_id,),
+        )
 
 
 def _migrate_assistant_parameter_schema() -> None:
@@ -314,6 +362,20 @@ def _migrate_assistant_category_profile() -> None:
         )
 
 
+def _migrate_assistant_version_name() -> None:
+    """Add optional human-readable label for assistant versions."""
+    assert _conn is not None
+    cols = {
+        row["name"]
+        for row in _conn.execute("PRAGMA table_info(assistant_versions)").fetchall()
+    }
+    if "name" not in cols:
+        _conn.execute(
+            """ALTER TABLE assistant_versions
+               ADD COLUMN name TEXT NOT NULL DEFAULT ''"""
+        )
+
+
 def _migrate_assistant_init_drafts() -> None:
     """Ensure assistant_init_drafts exists on older databases."""
     assert _conn is not None
@@ -331,27 +393,103 @@ def _migrate_assistant_init_drafts() -> None:
     )
 
 
+def _oil_query_planner_category_notes() -> tuple[str, str]:
+    path = config.PROJECT_ROOT / "evaluation" / "prompts" / "oil_query_planner_category_notes_v1.md"
+    rel = str(path.relative_to(config.PROJECT_ROOT)).replace("\\", "/")
+    content = path.read_text(encoding="utf-8").strip() if path.exists() else ""
+    return rel, content
+
+
+def _migrate_query_planner_category_notes() -> None:
+    """Strip nested full Planner prompts from query_planner.content.
+
+    Runtime now synthesizes query_planner_brief; node content is optional short
+    category notes only. Oil assistants get the short table-distinction notes.
+    """
+    from .query_planner_routes import looks_like_full_query_planner_prompt
+
+    assert _conn is not None
+    oil_path, oil_notes = _oil_query_planner_category_notes()
+    rows = _conn.execute(
+        """SELECT v.id, v.assistant_id, v.node_prompts, a.name AS assistant_name
+           FROM assistant_versions v
+           JOIN audit_assistants a ON a.id=v.assistant_id"""
+    ).fetchall()
+    for row in rows:
+        prompts = _loads_json(row["node_prompts"], {})
+        if not isinstance(prompts, dict):
+            continue
+        planner = prompts.get("query_planner")
+        if not isinstance(planner, dict):
+            continue
+        content = str(planner.get("content") or "")
+        if not looks_like_full_query_planner_prompt(content):
+            continue
+        assistant_id = str(row["assistant_id"] or "")
+        assistant_name = str(row["assistant_name"] or "")
+        is_oil = (
+            assistant_id == "assistant_oil_transformer_audit"
+            or "油浸" in assistant_name
+            or "变压器" in assistant_name
+        )
+        next_content = oil_notes if is_oil else ""
+        next_path = oil_path if is_oil else str(planner.get("path") or "")
+        prompts["query_planner"] = {
+            **planner,
+            "path": next_path,
+            "content": next_content,
+        }
+        _conn.execute(
+            "UPDATE assistant_versions SET node_prompts=? WHERE id=?",
+            (json.dumps(prompts, ensure_ascii=False), row["id"]),
+        )
+
+
+def _migrate_audit_judge_category_notes() -> None:
+    """Strip nested full Judge prompts from audit_judge.content."""
+    from .audit_judge_notes import looks_like_full_audit_judge_prompt
+
+    assert _conn is not None
+    rows = _conn.execute(
+        "SELECT id, node_prompts FROM assistant_versions"
+    ).fetchall()
+    for row in rows:
+        prompts = _loads_json(row["node_prompts"], {})
+        if not isinstance(prompts, dict):
+            continue
+        judge = prompts.get("audit_judge")
+        if not isinstance(judge, dict):
+            continue
+        content = str(judge.get("content") or "")
+        if not looks_like_full_audit_judge_prompt(content):
+            continue
+        prompts["audit_judge"] = {**judge, "content": ""}
+        _conn.execute(
+            "UPDATE assistant_versions SET node_prompts=? WHERE id=?",
+            (json.dumps(prompts, ensure_ascii=False), row["id"]),
+        )
+
+
 def _backfill_applied_init_profiles() -> None:
-    """Recover version identity from applied pre-versioning initialization drafts."""
+    """Recover initialization provenance from applied pre-versioning drafts."""
     assert _conn is not None
     rows = _conn.execute(
         """SELECT d.assistant_id, d.payload, d.job_id, d.updated_at,
-                  v.id AS version_id, v.category_profile
+                  v.id AS version_id, v.initialization_provenance
            FROM assistant_init_drafts d
            JOIN audit_assistants a ON a.id=d.assistant_id
            JOIN assistant_versions v ON v.id=a.active_version_id
            WHERE d.status='applied'"""
     ).fetchall()
     for row in rows:
-        if _loads_json(row["category_profile"], {}):
+        if _loads_json(row["initialization_provenance"], {}):
             continue
         payload = _loads_json(row["payload"], {})
-        profile = payload.get("category_profile")
-        if not isinstance(profile, dict) or not profile:
-            continue
         source_file_ids = payload.get("source_file_ids")
         if not isinstance(source_file_ids, dict):
             source_file_ids = {}
+        if not source_file_ids and not payload.get("model"):
+            continue
         provenance = {
             "source": "assistant_init_draft_backfill",
             "standard_file_ids": list(source_file_ids.get("standard") or []),
@@ -363,10 +501,9 @@ def _backfill_applied_init_profiles() -> None:
         }
         _conn.execute(
             """UPDATE assistant_versions
-               SET category_profile=?, initialization_provenance=?
+               SET category_profile='{}', initialization_provenance=?
                WHERE id=?""",
             (
-                json.dumps(profile, ensure_ascii=False),
                 json.dumps(provenance, ensure_ascii=False),
                 row["version_id"],
             ),
@@ -425,23 +562,30 @@ def _clone_assistant_for_knowledge_base(
     )
 
     active_clone_id: str | None = None
-    versions = _conn.execute(
-        "SELECT * FROM assistant_versions WHERE assistant_id=? ORDER BY version",
-        (assistant_id,),
-    ).fetchall()
-    for version in versions:
-        clone_version_id = f"{clone_id}_v{version['version']}_{uuid.uuid4().hex[:8]}"
+    keep_id = assistant["active_version_id"]
+    version = None
+    if keep_id:
+        version = _conn.execute(
+            "SELECT * FROM assistant_versions WHERE id=? AND assistant_id=?",
+            (keep_id, assistant_id),
+        ).fetchone()
+    if version is None:
+        version = _conn.execute(
+            """SELECT * FROM assistant_versions
+               WHERE assistant_id=? ORDER BY version DESC LIMIT 1""",
+            (assistant_id,),
+        ).fetchone()
+    if version is not None:
+        active_clone_id = f"{clone_id}_v1_{uuid.uuid4().hex[:8]}"
         _conn.execute(
             """INSERT INTO assistant_versions
-               (id,assistant_id,version,status,model_config,node_prompts,rules,
+               (id,assistant_id,version,name,status,model_config,node_prompts,rules,
                 retrieval_config,parameter_schema,category_profile,
                 initialization_provenance,created_at,activated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,1,'','active',?,?,?,?,?,?,?,?,?)""",
             (
-                clone_version_id,
+                active_clone_id,
                 clone_id,
-                version["version"],
-                version["status"],
                 version["model_config"],
                 version["node_prompts"],
                 version["rules"],
@@ -449,12 +593,10 @@ def _clone_assistant_for_knowledge_base(
                 version["parameter_schema"],
                 version["category_profile"],
                 version["initialization_provenance"],
-                version["created_at"],
-                version["activated_at"],
+                now,
+                now,
             ),
         )
-        if version["id"] == assistant["active_version_id"]:
-            active_clone_id = clone_version_id
     _conn.execute(
         "UPDATE audit_assistants SET active_version_id=? WHERE id=?",
         (active_clone_id, clone_id),
@@ -761,10 +903,10 @@ def ensure_assistant_for_knowledge_base(
         )
         tx.execute(
             """INSERT INTO assistant_versions
-               (id,assistant_id,version,status,model_config,node_prompts,rules,
+               (id,assistant_id,version,name,status,model_config,node_prompts,rules,
                 retrieval_config,parameter_schema,category_profile,
                 initialization_provenance,created_at,activated_at)
-               VALUES (?,?,1,'active',?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,1,'','active',?,?,?,?,?,?,?,?,?)""",
             (
                 version_id,
                 assistant_id,
@@ -828,6 +970,8 @@ def _default_model_config() -> dict[str, Any]:
 
 
 def _default_retrieval_config() -> dict[str, Any]:
+    from .query_planner_routes import default_query_planner_routes
+
     return {
         "top_k": 10,
         "route_top_k": 30,
@@ -839,6 +983,7 @@ def _default_retrieval_config() -> dict[str, Any]:
         "expand_references": False,
         "keyword_weight": 0.3,
         "vector_weight": 0.7,
+        "query_planner_routes": default_query_planner_routes(),
         # Peer-report context triggers for the audit workflow. Editable per
         # assistant version; an empty list disables peer context.
         "peer_context_rules": [
@@ -875,14 +1020,15 @@ def _seed_assistant_version(
     )
     _conn.execute(
         """INSERT OR IGNORE INTO assistant_versions
-           (id, assistant_id, version, status, model_config, node_prompts,
+           (id, assistant_id, version, name, status, model_config, node_prompts,
             rules, retrieval_config, parameter_schema, category_profile,
             initialization_provenance, created_at, activated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             version_id,
             assistant_id,
             1,
+            "",
             "active",
             json.dumps(_default_model_config(), ensure_ascii=False),
             json.dumps(node_prompts, ensure_ascii=False),
@@ -1062,19 +1208,34 @@ def _seed_knowledge_base_and_assistant() -> None:
             "report_parameters": "report_parameter_extraction_v1.md",
             "test_items": "report_test_item_extraction_v1.md",
             "model_decode": "model_naming_decode_v1.md",
-            "query_planner": "retrieval_query_planner_v1.md",
-            "audit_judge": "standard_value_audit_judge_v1.md",
         }
     )
+    oil_planner_path, oil_planner_notes = _oil_query_planner_category_notes()
+    oil_prompts["query_planner"] = {
+        "path": oil_planner_path,
+        "content": oil_planner_notes,
+    }
+    # audit_judge content is optional short notes; brief is system-built.
+    oil_prompts["audit_judge"] = {
+        "path": "evaluation/prompts/standard_value_audit_judge_v1.md",
+        "content": "",
+    }
     template_prompts = _load_node_prompts(
         {
             "report_parameters": "generic/report_parameter_extraction_generic_v1.md",
             "test_items": "generic/report_test_item_extraction_generic_v1.md",
             "model_decode": "generic/model_naming_decode_generic_v1.md",
-            "query_planner": "generic/retrieval_query_planner_generic_v1.md",
-            "audit_judge": "generic/standard_value_audit_judge_generic_v1.md",
         }
     )
+    # query_planner / audit_judge content is optional category notes only.
+    template_prompts["query_planner"] = {
+        "path": "evaluation/prompts/generic/retrieval_query_planner_generic_v1.md",
+        "content": "",
+    }
+    template_prompts["audit_judge"] = {
+        "path": "evaluation/prompts/generic/standard_value_audit_judge_generic_v1.md",
+        "content": "",
+    }
     _seed_assistant_version(
         assistant_id=template_assistant_id,
         version_id=template_version_id,
@@ -1083,12 +1244,7 @@ def _seed_knowledge_base_and_assistant() -> None:
         node_prompts=template_prompts,
         rules={},
         parameter_schema=generic_parameter_schema(),
-        category_profile={
-            "name": "通用审查",
-            "equipment_type": "",
-            "focus": "按知识库配置执行报告审查",
-            "notes": "内置通用模板",
-        },
+        category_profile={},
         now=now,
     )
     _seed_assistant_version(
@@ -1099,12 +1255,7 @@ def _seed_knowledge_base_and_assistant() -> None:
         node_prompts=oil_prompts,
         rules=seed_manual_rules,
         parameter_schema=oil_parameter_schema(),
-        category_profile={
-            "name": "油浸式变压器",
-            "equipment_type": "油浸式变压器",
-            "focus": "检测报告参数、项目、型号规则和标准值",
-            "notes": "内置初始品类",
-        },
+        category_profile={},
         now=now,
     )
     _conn.execute(

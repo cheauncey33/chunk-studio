@@ -25,6 +25,11 @@ from app.parameter_schema import (  # noqa: E402
     normalize_extracted_parameters,
     resolve_parameter_schema,
 )
+from app.prompt_vars import build_prompt_var_context, compose_runtime_prompt  # noqa: E402
+from app.query_planner_routes import (  # noqa: E402
+    enabled_query_planner_route_ids,
+    resolve_query_planner_routes,
+)
 from build_retrieval_evidence_reviews import (  # noqa: E402
     FINAL_PER_TYPE,
     RRF_K,
@@ -120,12 +125,48 @@ def _assistant_evidence_file_ids(
     )
 
 
-def _prompt_content(profile: dict[str, Any], key: str) -> str:
+def _prompt_content(
+    profile: dict[str, Any],
+    key: str,
+    *,
+    var_context: dict[str, str] | None = None,
+) -> str:
     prompt = profile["node_prompts"].get(key) or {}
     content = str(prompt.get("content") or "")
-    if not content:
+    if var_context is None:
+        if not content.strip():
+            raise ValueError(f"assistant version omitted prompt: {key}")
+        return content
+    composed = compose_runtime_prompt(content, step_id=key, context=var_context)
+    if not composed.strip():
         raise ValueError(f"assistant version omitted prompt: {key}")
-    return content
+    return composed
+
+
+def _assistant_prompt_var_context(
+    assistant_id: str,
+    profile: dict[str, Any],
+) -> dict[str, str]:
+    bound = db.assistant_bound_knowledge_bases(assistant_id)
+    # Bound list is priority ASC; last row is highest priority (same as merge_manual_rules).
+    primary = bound[-1] if bound else {}
+    manual_rules = db.resolve_assistant_manual_rules(
+        assistant_id,
+        fallback=profile.get("rules"),
+    )
+    retrieval_config = profile.get("retrieval_config") or {}
+    if not isinstance(retrieval_config, dict):
+        retrieval_config = {}
+    return build_prompt_var_context(
+        parameter_schema=profile.get("parameter_schema"),
+        manual_rules=manual_rules,
+        kb_name=str(primary.get("name") or ""),
+        kb_description=str(primary.get("description") or ""),
+        query_planner_routes=resolve_query_planner_routes(
+            retrieval_config.get("query_planner_routes"),
+        ),
+        assistant_rules=profile.get("rules"),
+    )
 
 
 def _extract_parameters(
@@ -136,12 +177,10 @@ def _extract_parameters(
     parameter_schema: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     schema = resolve_parameter_schema(parameter_schema)
+    # Schema lives in the system prompt (extraction_brief); do not send it again.
     result = _call_model(
         prompt,
-        {
-            "report_markdown": markdown,
-            "parameter_schema": schema,
-        },
+        {"report_markdown": markdown},
         model=model,
     )
     return normalize_extracted_parameters(result, schema)
@@ -199,6 +238,22 @@ def _select_manual_knowledge_rules(
         if isinstance(rule, dict) and str(rule.get("rule_text") or "").strip()
     ]
     return {**rules_payload, "rules": rules}
+
+
+def _collect_enabled_planner_queries(
+    planned: dict[str, Any] | None,
+    *,
+    query_planner_routes: Any,
+    production_query: str,
+) -> dict[str, str]:
+    """Keep production fallback; only copy non-empty enabled planner routes."""
+    queries: dict[str, str] = {"production": production_query}
+    planned_map = planned if isinstance(planned, dict) else {}
+    for route in enabled_query_planner_route_ids(query_planner_routes):
+        value = str(planned_map.get(route) or "").strip()
+        if value:
+            queries[route] = value
+    return queries
 
 
 def _find_requirement(extracted: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
@@ -577,11 +632,12 @@ def main() -> None:
         retrieval_config["aggregate_continuation_tables"]
     )
     expand_references = bool(retrieval_config["expand_references"])
-    parameter_prompt = _prompt_content(profile, "report_parameters")
-    item_prompt = _prompt_content(profile, "test_items")
-    naming_prompt = _prompt_content(profile, "model_decode")
-    query_prompt = _prompt_content(profile, "query_planner")
-    judge_prompt = _prompt_content(profile, "audit_judge")
+    prompt_vars = _assistant_prompt_var_context(args.assistant_id, profile)
+    parameter_prompt = _prompt_content(profile, "report_parameters", var_context=prompt_vars)
+    item_prompt = _prompt_content(profile, "test_items", var_context=prompt_vars)
+    naming_prompt = _prompt_content(profile, "model_decode", var_context=prompt_vars)
+    query_prompt = _prompt_content(profile, "query_planner", var_context=prompt_vars)
+    judge_prompt = _prompt_content(profile, "audit_judge", var_context=prompt_vars)
     markdown = args.report.read_text(encoding="utf-8")
     checkpoint_path = args.output.with_suffix(".checkpoint.json")
     checkpoint = (
@@ -647,11 +703,13 @@ def main() -> None:
         )
         planner_input = {**runtime_case, "decoded_model": decoded}
         planned = _call_model(query_prompt, planner_input, model=judge_model)
-        queries = {"production": _production_query(runtime_case)}
-        for route in ("semantic", "keyword", "table_target", "section_target"):
-            value = str(planned.get(route) or "").strip()
-            if value:
-                queries[route] = value
+        queries = _collect_enabled_planner_queries(
+            planned if isinstance(planned, dict) else {},
+            query_planner_routes=(profile.get("retrieval_config") or {}).get(
+                "query_planner_routes"
+            ),
+            production_query=_production_query(runtime_case),
+        )
         # Pass full planner routes into hybrid_search (no second rewrite).
         candidates, retrieval_debug = _retrieve_hybrid_candidates(
             queries["production"],

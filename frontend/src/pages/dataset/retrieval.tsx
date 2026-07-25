@@ -192,7 +192,7 @@ export default function DatasetRetrievalPage() {
             </div>
           </div>
           <p className="text-xs text-text-secondary">
-            正式审查时的松紧程度，请到「审查助手 → 检索参数」里配置并保存为新版本。
+            正式审查时的松紧程度，请到「审查助手 → 检索参数」里配置并保存。
           </p>
           <div className="flex gap-2">
             <Explain text={helpText.retrieval.run} title="开始检索">

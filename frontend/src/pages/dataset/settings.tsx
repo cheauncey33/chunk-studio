@@ -171,7 +171,7 @@ export default function DatasetSettingsPage() {
     <div className="space-y-5 pt-2">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <h1 className="text-[18px] font-semibold tracking-tight">配置</h1>
+          <h1 className="text-[24px] font-semibold tracking-tight">知识库设置</h1>
           <p className="mt-1.5 max-w-3xl text-[15px] leading-relaxed text-text-secondary">
             知识库属性：名称、切片规则，以及命名 PDF / 约定 / 示例。检索阈值与返回条数在审查助手里配置。
           </p>

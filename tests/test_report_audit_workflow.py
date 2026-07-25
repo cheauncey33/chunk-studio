@@ -107,7 +107,7 @@ def test_load_assistant_version_includes_category_provenance(
 ) -> None:
     _init_temp_db(monkeypatch, tmp_path)
     profile = workflow._load_assistant_version("assistant_oil_transformer_audit")
-    assert profile["category_profile"]["name"] == "油浸式变压器"
+    assert profile["category_profile"] == {}
     assert profile["initialization_provenance"]["source"] == "built_in_seed"
     _close_temp_db(monkeypatch)
 
@@ -498,3 +498,31 @@ def test_enqueue_accepts_report_outside_knowledge_base(monkeypatch, tmp_path) ->
     # Default runs audit the full report; report_id is an eval-only opt-in.
     assert "report_id" not in (job.get("result") or {})
     _close_temp_db(monkeypatch)
+
+
+def test_collect_enabled_planner_queries_filters_routes() -> None:
+    routes = [
+        {"id": "semantic", "enabled": True, "label": "语义改写", "instruction": "s"},
+        {"id": "keyword", "enabled": False, "label": "关键词", "instruction": "k"},
+        {"id": "table_target", "enabled": True, "label": "表格定向", "instruction": "t"},
+        {"id": "section_target", "enabled": True, "label": "章节定向", "instruction": "sec"},
+    ]
+    planned = {
+        "semantic": "语义查询",
+        "keyword": "关键词不应收录",
+        "table_target": "",
+        "section_target": "  章节查询  ",
+        "extra": "忽略",
+    }
+    queries = workflow._collect_enabled_planner_queries(
+        planned,
+        query_planner_routes=routes,
+        production_query="生产兜底",
+    )
+    assert queries == {
+        "production": "生产兜底",
+        "semantic": "语义查询",
+        "section_target": "章节查询",
+    }
+    assert "keyword" not in queries
+    assert "table_target" not in queries

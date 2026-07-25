@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Pencil, Sparkles, Upload, CircleHelp } from 'lucide-react'
+import { Loader2, Pencil, RefreshCw, Sparkles, Upload, CircleHelp } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   api,
@@ -10,6 +10,7 @@ import {
   type ParameterSchemaField,
 } from '@/api'
 import { Button } from '@/components/ui/button'
+import { Explain } from '@/components/explain'
 import {
   Dialog,
   DialogContent,
@@ -78,13 +79,7 @@ async function pollInitDraft(
   throw new Error('初始化超时，请稍后刷新查看草案')
 }
 
-type EditTarget =
-  | 'name'
-  | 'equipment_type'
-  | 'focus'
-  | 'notes'
-  | 'schema'
-  | 'prompt'
+type EditTarget = 'schema' | 'prompt'
 
 function SummaryRow({
   label,
@@ -122,12 +117,157 @@ function SummaryRow({
   )
 }
 
+function InitUploadDropzone({
+  helpText,
+  uploadLabel,
+  busy,
+  inputRef,
+  onFile,
+}: {
+  helpText: string
+  uploadLabel: string
+  busy: boolean
+  inputRef: RefObject<HTMLInputElement | null>
+  onFile: (file: File | null) => void
+}) {
+  return (
+    <div className="w-full">
+      <input
+        ref={inputRef}
+        type="file"
+        accept="application/pdf,.pdf"
+        className="hidden"
+        onChange={e => void onFile(e.target.files?.[0] || null)}
+      />
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => inputRef.current?.click()}
+        className={cn(
+          'flex w-full flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-[#cbd5e1] bg-[#f8fafc] px-6 py-12 text-[#111827] transition',
+          'hover:border-[#2563eb]/55 hover:bg-[#eff6ff]',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563eb]/35',
+          busy && 'pointer-events-none opacity-60',
+        )}
+      >
+        <h3 className="flex items-center gap-2 text-[16px] font-semibold">
+          <Sparkles className="size-4 text-[#2563eb]" />
+          初始化
+          <span onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
+            <Explain title="初始化" text={helpText} />
+          </span>
+        </h3>
+        <p className="max-w-md text-center text-[13px] leading-relaxed text-[#6b7280]">
+          上传一份代表性检测报告 PDF，自动归纳品类、参数字段与审查配置草案。
+        </p>
+        {busy ? (
+          <Loader2 className="size-7 animate-spin text-[#2563eb]" />
+        ) : (
+          <Upload className="size-7 text-[#2563eb]" />
+        )}
+        <span className="text-[15px] font-semibold">{uploadLabel}</span>
+        <span className="text-[13px] text-[#6b7280]">点击选择 PDF，上传后自动解析并生成草案</span>
+      </button>
+    </div>
+  )
+}
+
+function InitUploadedPdfList({
+  files,
+  busy,
+  busyFileIds,
+  onRename,
+  onReparse,
+}: {
+  files: CSFile[]
+  busy: boolean
+  busyFileIds: Set<string>
+  onRename: (file: CSFile) => void
+  onReparse: (file: CSFile) => void
+}) {
+  if (files.length === 0) {
+    return (
+      <div className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-6 text-center text-[13px] text-[#9ca3af]">
+        暂无已上传的 PDF
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-2xl border border-[#e5e7eb] bg-white">
+      <div className="border-b border-[#e5e7eb] px-4 py-2.5 text-[13px] font-medium text-[#374151]">
+        已上传 PDF
+        <span className="ml-1.5 font-normal text-[#9ca3af]">（{files.length}）</span>
+      </div>
+      <div className="max-h-56 space-y-0.5 overflow-auto p-2">
+        {files.map(file => {
+          const ready = isParseReady(file)
+          const failed = isParseFailed(file)
+          const fileBusy = busyFileIds.has(file.id)
+          return (
+            <div
+              key={file.id}
+              className="group flex min-h-10 items-center gap-2 rounded-xl px-2.5 text-[13px] hover:bg-[#f8fafc]"
+            >
+              <span className="min-w-0 flex-1 truncate text-[#111827]">{file.name}</span>
+              <span
+                className={cn(
+                  'shrink-0 text-[12px]',
+                  ready && 'text-emerald-600',
+                  failed && 'text-red-600',
+                  !ready && !failed && 'text-[#9ca3af]',
+                )}
+              >
+                {ready ? '已解析' : failed ? '解析失败' : '解析中'}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-7 text-[#9ca3af] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                disabled={busy || fileBusy}
+                title="修改文件名"
+                aria-label={`修改文件名 ${file.name}`}
+                onClick={() => onRename(file)}
+              >
+                <Pencil className="size-3.5" />
+              </Button>
+              <Button
+                type="button"
+                variant={failed ? 'outline' : 'ghost'}
+                size={failed ? 'sm' : 'icon'}
+                className={cn(
+                  failed
+                    ? 'h-7 gap-1 px-2 text-[12px] text-red-600 hover:text-red-700'
+                    : 'size-7 text-[#9ca3af] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100',
+                )}
+                disabled={busy || fileBusy}
+                title="重新解析"
+                aria-label={`重新解析 ${file.name}`}
+                onClick={() => onReparse(file)}
+              >
+                {fileBusy ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-3.5" />
+                )}
+                {failed && '重新解析'}
+              </Button>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function AssistantInitDraftCard({
   assistantId,
   activeVersion,
   onApplied,
   onJumpToReportParameters,
   bare = false,
+  initializationOnly = false,
 }: {
   assistantId: string
   activeVersion?: number | null
@@ -135,6 +275,8 @@ export function AssistantInitDraftCard({
   onJumpToReportParameters?: () => void
   /** 嵌套在外层卡片内时去掉自身边框，避免双框。 */
   bare?: boolean
+  /** 已有启用版本时仍展示独立初始化流程，而不是已应用摘要。 */
+  initializationOnly?: boolean
 }) {
   const client = useQueryClient()
   const uploadRef = useRef<HTMLInputElement>(null)
@@ -143,20 +285,12 @@ export function AssistantInitDraftCard({
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null)
   const [selectedSampleIds, setSelectedSampleIds] = useState<string[]>([])
   const [sessionSamples, setSessionSamples] = useState<CSFile[]>([])
+  const [renameTarget, setRenameTarget] = useState<CSFile | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [busyFileIds, setBusyFileIds] = useState<Set<string>>(() => new Set())
   const [draft, setDraft] = useState<AssistantInitDraft | null>(null)
-  const [appliedVersion, setAppliedVersion] = useState<number | null>(activeVersion ?? null)
-  const [profile, setProfile] = useState({
-    name: '',
-    equipment_type: '',
-    focus: '',
-    notes: '',
-  })
   const [schema, setSchema] = useState<ParameterSchema>(defaultSchema())
   const [prompt, setPrompt] = useState('')
-
-  useEffect(() => {
-    if (activeVersion != null) setAppliedVersion(activeVersion)
-  }, [activeVersion])
 
   const filesQuery = useQuery({
     queryKey: ['files', 'init-samples'],
@@ -176,15 +310,9 @@ export function AssistantInitDraftCard({
     }
     return [...byId.values()]
   }, [filesQuery.data, sessionSamples])
+  const visibleSamples = initializationOnly ? sessionSamples : sampleCandidates
 
   const hydrateFromDraft = (item: AssistantInitDraft) => {
-    const p = item.payload?.category_profile || {}
-    setProfile({
-      name: String(p.name || ''),
-      equipment_type: String(p.equipment_type || ''),
-      focus: String(p.focus || ''),
-      notes: String(p.notes || ''),
-    })
     setSchema(item.payload?.parameter_schema || defaultSchema())
     setPrompt(String(item.payload?.report_parameters_prompt || ''))
     const samples = item.payload?.source_file_ids?.sample_reports || []
@@ -198,6 +326,10 @@ export function AssistantInitDraftCard({
       .then(item => {
         if (cancelled || !item) return
         setDraft(item)
+        if (initializationOnly && item.status === 'applied') {
+          setSelectedSampleIds([])
+          return
+        }
         hydrateFromDraft(item)
         if (item.status === 'generating' && item.job_id) {
           setGenerating(true)
@@ -223,7 +355,7 @@ export function AssistantInitDraftCard({
     return () => {
       cancelled = true
     }
-  }, [assistantId])
+  }, [assistantId, initializationOnly])
 
   const toggleSample = (fileId: string) => {
     const file = sampleCandidates.find(item => item.id === fileId)
@@ -245,47 +377,7 @@ export function AssistantInitDraftCard({
     })
   }
 
-  const onUploadSample = async (file: File | null) => {
-    if (!file) return
-    setUploading(true)
-    try {
-      const uploaded = await api.uploadFile(file, {
-        doc_role: 'sample_report',
-        doc_type: 'sample_report',
-      })
-      setSessionSamples(prev => [uploaded, ...prev.filter(item => item.id !== uploaded.id)])
-      toast.message('样例已上传，正在解析…')
-      const current = await api.getFile(uploaded.id)
-      const parsePending = current.parse_status === 'queued' || current.parse_status === 'running'
-      if (!isParseReady(current) && !parsePending) {
-        await api.parseFile(uploaded.id)
-      }
-      const parsed = await waitUntilParsed(uploaded.id)
-      setSessionSamples(prev => [parsed, ...prev.filter(item => item.id !== parsed.id)])
-      setSelectedSampleIds(prev => {
-        if (prev.includes(parsed.id) || prev.length >= 3) return prev
-        return [...prev, parsed.id]
-      })
-      await filesQuery.refetch()
-      toast.success('样例报告已解析完成')
-    } catch (err) {
-      toast.error((err as Error).message)
-      await filesQuery.refetch()
-    } finally {
-      setUploading(false)
-      if (uploadRef.current) uploadRef.current.value = ''
-    }
-  }
-
-  const startInit = async () => {
-    const readySelected = selectedSampleIds.filter(id => {
-      const file = sampleCandidates.find(item => item.id === id)
-      return file && isParseReady(file)
-    })
-    if (selectedSampleIds.length && readySelected.length !== selectedSampleIds.length) {
-      toast.error('所选样例尚未解析完成或已失败，请取消勾选后再生成（也可不选样例，仅用标准语料）')
-      return
-    }
+  const generateDraft = async (readySelected: string[]) => {
     setGenerating(true)
     try {
       const started = await api.startAssistantInit(assistantId, {
@@ -313,11 +405,124 @@ export function AssistantInitDraftCard({
     }
   }
 
+  const onUploadSample = async (file: File | null) => {
+    if (!file) return
+    let uploadedId: string | null = null
+    setUploading(true)
+    try {
+      const uploaded = await api.uploadFile(file, {
+        doc_role: 'sample_report',
+        doc_type: 'sample_report',
+      })
+      uploadedId = uploaded.id
+      setSessionSamples(prev => [uploaded, ...prev.filter(item => item.id !== uploaded.id)])
+      toast.message('样例已上传，正在解析…')
+      const current = await api.getFile(uploaded.id)
+      const parsePending = current.parse_status === 'queued' || current.parse_status === 'running'
+      if (!isParseReady(current) && !parsePending) {
+        await api.parseFile(uploaded.id)
+      }
+      const parsed = await waitUntilParsed(uploaded.id)
+      setSessionSamples(prev => [parsed, ...prev.filter(item => item.id !== parsed.id)])
+      setSelectedSampleIds(prev => {
+        if (prev.includes(parsed.id) || prev.length >= 3) return prev
+        return [...prev, parsed.id]
+      })
+      await filesQuery.refetch()
+      toast.success('样例报告已解析完成')
+      if (initializationOnly) {
+        await generateDraft([parsed.id])
+      }
+    } catch (err) {
+      toast.error((err as Error).message)
+      if (uploadedId) {
+        const latest = await api.getFile(uploadedId).catch(() => null)
+        if (latest) {
+          setSessionSamples(prev => [latest, ...prev.filter(item => item.id !== latest.id)])
+        }
+      }
+      await filesQuery.refetch()
+    } finally {
+      setUploading(false)
+      if (uploadRef.current) uploadRef.current.value = ''
+    }
+  }
+
+  const startInit = async () => {
+    const readySelected = selectedSampleIds.filter(id => {
+      const file = sampleCandidates.find(item => item.id === id)
+      return file && isParseReady(file)
+    })
+    if (selectedSampleIds.length && readySelected.length !== selectedSampleIds.length) {
+      toast.error('所选样例尚未解析完成或已失败，请取消勾选后再生成（也可不选样例，仅用标准语料）')
+      return
+    }
+    await generateDraft(readySelected)
+  }
+
+  const reparseSample = async (file: CSFile) => {
+    setBusyFileIds(prev => new Set(prev).add(file.id))
+    setSessionSamples(prev => prev.map(item => (
+      item.id === file.id
+        ? { ...item, parse_ready: false, parse_status: 'queued' }
+        : item
+    )))
+    try {
+      await api.parseFile(file.id, { force: true })
+      toast.message(`正在重新解析 ${file.name}`)
+      const parsed = await waitUntilParsed(file.id)
+      setSessionSamples(prev => [parsed, ...prev.filter(item => item.id !== parsed.id)])
+      await filesQuery.refetch()
+      toast.success(`${parsed.name} 已重新解析`)
+    } catch (err) {
+      toast.error((err as Error).message)
+      const latest = await api.getFile(file.id).catch(() => null)
+      if (latest) {
+        setSessionSamples(prev => [latest, ...prev.filter(item => item.id !== latest.id)])
+      }
+      await filesQuery.refetch()
+    } finally {
+      setBusyFileIds(prev => {
+        const next = new Set(prev)
+        next.delete(file.id)
+        return next
+      })
+    }
+  }
+
+  const renameSample = async () => {
+    if (!renameTarget) return
+    const nextName = renameValue.trim()
+    if (!nextName) {
+      toast.error('请输入文件名')
+      return
+    }
+    if (!nextName.toLowerCase().endsWith('.pdf')) {
+      toast.error('文件名必须以 .pdf 结尾')
+      return
+    }
+    setBusyFileIds(prev => new Set(prev).add(renameTarget.id))
+    try {
+      const updated = await api.updateFile(renameTarget.id, { name: nextName })
+      setSessionSamples(prev => prev.map(item => item.id === updated.id ? updated : item))
+      await filesQuery.refetch()
+      setRenameTarget(null)
+      toast.success('文件名已修改')
+    } catch (err) {
+      toast.error((err as Error).message)
+    } finally {
+      setBusyFileIds(prev => {
+        const next = new Set(prev)
+        next.delete(renameTarget.id)
+        return next
+      })
+    }
+  }
+
   const saveDraftEdits = async () => {
     setGenerating(true)
     try {
       const updated = await api.updateAssistantInitDraft(assistantId, {
-        category_profile: profile,
         parameter_schema: schema,
         report_parameters_prompt: prompt,
       })
@@ -334,17 +539,14 @@ export function AssistantInitDraftCard({
     setGenerating(true)
     try {
       await api.updateAssistantInitDraft(assistantId, {
-        category_profile: profile,
         parameter_schema: schema,
         report_parameters_prompt: prompt,
       })
       const applied = await api.applyAssistantInitDraft(assistantId)
       await client.invalidateQueries({ queryKey: queryKeys.assistantVersion(assistantId) })
-      await client.invalidateQueries({ queryKey: queryKeys.assistantVersions(assistantId) })
       await client.invalidateQueries({ queryKey: queryKeys.assistants })
       const versionNo = Number(applied.version) || 0
-      setAppliedVersion(versionNo)
-      toast.success(versionNo ? `已启用 v${versionNo}` : '已启用新品类配置版本')
+      toast.success('已更新审查配置')
       onApplied({ version: versionNo })
       const latest = await api.getAssistantInitDraft(assistantId)
       setDraft(latest)
@@ -369,22 +571,27 @@ export function AssistantInitDraftCard({
     }
   }
 
-  const busy = uploading || generating || draft?.status === 'generating'
+  const busy = uploading || generating || busyFileIds.size > 0 || draft?.status === 'generating'
   const editable = draft?.status === 'ready' || draft?.status === 'failed'
   const canEdit = editable && !busy
 
   const promptSummary = prompt.trim()
     ? prompt.trim().replace(/\s+/g, ' ').slice(0, 48) + (prompt.trim().length > 48 ? '…' : '')
-    : '未填写'
+    : '（空，可选）'
 
   const dialogTitle: Record<EditTarget, string> = {
-    name: '品类名称',
-    equipment_type: '设备类型',
-    focus: '审查关注点',
-    notes: '备注',
     schema: '参数 schema',
-    prompt: '报告参数提取提示词',
+    prompt: '抽参品类约束（可选变量）',
   }
+
+  const uploadLabel = uploading
+    ? '解析中…'
+    : generating
+      ? '初始化中…'
+      : '上传 PDF'
+  const initHelpText = `上传一份代表性 PDF 报告，系统只生成变量包：参数 schema + 可选抽参品类约束。检索/判定提示词由系统框架生成，不在初始化里产出。${
+    activeVersion ? '确认启用后将覆盖当前审查配置。' : ''
+  }`
 
   return (
     <div
@@ -393,19 +600,40 @@ export function AssistantInitDraftCard({
         !bare && 'rounded-xl border border-[#e5e7eb] bg-[#f8fafc] p-3',
       )}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-[14px] font-semibold text-[#111827]">
-          <Sparkles className="size-4 text-[#2563eb]" />
-          初始化
-        </h3>
-        {draft?.status === 'applied' && (
-          <span className="text-[13px] text-[#6b7280]">
-            已启用{appliedVersion ? ` v${appliedVersion}` : ''}
-          </span>
-        )}
-      </div>
+      {initializationOnly ? (
+        <div className="space-y-4 py-2">
+          <InitUploadDropzone
+            helpText={initHelpText}
+            uploadLabel={uploadLabel}
+            busy={busy}
+            inputRef={uploadRef}
+            onFile={file => void onUploadSample(file)}
+          />
+          <InitUploadedPdfList
+            files={visibleSamples}
+            busy={busy}
+            busyFileIds={busyFileIds}
+            onRename={file => {
+              setRenameTarget(file)
+              setRenameValue(file.name)
+            }}
+            onReparse={file => void reparseSample(file)}
+          />
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="flex items-center gap-2 text-[14px] font-semibold text-[#111827]">
+            <Sparkles className="size-4 text-[#2563eb]" />
+            初始化
+            <Explain title="初始化" text={initHelpText} />
+          </h3>
+          {draft?.status === 'applied' && (
+            <span className="text-[13px] text-[#6b7280]">已更新审查配置</span>
+          )}
+        </div>
+      )}
 
-      {draft?.status === 'applied' ? (
+      {draft?.status === 'applied' && !initializationOnly ? (
         <details className="rounded-lg border border-[#e5e7eb] bg-white px-3 py-2">
           <summary className="cursor-pointer select-none text-[13px] font-medium text-[#374151]">
             样例与重新生成
@@ -483,89 +711,124 @@ export function AssistantInitDraftCard({
             </Button>
           </div>
         </details>
-      ) : (
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <Label className="text-[13px]">样例报告</Label>
-          <input
-            ref={uploadRef}
-            type="file"
-            accept="application/pdf,.pdf"
-            className="hidden"
-            onChange={e => void onUploadSample(e.target.files?.[0] || null)}
-          />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8"
-            disabled={busy}
-            onClick={() => uploadRef.current?.click()}
-          >
-            {uploading ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
-            {uploading ? '解析中…' : '上传 PDF'}
-          </Button>
-        </div>
-        <div className="max-h-28 space-y-1 overflow-auto rounded-lg border border-[#e5e7eb] bg-white p-2">
-          {sampleCandidates.length === 0 && (
-            <p className="px-1 py-1 text-[13px] text-[#9ca3af]">
-              暂无样例，可不选直接生成
-            </p>
+      ) : !initializationOnly ? (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Label className="text-[13px]">样例报告</Label>
+            <input
+              ref={uploadRef}
+              type="file"
+              accept="application/pdf,.pdf"
+              className="hidden"
+              onChange={e => void onUploadSample(e.target.files?.[0] || null)}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8"
+              disabled={busy}
+              onClick={() => uploadRef.current?.click()}
+            >
+              {uploading ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
+              {uploading ? '解析中…' : '上传 PDF'}
+            </Button>
+          </div>
+
+          {visibleSamples.length > 0 && (
+            <div className="max-h-40 space-y-1 overflow-auto border-y border-[#e5e7eb] py-1">
+              {visibleSamples.map(file => {
+                const checked = selectedSampleIds.includes(file.id)
+                const ready = isParseReady(file)
+                const failed = isParseFailed(file)
+                const fileBusy = busyFileIds.has(file.id)
+                return (
+                  <div
+                    key={file.id}
+                    className={cn(
+                      'group flex min-h-9 items-center gap-2 px-1.5 text-[13px] hover:bg-[#f8fafc]',
+                      checked && 'bg-[#eff6ff]',
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={busy || failed || !ready}
+                      onChange={() => toggleSample(file.id)}
+                    />
+                    <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                    <span
+                      className={cn(
+                        'shrink-0 text-[12px]',
+                        ready && 'text-emerald-600',
+                        failed && 'text-red-600',
+                        !ready && !failed && 'text-[#9ca3af]',
+                      )}
+                    >
+                      {ready ? '已解析' : failed ? '解析失败' : '解析中'}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-7 text-[#9ca3af] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                      disabled={fileBusy}
+                      title="修改文件名"
+                      aria-label={`修改文件名 ${file.name}`}
+                      onClick={() => {
+                        setRenameTarget(file)
+                        setRenameValue(file.name)
+                      }}
+                    >
+                      <Pencil className="size-3.5" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={failed ? 'outline' : 'ghost'}
+                      size={failed ? 'sm' : 'icon'}
+                      className={cn(
+                        failed
+                          ? 'h-7 gap-1 px-2 text-[12px] text-red-600 hover:text-red-700'
+                          : 'size-7 text-[#9ca3af] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100',
+                      )}
+                      disabled={fileBusy}
+                      title="重新解析"
+                      aria-label={`重新解析 ${file.name}`}
+                      onClick={() => void reparseSample(file)}
+                    >
+                      {fileBusy ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="size-3.5" />
+                      )}
+                      {failed && '重新解析'}
+                    </Button>
+                  </div>
+                )
+              })}
+            </div>
           )}
-          {sampleCandidates.map(file => {
-            const checked = selectedSampleIds.includes(file.id)
-            const ready = isParseReady(file)
-            const failed = isParseFailed(file)
-            return (
-              <label
-                key={file.id}
-                className={cn(
-                  'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-[13px] hover:bg-[#f3f4f6]',
-                  checked && 'bg-[#eff6ff]',
-                  failed && 'opacity-60',
-                )}
-              >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  disabled={busy || failed || !ready}
-                  onChange={() => toggleSample(file.id)}
-                />
-                <span className="min-w-0 flex-1 truncate">{file.name}</span>
-                <span
-                  className={cn(
-                    'shrink-0 text-[12px]',
-                    ready && 'text-emerald-600',
-                    failed && 'text-red-600',
-                    !ready && !failed && 'text-[#9ca3af]',
-                  )}
-                >
-                  {ready ? '已解析' : failed ? '解析失败' : '解析中'}
-                </span>
-              </label>
-            )
-          })}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" disabled={busy} onClick={() => void startInit()}>
-            {generating || draft?.status === 'generating' ? (
-              <>
-                <Loader2 className="size-3.5 animate-spin" />
-                生成中…
-              </>
-            ) : (
-              '生成草案'
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" disabled={busy} onClick={() => void startInit()}>
+              {generating || draft?.status === 'generating' ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin" />
+                  生成中…
+                </>
+              ) : (
+                '生成草案'
+              )}
+            </Button>
+            {draft && (
+              <span className="text-[13px] text-[#6b7280]">
+                状态：{draft.status}
+                {draft.payload?.error ? ` · ${draft.payload.error}` : ''}
+              </span>
             )}
-          </Button>
-          {draft && (
-            <span className="text-[13px] text-[#6b7280]">
-              状态：{draft.status}
-              {draft.payload?.error ? ` · ${draft.payload.error}` : ''}
-            </span>
-          )}
+          </div>
         </div>
-      </div>
-      )}
+      ) : null}
 
       {draft?.status === 'ready' && (
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[13px] text-emerald-800">
@@ -576,37 +839,13 @@ export function AssistantInitDraftCard({
       {editable && (
         <div className="space-y-1.5">
           <SummaryRow
-            label="品类名称"
-            value={profile.name}
-            actionLabel="修改"
-            onAction={() => setEditTarget('name')}
-          />
-          <SummaryRow
-            label="设备类型"
-            value={profile.equipment_type}
-            actionLabel="修改"
-            onAction={() => setEditTarget('equipment_type')}
-          />
-          <SummaryRow
-            label="审查关注点"
-            value={profile.focus}
-            actionLabel="修改"
-            onAction={() => setEditTarget('focus')}
-          />
-          <SummaryRow
-            label="备注"
-            value={profile.notes}
-            actionLabel="修改"
-            onAction={() => setEditTarget('notes')}
-          />
-          <SummaryRow
             label="参数 schema"
             value={`${schema.fields.length} 个字段${schema.allow_extra ? ' · 允许额外' : ''}`}
             actionLabel="修改"
             onAction={() => setEditTarget('schema')}
           />
           <SummaryRow
-            label="报告参数提示词"
+            label="抽参品类约束"
             value={promptSummary}
             actionLabel="修改"
             onAction={() => setEditTarget('prompt')}
@@ -619,7 +858,7 @@ export function AssistantInitDraftCard({
           <Button size="sm" variant="outline" disabled={busy} onClick={() => void saveDraftEdits()}>
             保存草案
           </Button>
-          <Button size="sm" disabled={busy || !prompt.trim()} onClick={() => void applyDraft()}>
+          <Button size="sm" disabled={busy} onClick={() => void applyDraft()}>
             确认并启用
           </Button>
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => void discardDraft()}>
@@ -627,6 +866,35 @@ export function AssistantInitDraftCard({
           </Button>
         </div>
       )}
+
+      <Dialog open={renameTarget !== null} onOpenChange={open => !open && setRenameTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>修改文件名</DialogTitle>
+            <DialogDescription>只修改显示名称，不会重新上传或解析 PDF。</DialogDescription>
+          </DialogHeader>
+          <Input
+            autoFocus
+            value={renameValue}
+            onChange={e => setRenameValue(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') void renameSample()
+            }}
+          />
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setRenameTarget(null)}>
+              取消
+            </Button>
+            <Button
+              type="button"
+              disabled={!renameValue.trim() || (renameTarget ? busyFileIds.has(renameTarget.id) : false)}
+              onClick={() => void renameSample()}
+            >
+              保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={editTarget !== null} onOpenChange={open => !open && setEditTarget(null)}>
         <DialogContent
@@ -646,49 +914,6 @@ export function AssistantInitDraftCard({
           </DialogHeader>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-            {editTarget === 'name' && (
-              <div className="space-y-2">
-                <Label>品类名称</Label>
-                <Input
-                  value={profile.name}
-                  disabled={!canEdit}
-                  onChange={e => setProfile(prev => ({ ...prev, name: e.target.value }))}
-                />
-              </div>
-            )}
-            {editTarget === 'equipment_type' && (
-              <div className="space-y-2">
-                <Label>设备类型</Label>
-                <Input
-                  value={profile.equipment_type}
-                  disabled={!canEdit}
-                  onChange={e => setProfile(prev => ({ ...prev, equipment_type: e.target.value }))}
-                />
-              </div>
-            )}
-            {editTarget === 'focus' && (
-              <div className="space-y-2">
-                <Label>审查关注点</Label>
-                <Textarea
-                  className="min-h-[120px]"
-                  value={profile.focus}
-                  disabled={!canEdit}
-                  onChange={e => setProfile(prev => ({ ...prev, focus: e.target.value }))}
-                />
-              </div>
-            )}
-            {editTarget === 'notes' && (
-              <div className="space-y-2">
-                <Label>备注</Label>
-                <Textarea
-                  className="min-h-[120px]"
-                  value={profile.notes}
-                  disabled={!canEdit}
-                  onChange={e => setProfile(prev => ({ ...prev, notes: e.target.value }))}
-                />
-              </div>
-            )}
-
             {editTarget === 'schema' && (
               <div className="space-y-3">
                 {canEdit && (
@@ -817,12 +1042,16 @@ export function AssistantInitDraftCard({
 
             {editTarget === 'prompt' && (
               <div className="space-y-2">
-                <Label>提示词</Label>
+                <Label>抽参品类约束（可选）</Label>
+                <p className="text-[12px] leading-relaxed text-[#6b7280]">
+                  只写短补充（易混淆、禁止项等）。完整抽参提示词由系统根据 schema 生成；检索/判定不在此配置。
+                </p>
                 <Textarea
                   className="min-h-[240px] font-mono text-[13px]"
                   value={prompt}
                   disabled={!canEdit}
                   onChange={e => setPrompt(e.target.value)}
+                  placeholder="可留空。例如：冷却方式未记载时不得从型号臆测。"
                 />
               </div>
             )}
