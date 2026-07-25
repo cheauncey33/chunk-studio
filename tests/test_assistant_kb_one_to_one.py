@@ -37,6 +37,52 @@ def test_create_knowledge_base_auto_binds_assistant(monkeypatch, tmp_path) -> No
 
     assistant = assistants.get_assistant(created["assistant_id"])
     assert assistant["knowledge_bases"] == [{"id": created["id"], "name": "电缆库"}]
+    version = assistants.get_active_version(created["assistant_id"])
+    assert version["category_profile"] == {}
+    assert version["node_prompts"]["test_items"]["content"] == ""
+    assert version["node_prompts"]["model_decode"]["content"] == ""
+    _close_temp_db(monkeypatch)
+
+
+def test_migrate_strips_full_test_items_and_model_decode_prompts(
+    monkeypatch, tmp_path
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    root = Path(__file__).resolve().parents[1]
+    full_items = (
+        root / "evaluation/prompts/generic/report_test_item_extraction_generic_v1.md"
+    ).read_text(encoding="utf-8")
+    full_decode = (
+        root / "evaluation/prompts/generic/model_naming_decode_generic_v1.md"
+    ).read_text(encoding="utf-8")
+    short_note = "跨页续表继承最近项目名。"
+    created = knowledge_bases.create_knowledge_base(
+        knowledge_bases.KnowledgeBaseCreate(name="迁移库", description="")
+    )
+    version = assistants.get_active_version(created["assistant_id"])
+    nodes = dict(version["node_prompts"])
+    nodes["test_items"] = {**(nodes.get("test_items") or {}), "content": full_items}
+    nodes["model_decode"] = {**(nodes.get("model_decode") or {}), "content": full_decode}
+    nodes["report_parameters"] = {
+        **(nodes.get("report_parameters") or {}),
+        "content": short_note,
+    }
+    with db.transaction() as conn:
+        conn.execute(
+            "UPDATE assistant_versions SET node_prompts=?, category_profile=? WHERE id=?",
+            (
+                json.dumps(nodes, ensure_ascii=False),
+                json.dumps({"name": "should_clear"}, ensure_ascii=False),
+                version["id"],
+            ),
+        )
+
+    db._migrate_test_items_model_decode_category_notes()
+    # category_profile stop-write is enforced on create/save; migration of notes only.
+    after = assistants.get_active_version(created["assistant_id"])
+    assert after["node_prompts"]["test_items"]["content"] == ""
+    assert after["node_prompts"]["model_decode"]["content"] == ""
+    assert after["node_prompts"]["report_parameters"]["content"] == short_note
     _close_temp_db(monkeypatch)
 
 

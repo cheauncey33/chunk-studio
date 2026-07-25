@@ -6,6 +6,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.audit_judge_notes import looks_like_full_audit_judge_prompt
+from app.model_decode_notes import looks_like_full_model_decode_prompt
 from app.prompt_vars import (
     AUDIT_PIPELINE_SCENARIO,
     EMPTY_VALUE,
@@ -27,6 +28,7 @@ from app.query_planner_routes import (
     looks_like_full_query_planner_prompt,
     resolve_query_planner_routes,
 )
+from app.test_items_notes import looks_like_full_test_items_prompt
 
 
 def test_format_parameter_schema_lists_fields() -> None:
@@ -242,6 +244,24 @@ def test_step_rules_fold_into_briefs_and_notes_only_steps() -> None:
     assert "- unk: 无法确认放入 unresolved" in decode
 
 
+def test_test_items_model_decode_ignore_legacy_notes_without_step_rules() -> None:
+    context = build_prompt_var_context(kb_name="库A")
+    # Drop structured keys to simulate older callers; notes must still be ignored.
+    context.pop("step_rules_test_items", None)
+    context.pop("step_rules_model_decode", None)
+    legacy = "# 通用检测报告项目提取 v1\n你是检测报告结构化提取器。"
+    out = compose_runtime_prompt(legacy, step_id="test_items", context=context)
+    assert "任务场景：" in out
+    assert "补充规则（人工配置）：" in out
+    assert legacy not in out
+    decode = compose_runtime_prompt(
+        "只依据报告原始型号解析型号。严格输出 JSON：",
+        step_id="model_decode",
+        context=context,
+    )
+    assert "只依据报告原始型号解析型号" not in decode
+
+
 def test_query_planner_brief_only_enabled_routes() -> None:
     routes = default_query_planner_routes()
     for item in routes:
@@ -355,6 +375,20 @@ def test_looks_like_full_query_planner_prompt() -> None:
         "table_target 优先区分：能效限值表 / 产品性能参数表。"
     )
     assert not looks_like_full_query_planner_prompt("")
+
+
+def test_looks_like_full_test_items_and_model_decode_prompts() -> None:
+    root = Path(__file__).resolve().parents[1]
+    test_items = (
+        root / "evaluation/prompts/generic/report_test_item_extraction_generic_v1.md"
+    ).read_text(encoding="utf-8")
+    model_decode = (
+        root / "evaluation/prompts/generic/model_naming_decode_generic_v1.md"
+    ).read_text(encoding="utf-8")
+    assert looks_like_full_test_items_prompt(test_items)
+    assert looks_like_full_model_decode_prompt(model_decode)
+    assert not looks_like_full_test_items_prompt("跨页续表继承最近项目名。")
+    assert not looks_like_full_model_decode_prompt("无法确认的片段放入 unresolved。")
 
 
 def test_resolve_query_planner_routes_keeps_one_enabled() -> None:

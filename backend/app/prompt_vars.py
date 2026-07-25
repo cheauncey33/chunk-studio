@@ -645,8 +645,10 @@ def build_runtime_prompt_segments(
             }
         )
     # Per-step human rules (rule_id + rule_text), not free-text node_prompts.
+    # test_items / model_decode never fall back to legacy node_prompts content.
     step_rules_key = f"step_rules_{step_id}"
-    if step_rules_key in context:
+    notes_only_steps = frozenset({"test_items", "model_decode"})
+    if step_id in notes_only_steps or step_rules_key in context:
         rules_body = str(context.get(step_rules_key) or "").strip() or EMPTY_VALUE
         if rules_body == EMPTY_VALUE:
             rules_body = "（未配置）"
@@ -659,7 +661,7 @@ def build_runtime_prompt_segments(
             }
         )
     elif notes:
-        # Legacy free-text content kept only when no structured step_rules key exists.
+        # Legacy free-text for other steps when no structured step_rules key exists.
         segments.append({"kind": "static", "text": notes, "key": "", "title": ""})
 
     for key in step_auto_inject_keys(step_id):

@@ -290,8 +290,10 @@ def generate_init_draft(
 def _sanitize_copied_node_prompt(step_id: str, node: Any) -> dict[str, Any]:
     """Keep path; blank content when it looks like a full legacy system prompt."""
     from .audit_judge_notes import looks_like_full_audit_judge_prompt
+    from .model_decode_notes import looks_like_full_model_decode_prompt
     from .query_planner_routes import looks_like_full_query_planner_prompt
     from .report_parameters_prompt import looks_like_full_extraction_prompt
+    from .test_items_notes import looks_like_full_test_items_prompt
 
     if not isinstance(node, dict):
         return {"path": "", "content": ""}
@@ -302,6 +304,10 @@ def _sanitize_copied_node_prompt(step_id: str, node: Any) -> dict[str, Any]:
     elif step_id == "audit_judge" and looks_like_full_audit_judge_prompt(content):
         content = ""
     elif step_id == "report_parameters" and looks_like_full_extraction_prompt(content):
+        content = ""
+    elif step_id == "test_items" and looks_like_full_test_items_prompt(content):
+        content = ""
+    elif step_id == "model_decode" and looks_like_full_model_decode_prompt(content):
         content = ""
     return {"path": path, "content": content}
 
@@ -352,7 +358,13 @@ def apply_init_draft(assistant_id: str) -> dict[str, Any]:
         node_prompts = {}
     sanitized: dict[str, Any] = {}
     for key, value in node_prompts.items():
-        if key in {"query_planner", "audit_judge", "report_parameters"}:
+        if key in {
+            "query_planner",
+            "audit_judge",
+            "report_parameters",
+            "test_items",
+            "model_decode",
+        }:
             sanitized[key] = _sanitize_copied_node_prompt(key, value)
         else:
             sanitized[key] = value

@@ -276,6 +276,7 @@ def init_db() -> None:
     _migrate_assistant_init_drafts()
     _migrate_query_planner_category_notes()
     _migrate_audit_judge_category_notes()
+    _migrate_test_items_model_decode_category_notes()
     _backfill_chunk_layers()
     _backfill_auto_metadata()
     _seed_knowledge_base_and_assistant()
@@ -470,6 +471,44 @@ def _migrate_audit_judge_category_notes() -> None:
         )
 
 
+def _migrate_test_items_model_decode_category_notes() -> None:
+    """Strip full system prompts from test_items / model_decode content.
+
+    Runtime uses framework preamble + step_rules + kb_context; node content is
+    unused for these steps. Clear legacy full prompts; keep short custom notes.
+    """
+    from .model_decode_notes import looks_like_full_model_decode_prompt
+    from .test_items_notes import looks_like_full_test_items_prompt
+
+    assert _conn is not None
+    detectors = {
+        "test_items": looks_like_full_test_items_prompt,
+        "model_decode": looks_like_full_model_decode_prompt,
+    }
+    rows = _conn.execute(
+        "SELECT id, node_prompts FROM assistant_versions"
+    ).fetchall()
+    for row in rows:
+        prompts = _loads_json(row["node_prompts"], {})
+        if not isinstance(prompts, dict):
+            continue
+        changed = False
+        for step_id, detector in detectors.items():
+            node = prompts.get(step_id)
+            if not isinstance(node, dict):
+                continue
+            content = str(node.get("content") or "")
+            if not detector(content):
+                continue
+            prompts[step_id] = {**node, "content": ""}
+            changed = True
+        if changed:
+            _conn.execute(
+                "UPDATE assistant_versions SET node_prompts=? WHERE id=?",
+                (json.dumps(prompts, ensure_ascii=False), row["id"]),
+            )
+
+
 def _backfill_applied_init_profiles() -> None:
     """Recover initialization provenance from applied pre-versioning drafts."""
     assert _conn is not None
@@ -591,7 +630,7 @@ def _clone_assistant_for_knowledge_base(
                 version["rules"],
                 version["retrieval_config"],
                 version["parameter_schema"],
-                version["category_profile"],
+                "{}",  # category_profile is vestigial; do not copy
                 version["initialization_provenance"],
                 now,
                 now,
@@ -857,7 +896,7 @@ def ensure_assistant_for_knowledge_base(
 
     template = conn.execute(
         """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema,
-                  category_profile, initialization_provenance
+                  initialization_provenance
            FROM assistant_versions
            WHERE id='assistant_audit_template_v1'"""
     ).fetchone()
@@ -906,7 +945,7 @@ def ensure_assistant_for_knowledge_base(
                (id,assistant_id,version,name,status,model_config,node_prompts,rules,
                 retrieval_config,parameter_schema,category_profile,
                 initialization_provenance,created_at,activated_at)
-               VALUES (?,?,1,'','active',?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,1,'','active',?,?,?,?,?, '{}',?,?,?)""",
             (
                 version_id,
                 assistant_id,
@@ -915,7 +954,6 @@ def ensure_assistant_for_knowledge_base(
                 template["rules"],
                 template["retrieval_config"],
                 json.dumps(parameter_schema, ensure_ascii=False),
-                template["category_profile"],
                 template["initialization_provenance"],
                 now,
                 now,
@@ -1060,19 +1098,26 @@ def _seed_assistant_version(
             "UPDATE assistant_versions SET parameter_schema=? WHERE id=?",
             (json.dumps(parameter_schema, ensure_ascii=False), version_id),
         )
+    # category_profile is vestigial; always keep empty. Refresh seed provenance
+    # only when missing so we do not clobber init/apply provenance.
     row = _conn.execute(
-        """SELECT category_profile, initialization_provenance
+        """SELECT initialization_provenance
            FROM assistant_versions WHERE id=?""",
         (version_id,),
     ).fetchone()
-    existing_profile = _loads_json(row["category_profile"] if row else None, {})
-    if not existing_profile:
+    existing_prov = _loads_json(
+        row["initialization_provenance"] if row else None, {}
+    )
+    _conn.execute(
+        "UPDATE assistant_versions SET category_profile='{}' WHERE id=?",
+        (version_id,),
+    )
+    if not existing_prov:
         _conn.execute(
             """UPDATE assistant_versions
-               SET category_profile=?, initialization_provenance=?
+               SET initialization_provenance=?
                WHERE id=?""",
             (
-                json.dumps(category_profile, ensure_ascii=False),
                 json.dumps({"source": "built_in_seed"}, ensure_ascii=False),
                 version_id,
             ),
@@ -1210,6 +1255,15 @@ def _seed_knowledge_base_and_assistant() -> None:
             "model_decode": "model_naming_decode_v1.md",
         }
     )
+    # test_items / model_decode: keep path for provenance; content unused at runtime.
+    oil_prompts["test_items"] = {
+        **oil_prompts["test_items"],
+        "content": "",
+    }
+    oil_prompts["model_decode"] = {
+        **oil_prompts["model_decode"],
+        "content": "",
+    }
     oil_planner_path, oil_planner_notes = _oil_query_planner_category_notes()
     oil_prompts["query_planner"] = {
         "path": oil_planner_path,
@@ -1227,6 +1281,14 @@ def _seed_knowledge_base_and_assistant() -> None:
             "model_decode": "generic/model_naming_decode_generic_v1.md",
         }
     )
+    template_prompts["test_items"] = {
+        **template_prompts["test_items"],
+        "content": "",
+    }
+    template_prompts["model_decode"] = {
+        **template_prompts["model_decode"],
+        "content": "",
+    }
     # query_planner / audit_judge content is optional category notes only.
     template_prompts["query_planner"] = {
         "path": "evaluation/prompts/generic/retrieval_query_planner_generic_v1.md",

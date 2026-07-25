@@ -41,6 +41,7 @@ class AssistantVersionConfigUpdate(BaseModel):
     rules: dict[str, Any] = Field(default_factory=dict)
     retrieval_config: dict[str, Any] = Field(default_factory=dict)
     parameter_schema: dict[str, Any] = Field(default_factory=dict)
+    # Accepted for API compatibility; always persisted as {}.
     category_profile: dict[str, Any] = Field(default_factory=dict)
     initialization_provenance: dict[str, Any] = Field(default_factory=dict)
 
@@ -192,7 +193,7 @@ def _assistant_out(row: Any) -> dict[str, Any]:
 def _initial_version_template() -> Any:
     row = db.get_conn().execute(
         """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema,
-                  category_profile, initialization_provenance
+                  initialization_provenance
            FROM assistant_versions
            WHERE id='assistant_audit_template_v1'"""
     ).fetchone()
@@ -247,7 +248,7 @@ def create_assistant(body: AssistantCreate):
                (id,assistant_id,version,name,status,model_config,node_prompts,rules,
                 retrieval_config,parameter_schema,category_profile,
                 initialization_provenance,created_at,activated_at)
-               VALUES (?,?,1,'','active',?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,1,'','active',?,?,?,?,?, '{}',?,?,?)""",
             (
                 version_id,
                 assistant_id,
@@ -256,7 +257,6 @@ def create_assistant(body: AssistantCreate):
                 template["rules"],
                 template["retrieval_config"],
                 json.dumps(parameter_schema, ensure_ascii=False),
-                template["category_profile"],
                 template["initialization_provenance"],
                 now,
                 now,
