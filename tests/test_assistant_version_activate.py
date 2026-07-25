@@ -59,6 +59,9 @@ def test_update_active_overwrites_without_inserting_versions(monkeypatch, tmp_pa
     assert updated["version"] == first["version"]
     assert updated["model_config"]["temperature"] == 0.2
     assert _version_count(assistant_id) == 1
+    assert first["initialization_provenance"]["source"] == "template_snapshot"
+    assert updated["initialization_provenance"]["source"] == "manual_config"
+    assert updated["initialization_provenance"]["saved_at"]
 
     again = assistants.update_active_version(
         assistant_id,

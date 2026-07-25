@@ -895,8 +895,7 @@ def ensure_assistant_for_knowledge_base(
             return dict(row)
 
     template = conn.execute(
-        """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema,
-                  initialization_provenance
+        """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema
            FROM assistant_versions
            WHERE id='assistant_audit_template_v1'"""
     ).fetchone()
@@ -940,6 +939,14 @@ def ensure_assistant_for_knowledge_base(
                VALUES (?,?,?,'active',NULL,?,?)""",
             (assistant_id, assistant_name, assistant_description, now, now),
         )
+        snapshot_provenance = json.dumps(
+            {
+                "source": "template_snapshot",
+                "template_version_id": "assistant_audit_template_v1",
+                "copied_at": now,
+            },
+            ensure_ascii=False,
+        )
         tx.execute(
             """INSERT INTO assistant_versions
                (id,assistant_id,version,name,status,model_config,node_prompts,rules,
@@ -954,7 +961,7 @@ def ensure_assistant_for_knowledge_base(
                 template["rules"],
                 template["retrieval_config"],
                 json.dumps(parameter_schema, ensure_ascii=False),
-                template["initialization_provenance"],
+                snapshot_provenance,
                 now,
                 now,
             ),

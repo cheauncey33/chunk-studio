@@ -192,8 +192,7 @@ def _assistant_out(row: Any) -> dict[str, Any]:
 
 def _initial_version_template() -> Any:
     row = db.get_conn().execute(
-        """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema,
-                  initialization_provenance
+        """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema
            FROM assistant_versions
            WHERE id='assistant_audit_template_v1'"""
     ).fetchone()
@@ -243,6 +242,14 @@ def create_assistant(body: AssistantCreate):
                VALUES (?,?,?,'active',NULL,?,?)""",
             (assistant_id, body.name.strip(), body.description.strip(), now, now),
         )
+        snapshot_provenance = json.dumps(
+            {
+                "source": "template_snapshot",
+                "template_version_id": "assistant_audit_template_v1",
+                "copied_at": now,
+            },
+            ensure_ascii=False,
+        )
         conn.execute(
             """INSERT INTO assistant_versions
                (id,assistant_id,version,name,status,model_config,node_prompts,rules,
@@ -257,7 +264,7 @@ def create_assistant(body: AssistantCreate):
                 template["rules"],
                 template["retrieval_config"],
                 json.dumps(parameter_schema, ensure_ascii=False),
-                template["initialization_provenance"],
+                snapshot_provenance,
                 now,
                 now,
             ),
@@ -361,6 +368,14 @@ def update_active_version(assistant_id: str, body: AssistantVersionConfigUpdate)
         raise HTTPException(422, "only DeepSeek assistant versions are supported")
     parameter_schema = resolve_parameter_schema(body.parameter_schema)
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    provenance = body.initialization_provenance
+    if not isinstance(provenance, dict):
+        provenance = {}
+    source = str(provenance.get("source") or "").strip()
+    # Saving from the editor clears "unspecialized template copy" markers so the
+    # KB workflow UI stops nudging category init.
+    if source in {"", "built_in_seed", "template_snapshot"}:
+        provenance = {"source": "manual_config", "saved_at": now}
     with db.transaction() as conn:
         version_id = assistant["active_version_id"]
         if version_id:
@@ -393,7 +408,7 @@ def update_active_version(assistant_id: str, body: AssistantVersionConfigUpdate)
                     json.dumps(body.rules, ensure_ascii=False),
                     json.dumps(body.retrieval_config, ensure_ascii=False),
                     json.dumps(parameter_schema, ensure_ascii=False),
-                    json.dumps(body.initialization_provenance, ensure_ascii=False),
+                    json.dumps(provenance, ensure_ascii=False),
                     now,
                     version_id,
                     assistant_id,
@@ -419,7 +434,7 @@ def update_active_version(assistant_id: str, body: AssistantVersionConfigUpdate)
                     json.dumps(body.rules, ensure_ascii=False),
                     json.dumps(body.retrieval_config, ensure_ascii=False),
                     json.dumps(parameter_schema, ensure_ascii=False),
-                    json.dumps(body.initialization_provenance, ensure_ascii=False),
+                    json.dumps(provenance, ensure_ascii=False),
                     now,
                     now,
                 ),

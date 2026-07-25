@@ -41,6 +41,12 @@ def test_create_knowledge_base_auto_binds_assistant(monkeypatch, tmp_path) -> No
     assert version["category_profile"] == {}
     assert version["node_prompts"]["test_items"]["content"] == ""
     assert version["node_prompts"]["model_decode"]["content"] == ""
+    assert version["initialization_provenance"]["source"] == "template_snapshot"
+    assert (
+        version["initialization_provenance"]["template_version_id"]
+        == "assistant_audit_template_v1"
+    )
+    assert version["initialization_provenance"]["copied_at"]
     _close_temp_db(monkeypatch)
 
 

@@ -37,7 +37,10 @@ import { Input, Label, Textarea } from '@/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { SearchableMultiSelect, SearchableSelect } from '@/components/searchable-select'
 import { useAssistants, useKnowledgeBase, queryKeys } from '@/hooks/use-knowledge-request'
-import { GENERIC_TEMPLATE_ASSISTANT_ID } from '@/lib/assistants'
+import {
+  GENERIC_TEMPLATE_ASSISTANT_ID,
+  needsCategoryInit,
+} from '@/lib/assistants'
 import { helpText } from '@/lib/help-text'
 import { cn } from '@/lib/utils'
 import {
@@ -320,6 +323,8 @@ export function AssistantSettings({
   const [notesOnlyPane, setNotesOnlyPane] = useState<'rules' | 'prompt'>('rules')
   const [confirmAction, setConfirmAction] = useState<'reinitialize' | null>(null)
   const [initializing, setInitializing] = useState(false)
+  const [initFlowDismissed, setInitFlowDismissed] = useState(false)
+  const [initBannerDismissed, setInitBannerDismissed] = useState(false)
   const [pendingInitialization, setPendingInitialization] = useState(false)
   const [chatInput, setChatInput] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
@@ -366,10 +371,21 @@ export function AssistantSettings({
     queryFn: () => api.getActiveAssistantVersion(assistant.id),
   })
   const hasActiveVersion = Boolean(activeQuery.data || assistant.active_version)
+  const categoryInitNeeded = needsCategoryInit(
+    assistant.id,
+    version?.initialization_provenance,
+  )
   const showInitializationPage = Boolean(
     lockedKnowledgeBaseId
     && assistant.id !== GENERIC_TEMPLATE_ASSISTANT_ID
     && (initializing || !hasActiveVersion),
+  )
+  const showInitBanner = Boolean(
+    lockedKnowledgeBaseId
+    && categoryInitNeeded
+    && !showInitializationPage
+    && !initBannerDismissed
+    && hasActiveVersion,
   )
 
   useEffect(() => {
@@ -384,9 +400,32 @@ export function AssistantSettings({
 
   useEffect(() => {
     setInitializing(false)
+    setInitFlowDismissed(false)
+    setInitBannerDismissed(false)
     setConfirmAction(null)
     setPendingInitialization(false)
   }, [assistant.id])
+
+  useEffect(() => {
+    if (
+      !lockedKnowledgeBaseId
+      || assistant.id === GENERIC_TEMPLATE_ASSISTANT_ID
+      || !hasActiveVersion
+      || !version
+      || initFlowDismissed
+      || !categoryInitNeeded
+    ) {
+      return
+    }
+    setInitializing(true)
+  }, [
+    lockedKnowledgeBaseId,
+    assistant.id,
+    hasActiveVersion,
+    version,
+    initFlowDismissed,
+    categoryInitNeeded,
+  ])
 
   const isDirty = useMemo(() => {
     const versionDirty = versionDraftSignature(version, kbSelected)
@@ -863,9 +902,12 @@ export function AssistantSettings({
                     size="sm"
                     variant="outline"
                     className="rounded-lg"
-                    onClick={() => setInitializing(false)}
+                    onClick={() => {
+                      setInitializing(false)
+                      setInitFlowDismissed(true)
+                    }}
                   >
-                    返回配置
+                    稍后再说
                   </Button>
                 ) : null}
                 {!showInitializationPage && (
@@ -904,6 +946,8 @@ export function AssistantSettings({
                   onJumpToReportParameters={jumpToReportParameters}
                   onApplied={() => {
                     setInitializing(false)
+                    setInitFlowDismissed(true)
+                    setInitBannerDismissed(true)
                     void activeQuery.refetch()
                     onChanged()
                     jumpToReportParameters()
@@ -913,6 +957,35 @@ export function AssistantSettings({
               </div>
             ) : (
             <>
+            {showInitBanner ? (
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#f59e0b]/40 bg-[#fffbeb] px-4 py-3">
+                <p className="text-[13px] leading-relaxed text-[#92400e]">
+                  当前为通用模板副本，建议先初始化报告参数字段后再跑审查。
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="rounded-lg border-[#f59e0b]/50 bg-white"
+                    onClick={() => setInitBannerDismissed(true)}
+                  >
+                    稍后
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="rounded-lg bg-[#f59e0b] text-white hover:bg-[#d97706]"
+                    onClick={() => {
+                      setInitFlowDismissed(false)
+                      setInitializing(true)
+                    }}
+                  >
+                    去初始化
+                  </Button>
+                </div>
+              </div>
+            ) : null}
             <div className="min-w-0">
               <div className="min-w-0">
                 <section className="border-b border-[#e5e7eb] py-4 first:pt-0">
