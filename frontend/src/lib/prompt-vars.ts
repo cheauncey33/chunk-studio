@@ -28,11 +28,13 @@ export const NODE_STEP_TASKS: Record<string, string> = {
     + '从报告的检测结果汇总（含跨页续表）中提取实际检测项目及其报告标准要求，'
     + '供后续逐条检索与判定。'
     + '样品上下文可写入自由键值；不得把检测结果/结论当作标准要求，'
-    + '也不得把检测项目误放入报告级参数。',
+    + '也不得把检测项目误放入报告级参数。'
+    + '本步须以 JSON 对象输出结构化结果。',
   model_decode:
     '你是流水线中的「解析型号规则」节点。'
     + '仅依据报告原始型号、已提取参数与输入的型号命名规则 Markdown 解析型号特征，产出检索用语。'
-    + '解析结果只服务后续检索改写，不是审查证据；不得使用行业常识补全，不得生成标准限值。',
+    + '解析结果只服务后续检索改写，不是审查证据；不得使用行业常识补全，不得生成标准限值。'
+    + '本步须以 JSON 对象输出结构化结果。',
   query_planner:
     '你是流水线中的「规划检索问题」节点。'
     + '针对输入中的单条报告标准要求，结合已提取的样品上下文（sample_context）'
@@ -50,6 +52,50 @@ export function formatNodeFrameworkPreamble(stepId: string): string {
   const task = String(NODE_STEP_TASKS[stepId] || '').trim()
   if (!task) return `任务场景：\n${AUDIT_PIPELINE_SCENARIO}`
   return `任务场景：\n${AUDIT_PIPELINE_SCENARIO}\n\n本步任务：\n${task}`
+}
+
+/** Framework-owned JSON output contracts for notes-only AI steps. */
+export const NODE_JSON_OUTPUT_CONTRACTS: Record<string, string> = {
+  test_items: [
+    '输出：',
+    '严格输出 JSON 对象，不要输出 Markdown 代码块：',
+    '{',
+    '  "report_id": "输入提供的report_id",',
+    '  "sample_context": {',
+    '    "sample_name": "报告原文或空字符串",',
+    '    "model": "报告原文或空字符串"',
+    '  },',
+    '  "items": [',
+    '    {',
+    '      "item_no": "报告中的编号",',
+    '      "project_name": "检测项目原文",',
+    '      "phase": "initial或repeat_routine",',
+    '      "requirements": [',
+    '        {',
+    '          "requirement_text": "字段名与报告标准值组成的完整原文要求",',
+    '          "unit": "单位"',
+    '        }',
+    '      ]',
+    '    }',
+    '  ]',
+    '}',
+  ].join('\n'),
+  model_decode: [
+    '输出：',
+    '严格输出 JSON 对象，不要输出 Markdown 代码块：',
+    '{',
+    '  "raw_model": "",',
+    '  "decoded_features": [',
+    '    {"segment": "", "meaning": "", "evidence_quote": ""}',
+    '  ],',
+    '  "retrieval_terms": [],',
+    '  "unresolved_segments": []',
+    '}',
+  ].join('\n'),
+}
+
+export function formatNodeJsonOutputContract(stepId: string): string {
+  return String(NODE_JSON_OUTPUT_CONTRACTS[stepId] || '').trim()
 }
 
 export type PromptInjectKey =
@@ -562,6 +608,7 @@ export function buildNotesOnlyBriefParts(
 ): BriefPreviewPart[] {
   const name = String(input.kbName || '').trim() || EMPTY_PROMPT_VAR
   const description = String(input.kbDescription || '').trim() || EMPTY_PROMPT_VAR
+  const outputContract = formatNodeJsonOutputContract(stepId)
   return [
     {
       kind: 'framework',
@@ -573,6 +620,9 @@ export function buildNotesOnlyBriefParts(
       text: description !== EMPTY_PROMPT_VAR ? `知识库：${name}。${description}` : `知识库：${name}。`,
     },
     ...stepRulesVariableParts(input.stepRules),
+    ...(outputContract
+      ? [{ kind: 'framework' as const, text: outputContract }]
+      : []),
   ]
 }
 

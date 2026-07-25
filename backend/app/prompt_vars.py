@@ -78,11 +78,13 @@ NODE_STEP_TASKS: dict[str, str] = {
         "供后续逐条检索与判定。"
         "样品上下文可写入自由键值；不得把检测结果/结论当作标准要求，"
         "也不得把检测项目误放入报告级参数。"
+        "本步须以 JSON 对象输出结构化结果。"
     ),
     "model_decode": (
         "你是流水线中的「解析型号规则」节点。"
         "仅依据报告原始型号、已提取参数与输入的型号命名规则 Markdown 解析型号特征，产出检索用语。"
         "解析结果只服务后续检索改写，不是审查证据；不得使用行业常识补全，不得生成标准限值。"
+        "本步须以 JSON 对象输出结构化结果。"
     ),
     "query_planner": (
         "你是流水线中的「规划检索问题」节点。"
@@ -106,6 +108,53 @@ def format_node_framework_preamble(step_id: str) -> str:
     if not task:
         return f"任务场景：\n{AUDIT_PIPELINE_SCENARIO}"
     return f"任务场景：\n{AUDIT_PIPELINE_SCENARIO}\n\n本步任务：\n{task}"
+
+
+# Output contracts for notes-only AI steps (framework-owned; DeepSeek json_object
+# requires the word "json" to appear in the prompt).
+NODE_JSON_OUTPUT_CONTRACTS: dict[str, str] = {
+    "test_items": (
+        "输出：\n"
+        "严格输出 JSON 对象，不要输出 Markdown 代码块：\n"
+        "{\n"
+        '  "report_id": "输入提供的report_id",\n'
+        '  "sample_context": {\n'
+        '    "sample_name": "报告原文或空字符串",\n'
+        '    "model": "报告原文或空字符串"\n'
+        "  },\n"
+        '  "items": [\n'
+        "    {\n"
+        '      "item_no": "报告中的编号",\n'
+        '      "project_name": "检测项目原文",\n'
+        '      "phase": "initial或repeat_routine",\n'
+        '      "requirements": [\n'
+        "        {\n"
+        '          "requirement_text": "字段名与报告标准值组成的完整原文要求",\n'
+        '          "unit": "单位"\n'
+        "        }\n"
+        "      ]\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    ),
+    "model_decode": (
+        "输出：\n"
+        "严格输出 JSON 对象，不要输出 Markdown 代码块：\n"
+        "{\n"
+        '  "raw_model": "",\n'
+        '  "decoded_features": [\n'
+        '    {"segment": "", "meaning": "", "evidence_quote": ""}\n'
+        "  ],\n"
+        '  "retrieval_terms": [],\n'
+        '  "unresolved_segments": []\n'
+        "}"
+    ),
+}
+
+
+def format_node_json_output_contract(step_id: str) -> str:
+    """Return the JSON output contract for notes-only steps, or empty."""
+    return NODE_JSON_OUTPUT_CONTRACTS.get(step_id, "").strip()
 
 
 def _format_parameter_schema_field_lines(schema: Any) -> list[str]:
@@ -675,6 +724,16 @@ def build_runtime_prompt_segments(
                 "text": body,
                 "key": key,
                 "title": title,
+            }
+        )
+    output_contract = format_node_json_output_contract(step_id)
+    if output_contract:
+        segments.append(
+            {
+                "kind": "static",
+                "text": output_contract,
+                "key": "",
+                "title": "",
             }
         )
     return segments

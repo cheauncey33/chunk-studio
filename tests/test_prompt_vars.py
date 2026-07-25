@@ -263,6 +263,19 @@ def test_test_items_model_decode_ignore_legacy_notes_without_step_rules() -> Non
     assert "只依据报告原始型号解析型号" not in decode
 
 
+def test_test_items_and_model_decode_prompts_include_json_for_deepseek() -> None:
+    """DeepSeek json_object requires the word 'json' somewhere in the prompt."""
+    context = build_prompt_var_context(kb_name="库A")
+    for step_id in ("test_items", "model_decode"):
+        out = compose_runtime_prompt("", step_id=step_id, context=context)
+        assert "json" in out.lower(), step_id
+        assert "严格输出 JSON" in out, step_id
+        if step_id == "test_items":
+            assert '"items"' in out
+        else:
+            assert '"decoded_features"' in out
+
+
 def test_query_planner_brief_only_enabled_routes() -> None:
     routes = default_query_planner_routes()
     for item in routes:
