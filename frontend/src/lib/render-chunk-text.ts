@@ -1,7 +1,22 @@
 /** Render chunk text for preview: keep HTML tables, convert markdown tables/headings. */
 
+/** Repair truncated table-cell chunks before HTML rendering. */
+export function normalizeEvidenceHtml(raw: string): string {
+  let text = raw.trim()
+  if (!text) return ''
+  // Truncated retrieval chunks often start mid-row.
+  text = text.replace(/^(?:\s*<\/(?:td|th|tr)>)+/i, '')
+  if (!/<table[\s>]/i.test(text) && /<\/?(?:tr|td|th)\b/i.test(text)) {
+    if (!/^<\s*tr[\s>]/i.test(text)) {
+      text = `<tr>${text}</tr>`
+    }
+    text = `<table>${text}</table>`
+  }
+  return text
+}
+
 export function renderChunkText(raw: string): string {
-  const text = raw.trim()
+  const text = normalizeEvidenceHtml(raw.trim())
   if (!text) return ''
   const parts: string[] = []
   const tableRe = /<table[\s\S]*?<\/table>/gi
