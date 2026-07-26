@@ -495,6 +495,10 @@ export function AssistantSettings({
           label: '注入方式',
           value: '运行时作为 naming_rule_markdown 传入，不写在提示词正文里',
         },
+        {
+          label: '下游合并',
+          value: '解码结果与报告参数合并为 sample_profile，供规划检索与审查判定使用',
+        },
       ],
       audit_judge: [
         {

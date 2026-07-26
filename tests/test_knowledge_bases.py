@@ -130,7 +130,13 @@ def test_generic_template_assistant_is_seeded(monkeypatch, tmp_path) -> None:
     oil_schema = json.loads(oil["parameter_schema"])
     oil_prompts = json.loads(oil["node_prompts"])
     assert oil_schema["allow_extra"] is False
-    assert len(oil_schema["fields"]) == 7
+    assert len(oil_schema["fields"]) == 16
+    assert "rated_frequency" in {
+        field["key"] for field in oil_schema["fields"]
+    }
+    assert "tank_structure" in {
+        field["key"] for field in oil_schema["fields"]
+    }
     assert "generic/" not in oil_prompts["report_parameters"]["path"]
     _close_temp_db(monkeypatch)
 

@@ -33,6 +33,68 @@ def _report_id(path: Path) -> str:
     return name
 
 
+def _coerce_requirement(value: Any) -> dict[str, Any] | None:
+    """Normalize one requirement row; drop blank / non-object rows."""
+    if isinstance(value, str):
+        text = value.strip()
+        return {"requirement_text": text} if text else None
+    if not isinstance(value, dict):
+        return None
+    text = str(
+        value.get("requirement_text")
+        or value.get("requirement")
+        or value.get("text")
+        or ""
+    ).strip()
+    if not text:
+        return None
+    cleaned = dict(value)
+    cleaned["requirement_text"] = text
+    cleaned.pop("requirement", None)
+    cleaned.pop("text", None)
+    # Models sometimes leak measured values into requirement rows; strip so a
+    # single polluted row does not abort the whole extraction.
+    cleaned.pop("measured_result", None)
+    cleaned.pop("result", None)
+    return cleaned
+
+
+def _normalize_report(result: dict[str, Any]) -> dict[str, Any]:
+    """Drop empty / blank requirement rows and items that have none left.
+
+    Model output occasionally includes a project shell without requirements;
+    failing the whole extraction for one bad row blocks the audit. Keep valid
+    items so the run can continue.
+    """
+    items = result.get("items")
+    if not isinstance(items, list):
+        return result
+    normalized_items: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_requirements = item.get("requirements")
+        if raw_requirements is None and isinstance(item.get("requirement"), (list, str)):
+            raw_requirements = item.get("requirement")
+        if isinstance(raw_requirements, str):
+            raw_requirements = [raw_requirements]
+        if not isinstance(raw_requirements, list):
+            continue
+        requirements: list[dict[str, Any]] = []
+        for raw in raw_requirements:
+            coerced = _coerce_requirement(raw)
+            if coerced is not None:
+                requirements.append(coerced)
+        if not requirements:
+            continue
+        cleaned = dict(item)
+        cleaned["requirements"] = requirements
+        cleaned.pop("requirement", None)
+        normalized_items.append(cleaned)
+    result["items"] = normalized_items
+    return result
+
+
 def _validate_report(result: dict[str, Any], expected_report_id: str) -> None:
     if result.get("report_id") != expected_report_id:
         raise ValueError(f"response report_id must be {expected_report_id!r}")
@@ -73,6 +135,9 @@ def extract_report(path: Path, *, prompt: str, model: str) -> dict[str, Any]:
         model=model,
         temperature=0,
     )
+    if not isinstance(result, dict):
+        raise ValueError("response must be a JSON object")
+    _normalize_report(result)
     _validate_report(result, report_id)
     result["source_file"] = path.name
     return result

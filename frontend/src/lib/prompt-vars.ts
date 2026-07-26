@@ -12,10 +12,10 @@ export const EMPTY_PROMPT_VAR = '（未配置）'
 /** Shared across all AI workflow nodes (framework only; not a variable). */
 export const AUDIT_PIPELINE_SCENARIO =
   '本系统对照知识库中的标准证据，审查检测报告里填写的标准要求是否成立。'
-  + '完整流水线为：提取报告参数 → 提取检测项目与标准要求 → 解析型号规则（可选）→ '
+  + '完整流水线为：提取报告参数 → 提取检测项目与标准要求 → 解析型号规则（可选，并与报告参数合并为 sample_profile）→ '
   + '规划检索问题 → 查找候选证据 → 对照标准判定 → 汇总结果。'
   + '总原则：只依据报告原文与检索到的标准 Chunk；不得用行业常识补全标准值或适用条件；'
-  + '上游步骤产出（样品参数、型号解码等）仅作上下文或检索锚点，不是已被标准证明的事实。'
+  + 'sample_profile（报告提取参数 + 型号解码合并结果）仅作样品上下文与适用性锚点，不是已被标准证明的事实。'
 
 export const NODE_STEP_TASKS: Record<string, string> = {
   report_parameters:
@@ -33,17 +33,21 @@ export const NODE_STEP_TASKS: Record<string, string> = {
   model_decode:
     '你是流水线中的「解析型号规则」节点。'
     + '仅依据报告原始型号、已提取参数与输入的型号命名规则 Markdown 解析型号特征，产出检索用语。'
-    + '解析结果只服务后续检索改写，不是审查证据；不得使用行业常识补全，不得生成标准限值。'
+    + '同时根据 decoded_features，为输入 empty_schema_fields 中仍为空的样品 Schema 键填写 schema_fills'
+    + '（键名必须与 Schema 一致；无依据则不要填）。'
+    + '本步 JSON 输出会与报告提取参数合并为下游统一的 sample_profile；'
+    + '解析结果只服务后续检索与适用性锚点，不是审查证据；不得使用行业常识补全，不得生成标准限值。'
     + '本步须以 JSON 对象输出结构化结果。',
   query_planner:
     '你是流水线中的「规划检索问题」节点。'
-    + '针对输入中的单条报告标准要求，结合已提取的样品上下文（sample_context）'
-    + '与可选的型号解码结果，生成多路检索 Query，供下一步在标准知识库中查找候选证据。'
-    + 'sample_context 与解码结果仅作检索锚点；本步不输出审查判定，也不输出 parameters。',
+    + '针对输入中的单条报告标准要求，结合样品档案 sample_profile'
+    + '（含 from_report 报告提取参数与 from_model_decode 型号解码），'
+    + '生成多路检索 Query，供下一步在标准知识库中查找候选证据。'
+    + 'sample_profile 仅作检索锚点；本步不输出审查判定，也不输出 parameters。',
   audit_judge:
     '你是流水线中的「对照标准判定」节点。'
     + '判断该条报告标准要求是否被候选标准 Chunk 支持。'
-    + '只能使用输入中的报告事实、样品上下文、型号解析结果、peer_report_context、'
+    + '只能使用输入中的报告事实、sample_profile、peer_report_context、'
     + 'manual_knowledge_rules、few_shot_examples 与候选 Chunk；不得用常识补充标准值。'
     + '按四态 status（supported / mismatch / insufficient_context / not_audited）输出结论。',
 }
@@ -89,7 +93,10 @@ export const NODE_JSON_OUTPUT_CONTRACTS: Record<string, string> = {
     '    {"segment": "", "meaning": "", "evidence_quote": ""}',
     '  ],',
     '  "retrieval_terms": [],',
-    '  "unresolved_segments": []',
+    '  "unresolved_segments": [],',
+    '  "schema_fills": {',
+    '    "schema_key": "仅填 empty_schema_fields 中的键；无依据则省略该键"',
+    '  }',
     '}',
   ].join('\n'),
 }
@@ -139,7 +146,7 @@ const INJECT_TITLES: Record<PromptInjectKey, string> = {
 export const STEP_AUTO_INJECT: Partial<Record<string, PromptInjectKey[]>> = {
   report_parameters: ['extraction_brief'],
   test_items: ['kb_context'],
-  model_decode: ['kb_context'],
+  model_decode: ['kb_context', 'parameter_schema'],
   query_planner: ['query_planner_brief'],
   audit_judge: ['audit_judge_brief'],
 }
@@ -415,10 +422,11 @@ export function buildQueryPlannerBriefParts(input: {
       kind: 'framework',
       text: [
         '约束：',
-        '1. 只能使用输入提供的报告事实、样品上下文和型号解码结果；若无型号解码则忽略解码相关约束。',
+        '1. 只能使用输入提供的报告事实与 sample_profile'
+        + '（from_report / from_model_decode）；若 from_model_decode 为空则忽略解码相关约束。',
         '2. 不得把报告标准值当成已经被标准文件证明的事实；可以保留报告声称值作为检索锚点，'
         + '但表达应是“寻找支持或核验该值的证据”。',
-        '3. 不得加入输入中没有出现、且（在有解码时）不能由型号解码结果支持的产品条件。',
+        '3. 不得加入 sample_profile 中未出现的产品条件。',
         '4. 型号无法解释时保留原始型号，不得凭行业常识展开。',
         '5. 每条启用改写形式只输出一条 Query。',
         '6. 严格输出 JSON 对象，不要输出 Markdown 代码块。',
@@ -533,25 +541,70 @@ export function buildAuditJudgeBriefParts(input: {
         '状态：',
         '- supported：直接证据支持报告要求；',
         '- mismatch：直接证据给出冲突数值、公式或适用条件；',
-        '- insufficient_context：候选中存在相关条件规则，但报告缺少决定适用性的参数；',
+        '- insufficient_context：候选中存在相关条件规则，但 sample_profile 缺少决定适用性的参数；',
         '- not_audited：候选中没有足够证据，本条无法完成审查。',
+        '',
+        '判定流程（必须按顺序执行；完成前不得给出最终 status）：',
+        '1. 提取报告要求：完整复述待审主张（可为数值限值、文字条款、试验条件或公式关系）。',
+        '2. 提取标准依据：仅从候选 Chunk，以及 allowed_use 适用的 manual_knowledge_rules '
+        + '中引用依据；写明标准号与表号/条款（若有）。',
+        '3. 多标准取舍（看候选的 standard_priority / business_metadata.standard_no）：',
+        '   优先级从高到低：技术规范书 > 企/行标 > 国标 > 其他。',
+        '   - 多个候选对同一要求给出可核对限值/条款时，以更高优先级来源作为主依据；',
+        '   - 高优先级与低优先级冲突时，采用高优先级结论，reason 写明所采用的标准号；',
+        '   - 低优先级仅在与主依据一致时可作补充，不得用来推翻高优先级；',
+        '   - 纯试验方法/测量方法标准若未给出判定限值，不得因其类别压过带判定限值的产品标准。',
+        '4. 比对报告要求与选定标准依据，选择唯一结果：',
+        '   - 一致或报告要求不宽于标准 → supported',
+        '   - 存在直接冲突（数值、公式、适用条件或条款含义冲突）→ mismatch',
+        '   - 候选已出现相关条件规则，但 sample_profile（from_report 与 from_model_decode）'
+        + '仍缺少决定适用性的关键参数 → insufficient_context',
+        '   - 候选不足以形成可核对证据链 → not_audited',
+        '5. 输出 status 与 reason。reason 必须与 status 一致，且不得事后改口。',
+        '',
+        '数值限值细则：',
+        '- 当报告与适用标准在同一比较方向上给出限值，且数值相等时'
+        + '（例如标准限值 40、报告要求 ≤40），必须判定为 supported。',
+        '- 不得仅因“等于限值”判定 mismatch。',
+        '- 报告限值宽于标准限值 → mismatch；严于或等于标准限值 → supported'
+        + '（在适用条件已匹配的前提下）。',
+        '',
+        '文字/条款与公式细则：',
+        '- 文字要求以候选明示表述做等价、包含或冲突判断，'
+        + '不得用未在输入中出现的行业经验补全。',
+        '- 公式/派生关系仅在 manual_knowledge_rules 允许，或候选已给出完整计算关系时使用；'
+        + '否则 not_audited。',
+        '- 若标准仅给出方法/条件、未给出可核对判据，而报告填写了具体限值，'
+        + '不得臆造标准限值；应输出 insufficient_context 或 not_audited。',
+        '',
+        'reason 写法：',
+        '- 使用 1–3 句，仅陈述：报告要求、采用的标准依据、比对结论。',
+        '- 禁止自我修正或元评论，包括但不限于：之前、误判、更正、改判、'
+        + '应判定为…但…、再考虑。',
+        '- 禁止使用“通常/一般/常见/大概率”等未被输入证明的表述。',
+        '- reason 不得表达与 status 相反的结论。',
         '',
         '证据边界：',
         '1. 表格可能需要结合容量、型号、规格等选择行列；多个 Chunk 可组成证据链。',
         '2. 不要把报告声称的数值反过来当作标准证据。',
         '3. 不得使用“通常”“一般”“常见”“大概率属于”等行业常识确认适用条件；'
-        + '标准规则依赖的产品结构若报告未明确给出，输出 insufficient_context。',
+        + '标准规则依赖的产品结构若 sample_profile 中也未给出，输出 insufficient_context。',
         '4. 若候选只给出部分分项值、缺少公式或另一项必需证据，且 manual_knowledge_rules '
         + '也无适用规则，输出 not_audited。',
         '5. 目标要求含具体基准值/限值时，必须在候选 Chunk、peer_report_context 或适用 '
         + 'manual_knowledge_rules 的派生结果中找到数值来源。',
         '',
         '输入字段用法：',
+        '- sample_profile：报告提取参数与型号解码的合并样品档案。'
+        + 'from_report 为报告提取字段；from_model_decode 为型号解析特征（含 feature_meanings、'
+        + 'retrieval_terms 等）。可用于适用性判断与表行列选择，但不是标准证据。'
+        + 'missing_context_fields 不得列入 sample_profile 中已给出的信息。',
+        '- candidates[].business_metadata.standard_no：证据标准号；'
+        + 'candidates[].standard_priority：程序预标注的来源优先级（rank 越小越高）。',
         '- peer_report_context：仅作同报告事实上下文，不是标准证据。',
         '- manual_knowledge_rules：仅用于其 allowed_use 描述的计算/派生/固定项目规则；'
         + '不能提供标准限值来源或候选中不存在的产品结构事实；使用时 reason 须写明 rule_id。',
         '- few_shot_examples：只对齐输出口径与状态选择，不是标准证据。',
-        '- sample_context：已提取样品参数，仅作检索/适用性锚点，勿当作已证标准事实。',
         '',
         '判定约定摘要（完整条文见输入 manual_knowledge_rules，此处不重复正文）：',
       ].join('\n'),

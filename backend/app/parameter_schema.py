@@ -6,23 +6,75 @@ from typing import Any
 
 OIL_PARAMETER_FIELDS: tuple[str, ...] = (
     "model",
+    "product_type",
+    "insulation_medium",
     "rated_capacity",
     "rated_voltage",
+    "equipment_highest_voltage_um",
+    "rated_frequency",
     "phase_count",
     "connection_group",
+    "regulation_method",
     "cooling_method",
     "insulation_level",
+    "core_material",
+    "core_structure",
+    "tank_structure",
+    "sealing_type",
 )
 
 _OIL_FIELD_LABELS: dict[str, str] = {
     "model": "型号",
+    "product_type": "产品类型",
+    "insulation_medium": "绝缘介质",
     "rated_capacity": "额定容量",
     "rated_voltage": "额定电压",
+    "equipment_highest_voltage_um": "设备最高电压 Um",
+    "rated_frequency": "额定频率",
     "phase_count": "相数",
     "connection_group": "联结组别",
+    "regulation_method": "调压方式",
     "cooling_method": "冷却方式",
     "insulation_level": "绝缘水平",
+    "core_material": "铁芯材质",
+    "core_structure": "铁芯结构",
+    "tank_structure": "油箱结构",
+    "sealing_type": "密封方式",
 }
+
+_OIL_FIELD_HINTS: dict[str, str] = {
+    "model": "首页样品型号或型号规格，完整保留原文",
+    "product_type": "报告明确记载的产品类型，如配电变压器、电力变压器",
+    "insulation_medium": "仅提取报告明确记载的油浸式、干式等类型",
+    "rated_capacity": "参数表中的额定容量及单位",
+    "rated_voltage": "高压/低压额定电压组合及单位",
+    "equipment_highest_voltage_um": "仅提取报告明确给出的设备最高电压 Um",
+    "rated_frequency": "参数表中的额定频率及单位",
+    "phase_count": "参数表中的相数",
+    "connection_group": "联结组标号，保留原始写法",
+    "regulation_method": "仅提取报告明确记载的无励磁调压、有载调压等方式",
+    "cooling_method": "仅提取报告明确记载的 ONAN、AN/AF 等冷却方式",
+    "insulation_level": "报告级绝缘水平，不得使用耐压试验实测值代替",
+    "core_material": "仅提取报告明确记载的电工钢、非晶合金等材质",
+    "core_structure": "仅提取报告明确记载的立体卷铁芯等结构",
+    "tank_structure": "仅提取报告明确记载的波纹式、一般结构等油箱类型",
+    "sealing_type": "仅提取报告明确记载的密封式、充气密封式等方式",
+}
+
+
+def present_parameter_labels(parameters: dict[str, Any] | None) -> dict[str, str]:
+    """Map non-empty parameter keys to display labels (key itself if unknown)."""
+    labels: dict[str, str] = {}
+    for key, value in (parameters or {}).items():
+        name = str(key or "").strip()
+        if not name:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if value is None:
+            continue
+        labels[name] = _OIL_FIELD_LABELS.get(name, name)
+    return labels
 
 
 def oil_parameter_schema() -> dict[str, Any]:
@@ -35,7 +87,7 @@ def oil_parameter_schema() -> dict[str, Any]:
                 "key": key,
                 "label": _OIL_FIELD_LABELS[key],
                 "required": key == "model",
-                "hint": "",
+                "hint": _OIL_FIELD_HINTS[key],
             }
             for key in OIL_PARAMETER_FIELDS
         ],

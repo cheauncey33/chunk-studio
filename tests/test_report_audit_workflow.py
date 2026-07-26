@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 
@@ -65,6 +66,59 @@ def test_assistant_evidence_scope_excludes_runtime_inputs_and_other_kbs(
     _close_temp_db(monkeypatch)
 
 
+def test_extract_detection_basis_standard_nos_only_reads_basis_block() -> None:
+    markdown = """
+<table><tr><td>检测依据</td><td colspan="3">
+1.GB/T 1094.1-2013 电力变压器
+2.Q∕GDW 12126.4-2024 配电变压器
+3.JB／T 501-2021 电力变压器试验导则
+</td></tr></table>
+
+正文另有 GB/T 10228-2023，但不属于检测依据。
+"""
+
+    assert workflow._extract_detection_basis_standard_nos(markdown) == [
+        "GB/T 1094.1-2013",
+        "Q/GDW 12126.4-2024",
+        "JB/T 501-2021",
+    ]
+
+
+def test_detection_basis_filters_bound_files_by_chunk_standard_no(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    with db.transaction() as conn:
+        for file_id in ("oil", "dry"):
+            conn.execute(
+                """INSERT INTO files(id,name,path,metadata,created_at)
+                   VALUES (?,?,?,'{}','now')""",
+                (file_id, f"{file_id}.pdf", f"files/{file_id}.pdf"),
+            )
+        conn.execute(
+            """INSERT INTO chunks
+               (id,file_id,page,bbox,text,business_metadata,status,created_at,updated_at)
+               VALUES ('c-oil','oil',1,'{}','油浸式标准',
+                       '{"standard_no":"GB/T 6451-2023"}','approved','now','now'),
+                      ('c-dry','dry',1,'{}','干式标准',
+                       '{"standard_no":"GB/T 10228-2023"}','approved','now','now')"""
+        )
+
+    scoped = workflow._filter_evidence_file_ids_by_detection_basis(
+        ["oil", "dry"],
+        ["GB/T 6451-2023"],
+    )
+
+    assert scoped == ["oil"]
+    with pytest.raises(ValueError, match="未在当前知识库找到"):
+        workflow._filter_evidence_file_ids_by_detection_basis(
+            ["oil", "dry"],
+            ["GB/T 1094.3-2017"],
+        )
+    _close_temp_db(monkeypatch)
+
+
 def test_runtime_retrieval_config_and_selection_apply_version_values() -> None:
     profile = {
         "retrieval_config": {
@@ -91,15 +145,25 @@ def test_runtime_retrieval_config_and_selection_apply_version_values() -> None:
     )
 
     assert config["route_top_k"] == 7
-    assert config["final_per_type"] == 15
+    assert config["final_table"] == 8
+    assert config["final_section"] == 6
+    assert config["final_per_type"] == 8
     assert config["special_route_reserve"] == 3
     assert config["aggregate_continuation_tables"] is True
     assert config["expand_references"] is True
     assert [item["id"] for item in selected] == ["keep"]
 
     defaults = workflow._retrieval_runtime_config({"retrieval_config": {}})
+    assert defaults["final_table"] == 8
+    assert defaults["final_section"] == 6
     assert defaults["aggregate_continuation_tables"] is False
     assert defaults["expand_references"] is False
+
+    legacy = workflow._retrieval_runtime_config(
+        {"retrieval_config": {"final_per_type": 15}}
+    )
+    assert legacy["final_table"] == 15
+    assert legacy["final_section"] == 15
 
 
 def test_load_assistant_version_includes_category_provenance(
@@ -109,6 +173,52 @@ def test_load_assistant_version_includes_category_provenance(
     profile = workflow._load_assistant_version("assistant_oil_transformer_audit")
     assert profile["category_profile"] == {}
     assert profile["initialization_provenance"]["source"] == "built_in_seed"
+    keys = {field["key"] for field in profile["parameter_schema"]["fields"]}
+    assert {
+        "product_type",
+        "insulation_medium",
+        "equipment_highest_voltage_um",
+        "rated_frequency",
+        "regulation_method",
+        "core_material",
+        "core_structure",
+        "tank_structure",
+        "sealing_type",
+    } <= keys
+    _close_temp_db(monkeypatch)
+
+
+def test_oil_schema_backfill_preserves_existing_fields_and_appends_new_ones(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    legacy = {
+        "version": 1,
+        "allow_extra": False,
+        "fields": [
+            {
+                "key": "model",
+                "label": "自定义型号",
+                "required": True,
+                "hint": "保留人工设置",
+            }
+        ],
+    }
+    with db.transaction() as conn:
+        conn.execute(
+            """UPDATE assistant_versions SET parameter_schema=?
+               WHERE id='assistant_oil_transformer_audit_v1'""",
+            (json.dumps(legacy, ensure_ascii=False),),
+        )
+
+    db._backfill_oil_parameter_schema_fields()
+    profile = workflow._load_assistant_version("assistant_oil_transformer_audit")
+    fields = profile["parameter_schema"]["fields"]
+    assert fields[0]["label"] == "自定义型号"
+    assert fields[0]["hint"] == "保留人工设置"
+    assert "rated_frequency" in {field["key"] for field in fields}
+    assert "tank_structure" in {field["key"] for field in fields}
     _close_temp_db(monkeypatch)
 
 
@@ -141,7 +251,8 @@ def test_extract_parameters_uses_schema_and_open_list(monkeypatch) -> None:
         model="deepseek-v4-flash",
         parameter_schema=schema,
     )
-    assert captured["payload"]["parameter_schema"]["fields"][0]["key"] == "model"
+    # Schema is injected via system prompt; user payload is report markdown only.
+    assert captured["payload"] == {"report_markdown": "# report"}
     assert out == {
         "model": "ABC-1",
         "rated_voltage": "10 kV",
@@ -208,23 +319,109 @@ def test_full_audit_units_cover_every_requirement_with_stable_ids() -> None:
     assert units[0]["case_id"] != units[1]["case_id"]
 
 
-def test_full_audit_units_disambiguate_duplicate_requirements() -> None:
-    item = {
-        "item_no": "1",
-        "phase": "出厂",
-        "project_name": "空载损耗",
-        "requirements": [
-            {"requirement_text": "≤ 480 W", "unit": "W"},
-            {"requirement_text": "≤480 W", "unit": "W"},
-        ],
+def test_full_audit_units_dedupe_whitespace_and_repeat_phase() -> None:
+    extracted = {
+        "items": [
+            {
+                "item_no": "3",
+                "phase": "initial",
+                "project_name": "电压比测量和联结组标号检定",
+                "requirements": [
+                    {
+                        "requirement_text": "其他分接电压比偏差:±1%",
+                        "unit": "",
+                    },
+                    {
+                        "requirement_text": "其他分接电压比偏差: ±1%",
+                        "unit": "",
+                    },
+                ],
+            },
+            {
+                "item_no": "15.3",
+                "phase": "repeat_routine",
+                "project_name": "电压比测量和联结组标号检定",
+                "requirements": [
+                    {
+                        "requirement_text": "其他分接电压比偏差:±1%",
+                        "unit": "",
+                    },
+                    {
+                        "requirement_text": "主分接电压比偏差:±0.5%",
+                        "unit": "",
+                    },
+                ],
+            },
+        ]
     }
 
-    units = workflow._build_full_audit_units({"items": [item]})
+    units = workflow._build_full_audit_units(extracted)
 
-    # Whitespace-insensitive duplicates share the hash but stay one-to-one.
+    # Same project+requirement (whitespace-normalized) audited once; prefer initial.
     assert len(units) == 2
-    assert len({unit["case_id"] for unit in units}) == 2
-    assert units[1]["case_id"] == f"{units[0]['case_id']}_2"
+    texts = [
+        unit["requirement"]["requirement_text"].replace(" ", "")
+        for unit in units
+    ]
+    assert texts.count("其他分接电压比偏差:±1%") == 1
+    assert "主分接电压比偏差:±0.5%" in texts
+    other = next(
+        unit
+        for unit in units
+        if "其他分接" in unit["requirement"]["requirement_text"]
+    )
+    assert other["test_item"]["phase"] == "initial"
+
+
+def test_requirement_dedupe_normalizes_numeric_and_unit_noise() -> None:
+    assert workflow._normalize_requirement_dedupe_text(
+        "介质损耗因数tanδ(90°C):≤1",
+        "%",
+    ) == workflow._normalize_requirement_dedupe_text(
+        "介质损耗因数tanδ(90°C)(%):≤1.0",
+        "%",
+    )
+    # Distinct limits must not collapse.
+    assert workflow._normalize_requirement_dedupe_text(
+        "偏差:±1%",
+        "",
+    ) != workflow._normalize_requirement_dedupe_text(
+        "偏差:±0.5%",
+        "",
+    )
+
+
+def test_full_audit_units_dedupe_insulation_oil_tand_variants() -> None:
+    extracted = {
+        "items": [
+            {
+                "item_no": "8",
+                "phase": "initial",
+                "project_name": "绝缘液试验",
+                "requirements": [
+                    {
+                        "requirement_text": "介质损耗因数tanδ(90°C):≤1",
+                        "unit": "%",
+                    }
+                ],
+            },
+            {
+                "item_no": "15.8",
+                "phase": "repeat_routine",
+                "project_name": "绝缘液试验",
+                "requirements": [
+                    {
+                        "requirement_text": "介质损耗因数tanδ(90°C)(%):≤1.0",
+                        "unit": "%",
+                    }
+                ],
+            },
+        ]
+    }
+    units = workflow._build_full_audit_units(extracted)
+    assert len(units) == 1
+    assert units[0]["test_item"]["phase"] == "initial"
+    assert units[0]["requirement"]["requirement_text"] == "介质损耗因数tanδ(90°C):≤1"
 
 
 def test_peer_context_rules_read_from_assistant_retrieval_config() -> None:
@@ -266,6 +463,41 @@ def _candidate(key: str, text: str = "证据文本") -> dict:
         "source_trace": {"page_start": 3, "page_end": 4},
         "text": text,
     }
+
+
+def test_standard_priority_classifies_common_standard_nos() -> None:
+    assert workflow._standard_priority("Q/GDW 12126.4-2024")["label"] == "企/行标"
+    assert workflow._standard_priority("JB/T 501-2021")["label"] == "企/行标"
+    assert workflow._standard_priority("GB/T 1094.1-2013")["label"] == "国标"
+    assert workflow._standard_priority("GB 20052-2024")["rank"] == 3
+    assert (
+        workflow._standard_priority(
+            "",
+            title_blob="某某产品招标技术规范",
+        )["label"]
+        == "技术规范书"
+    )
+    enterprise = workflow._standard_priority("Q/GDW 12126.4-2024")["rank"]
+    national = workflow._standard_priority("GB/T 1094.1-2013")["rank"]
+    assert enterprise < national
+
+
+def test_compact_candidate_attaches_standard_priority() -> None:
+    compact = workflow._compact_candidate(
+        {
+            "candidate_key": "c02",
+            "content_type": "table",
+            "business_metadata": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "table_no": "30",
+                "table_title": "油浸式配电变压器例行试验",
+            },
+            "text": "判定标准",
+        }
+    )
+    assert compact["standard_priority"]["label"] == "企/行标"
+    assert compact["standard_priority"]["rank"] == 2
+    assert compact["business_metadata"]["standard_no"] == "Q/GDW 12126.4-2024"
 
 
 def test_judge_validation_maps_legacy_status_and_builds_locators() -> None:
@@ -329,6 +561,151 @@ def test_judge_validation_keeps_clean_contract_output_untouched() -> None:
     assert "validation_issues" not in judgment
 
 
+def _sample_profile_fixture() -> dict:
+    return {
+        "from_report": {
+            "model": "S20-M.RL-400/10-NX2",
+            "rated_capacity": "400 kVA",
+            "rated_voltage": "10/0.4 kV",
+        },
+        "from_model_decode": {
+            "raw_model": "S20-M.RL-400/10-NX2",
+            "features": [{"segment": "RL", "meaning": "立体卷铁芯"}],
+            "feature_meanings": {"RL": "立体卷铁芯"},
+            "retrieval_terms": ["三相油浸式密封式立体卷铁芯变压器"],
+            "unresolved_segments": [],
+        },
+    }
+
+
+def test_consistency_flags_reason_status_fight() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "mismatch",
+            "reason": "报告要求与标准限值一致，应判定为supported。但之前误判为mismatch，现更正。",
+            "missing_context_fields": [],
+        },
+        _sample_profile_fixture(),
+    )
+    assert any("claims status" in issue for issue in issues)
+    assert any("self-correction" in issue for issue in issues)
+
+
+def test_consistency_flags_agreement_under_insufficient_context() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "insufficient_context",
+            "reason": "表19限值40与报告要求≤40一致，与报告要求一致。",
+            "missing_context_fields": ["铁心材质"],
+        },
+        _sample_profile_fixture(),
+    )
+    assert any("agreement" in issue for issue in issues)
+
+
+def test_consistency_flags_missing_fields_already_in_profile() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "insufficient_context",
+            "reason": "缺少额定电压，无法比较。",
+            "missing_context_fields": ["额定电压Ur", "未知专用字段XYZ"],
+        },
+        _sample_profile_fixture(),
+    )
+    assert any("额定电压Ur" in issue for issue in issues)
+    assert "未知专用字段XYZ" not in ";".join(issues)
+
+
+def test_consistency_keeps_clean_judgment() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "mismatch",
+            "reason": "报告要求±1%，标准为±0.5%，两者冲突。",
+            "missing_context_fields": [],
+        },
+        _sample_profile_fixture(),
+    )
+    assert issues == []
+
+
+def test_run_audit_judge_rejudeges_on_consistency_failure(monkeypatch) -> None:
+    candidates = [_candidate("c01")]
+    calls: list[dict] = []
+
+    def fake_call_model(prompt: str, payload: dict, *, model: str):
+        calls.append(payload)
+        if "validation_feedback" in payload:
+            return {
+                "status": "supported",
+                "reason": "报告要求与标准一致。",
+                "evidence_candidate_keys": ["c01"],
+                "missing_context_fields": [],
+            }
+        return {
+            "status": "insufficient_context",
+            "reason": "与报告要求一致，但缺少额定电压Ur。",
+            "evidence_candidate_keys": [],
+            "missing_context_fields": ["额定电压Ur"],
+        }
+
+    monkeypatch.setattr(workflow, "_call_model", fake_call_model)
+    judgment, trace = workflow._run_audit_judge_with_consistency(
+        judge_prompt="judge",
+        judge_input={
+            "sample_profile": _sample_profile_fixture(),
+            "candidates": [],
+        },
+        judge_model="deepseek-chat",
+        candidates=candidates,
+        sample_profile=_sample_profile_fixture(),
+    )
+
+    assert len(calls) == 2
+    assert "validation_feedback" in calls[1]
+    assert judgment["status"] == "supported"
+    assert judgment["rejudge"]["triggered"] is True
+    assert "rejudge_input" in trace
+    assert any("rejudge triggered" in issue for issue in judgment["validation_issues"])
+
+
+def test_run_audit_judge_downgrades_when_rejudge_remains_inconsistent(
+    monkeypatch,
+) -> None:
+    candidates = [_candidate("c01")]
+
+    def fake_call_model(prompt: str, payload: dict, *, model: str):
+        return {
+            "status": "supported",
+            "reason": "报告要求与标准冲突。",
+            "evidence_candidate_keys": ["c01"],
+            "missing_context_fields": [],
+        }
+
+    monkeypatch.setattr(workflow, "_call_model", fake_call_model)
+    judgment, trace = workflow._run_audit_judge_with_consistency(
+        judge_prompt="judge",
+        judge_input={
+            "sample_profile": _sample_profile_fixture(),
+            "candidates": [],
+        },
+        judge_model="deepseek-chat",
+        candidates=candidates,
+        sample_profile=_sample_profile_fixture(),
+    )
+
+    assert judgment["status"] == "insufficient_context"
+    assert judgment["reason"] == "二次判定仍未通过一致性校验，本条暂按依据不足处理。"
+    assert judgment["evidence_candidate_keys"] == []
+    assert judgment["evidence"] == []
+    assert judgment["missing_context_fields"] == []
+    assert judgment["rejudge"]["remaining_issues"]
+    assert trace["output"] == judgment
+    assert any(
+        "rejudge still inconsistent" in issue
+        for issue in judgment["validation_issues"]
+    )
+
+
 def test_retrieve_hybrid_candidates_maps_hits_and_passes_scope(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -345,7 +722,8 @@ def test_retrieve_hybrid_candidates_maps_hits_and_passes_scope(monkeypatch) -> N
             },
             "routes_injected": True,
             "special_route_reserve": 3,
-            "final_per_type": 15,
+            "final_table": 8,
+            "final_section": 6,
             "candidate_count": 2,
             "degraded": [],
             "hits": [
@@ -384,7 +762,8 @@ def test_retrieve_hybrid_candidates_maps_hits_and_passes_scope(monkeypatch) -> N
         top_k=5,
         route_top_k=11,
         candidates_per_type=9,
-        final_per_type=15,
+        final_table=8,
+        final_section=6,
         special_route_reserve=3,
         rrf_k=40,
         similarity_threshold=0.3,
@@ -395,10 +774,11 @@ def test_retrieve_hybrid_candidates_maps_hits_and_passes_scope(monkeypatch) -> N
     assert captured["query"] == "空载损耗限值"
     assert captured["kwargs"]["file_ids"] == ["standard"]
     assert captured["kwargs"]["query_routes"] == routes
-    assert captured["kwargs"]["top_k"] == max(5, 15 * 2)
+    assert captured["kwargs"]["top_k"] == max(5, 8 + 6)
     assert captured["kwargs"]["route_top_k"] == 11
     assert captured["kwargs"]["candidates_per_type"] == 9
-    assert captured["kwargs"]["final_per_type"] == 15
+    assert captured["kwargs"]["final_table"] == 8
+    assert captured["kwargs"]["final_section"] == 6
     assert captured["kwargs"]["special_route_reserve"] == 3
     assert captured["kwargs"]["rrf_k"] == 40
     assert captured["kwargs"]["similarity_threshold"] == 0.3
@@ -409,7 +789,8 @@ def test_retrieve_hybrid_candidates_maps_hits_and_passes_scope(monkeypatch) -> N
     assert candidates[0]["route_scores"] == {"hybrid": 0.91}
     assert debug["retrieval_mode"] == "dual_rerank"
     assert debug["routes_injected"] is True
-    assert debug["final_per_type"] == 15
+    assert debug["final_table"] == 8
+    assert debug["final_section"] == 6
 
 
 def test_job_priorities_keep_interactive_jobs_above_parse() -> None:
@@ -526,3 +907,105 @@ def test_collect_enabled_planner_queries_filters_routes() -> None:
     }
     assert "keyword" not in queries
     assert "table_target" not in queries
+
+
+def test_build_sample_profile_merges_report_and_decode() -> None:
+    profile = workflow._build_sample_profile(
+        {
+            "model": "S20-M.RL-400/10-NX2",
+            "rated_capacity": "400 kVA",
+            "core_structure": "",
+            "sealing_type": "",
+        },
+        {
+            "raw_model": "S20-M.RL-400/10-NX2",
+            "decoded_features": [
+                {"segment": "RL", "meaning": "立体卷铁芯"},
+                {"segment": "M", "meaning": "密封式"},
+            ],
+            "retrieval_terms": ["三相油浸式密封式立体卷铁芯变压器"],
+            "unresolved_segments": [],
+            "schema_fills": {
+                "core_structure": "立体卷铁芯",
+                "sealing_type": "密封式",
+                "rated_capacity": "999 kVA",  # must not overwrite non-empty extract
+                "not_a_schema_key": "x",
+            },
+        },
+    )
+    assert profile["from_report"]["rated_capacity"] == "400 kVA"
+    assert profile["from_report"]["core_structure"] == "立体卷铁芯"
+    assert profile["from_report"]["sealing_type"] == "密封式"
+    assert "not_a_schema_key" not in profile["from_report"]
+    assert profile["from_model_decode"]["feature_meanings"]["RL"] == "立体卷铁芯"
+    assert profile["from_model_decode"]["feature_meanings"]["M"] == "密封式"
+    assert profile["from_model_decode"]["retrieval_terms"] == [
+        "三相油浸式密封式立体卷铁芯变压器"
+    ]
+    assert profile["from_model_decode"]["features"][0]["segment"] == "RL"
+    assert set(profile["from_model_decode"]["filled_keys"]) == {
+        "core_structure",
+        "sealing_type",
+    }
+
+
+def test_decode_model_passes_empty_schema_fields_and_filters_fills(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_call_model(prompt: str, payload: dict, *, model: str):
+        captured["payload"] = payload
+        return {
+            "raw_model": "S20-M.RL-400/10-NX2",
+            "decoded_features": [
+                {"segment": "RL", "meaning": "立体卷铁芯", "evidence_quote": "RL"},
+            ],
+            "retrieval_terms": [],
+            "unresolved_segments": [],
+            "schema_fills": {
+                "core_structure": "立体卷铁芯",
+                "rated_capacity": "should_drop_already_filled",
+                "unknown_key": "nope",
+            },
+        }
+
+    monkeypatch.setattr(workflow, "_call_model", fake_call_model)
+    out = workflow._decode_model(
+        {
+            "model": "S20-M.RL-400/10-NX2",
+            "rated_capacity": "400 kVA",
+            "core_structure": "",
+        },
+        "RL 立体卷铁芯",
+        prompt="decode",
+        model="deepseek-chat",
+        parameter_schema={
+            "version": 1,
+            "allow_extra": False,
+            "fields": [
+                {"key": "model", "label": "型号", "required": True, "hint": ""},
+                {"key": "rated_capacity", "label": "额定容量", "required": False, "hint": ""},
+                {"key": "core_structure", "label": "铁芯结构", "required": False, "hint": ""},
+            ],
+        },
+    )
+    empty_keys = {
+        item["key"] for item in captured["payload"]["empty_schema_fields"]  # type: ignore[index]
+    }
+    assert empty_keys == {"core_structure"}
+    assert out["schema_fills"] == {"core_structure": "立体卷铁芯"}
+
+
+def test_resolve_judge_concurrency_priority_and_bounds(monkeypatch) -> None:
+    monkeypatch.delenv("AUDIT_JUDGE_CONCURRENCY", raising=False)
+    assert workflow._resolve_judge_concurrency(None, {}) == workflow.DEFAULT_JUDGE_CONCURRENCY
+    assert workflow._resolve_judge_concurrency(None, {"judge_concurrency": 12}) == 12
+    assert workflow._resolve_judge_concurrency(3, {"judge_concurrency": 12}) == 3
+    monkeypatch.setenv("AUDIT_JUDGE_CONCURRENCY", "6")
+    assert workflow._resolve_judge_concurrency(None, {"judge_concurrency": 12}) == 6
+    assert workflow._resolve_judge_concurrency(2, {"judge_concurrency": 12}) == 2
+    assert (
+        workflow._resolve_judge_concurrency(999, {})
+        == workflow.MAX_JUDGE_CONCURRENCY
+    )
+    with pytest.raises(ValueError, match=">= 1"):
+        workflow._resolve_judge_concurrency(0, {})

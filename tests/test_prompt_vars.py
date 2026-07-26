@@ -151,6 +151,15 @@ def test_audit_judge_brief_single_block_with_rules_summary() -> None:
     assert "- model（" not in out
     assert '"status"' in out
     assert "insufficient_context" in out
+    assert "判定流程（必须按顺序执行；完成前不得给出最终 status）：" in out
+    assert "技术规范书 > 企/行标 > 国标" in out
+    assert "standard_priority" in out
+    assert "不得仅因“等于限值”判定 mismatch。" in out
+    assert "禁止自我修正或元评论" in out
+    assert "文字/条款与公式细则：" in out
+    assert "sample_profile" in out
+    assert "missing_context_fields 不得列入 sample_profile 中已给出的信息" in out
+    assert "sample_context：" not in out
 
 
 def test_audit_judge_compose_drops_nested_full_judge_notes() -> None:
@@ -265,7 +274,17 @@ def test_test_items_model_decode_ignore_legacy_notes_without_step_rules() -> Non
 
 def test_test_items_and_model_decode_prompts_include_json_for_deepseek() -> None:
     """DeepSeek json_object requires the word 'json' somewhere in the prompt."""
-    context = build_prompt_var_context(kb_name="库A")
+    context = build_prompt_var_context(
+        kb_name="库A",
+        parameter_schema={
+            "version": 1,
+            "allow_extra": False,
+            "fields": [
+                {"key": "model", "label": "型号", "required": True},
+                {"key": "core_structure", "label": "铁芯结构", "required": False},
+            ],
+        },
+    )
     for step_id in ("test_items", "model_decode"):
         out = compose_runtime_prompt("", step_id=step_id, context=context)
         assert "json" in out.lower(), step_id
@@ -274,6 +293,10 @@ def test_test_items_and_model_decode_prompts_include_json_for_deepseek() -> None
             assert '"items"' in out
         else:
             assert '"decoded_features"' in out
+            assert '"schema_fills"' in out
+            assert "empty_schema_fields" in out
+            assert "当前参数字段" in out
+            assert "core_structure" in out
 
 
 def test_query_planner_brief_only_enabled_routes() -> None:
@@ -297,13 +320,13 @@ def test_query_planner_brief_only_enabled_routes() -> None:
     assert '"keyword"' in text
     assert "样品/报告参数字段" not in text
     assert "- model（" not in text
-    assert "sample_context" in text
+    assert "sample_profile" in text
     assert "每条启用改写形式只输出一条 Query" in text
     assert text.startswith("任务场景：")
     assert AUDIT_PIPELINE_SCENARIO in text
     assert "本步任务：" in text
     assert "规划检索问题" in text
-    assert "若无型号解码则忽略解码相关约束" in text
+    assert "若 from_model_decode 为空则忽略解码相关约束" in text
 
 
 def test_ai_nodes_share_pipeline_scenario_preamble() -> None:
