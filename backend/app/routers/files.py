@@ -303,12 +303,41 @@ async def auto_chunk_file(file_id: str, body: AutoChunkBody | None = None):
 
 
 @router.get("/{file_id}/pages/{page_no}")
-async def page_image(file_id: str, page_no: int):
+async def page_image(file_id: str, page_no: int, dpi: int = 150):
     f = _get_file(file_id)
     if page_no < 1 or page_no > f["page_count"]:
         raise HTTPException(404, "page out of range")
-    png = await asyncio.to_thread(pdf.render_page_png, f["path"], page_no - 1)
+    # Clamp: audit preview may request high DPI; keep an upper bound for cache size.
+    render_dpi = max(96, min(int(dpi or 150), 400))
+    png = await asyncio.to_thread(pdf.render_page_png, f["path"], page_no - 1, render_dpi)
     return Response(content=png, media_type="image/png")
+
+
+@router.get("/{file_id}/locate")
+def locate_text(
+    file_id: str,
+    q: str = "",
+    project: str = "",
+    requirement: str = "",
+):
+    """Locate a requirement string on the file's MinerU layout (1-based page)."""
+    _get_file(file_id)
+    from .. import report_locate
+
+    query = (q or "").strip()
+    project_text = (project or "").strip()
+    requirement_text = (requirement or "").strip()
+    if not (query or project_text or requirement_text):
+        raise HTTPException(400, "q or project/requirement is required")
+    try:
+        return report_locate.locate_text_page(
+            file_id,
+            query,
+            project=project_text,
+            requirement=requirement_text,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.delete("/{file_id}")
