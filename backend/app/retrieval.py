@@ -23,7 +23,11 @@ CANDIDATES_PER_TYPE = 20
 LEXICAL_CANDIDATES_PER_TYPE = 20
 RRF_K = 60
 SPECIAL_ROUTE_RESERVE = 3
+# Legacy equal quota (kept for callers that still pass final_per_type alone).
 FINAL_PER_TYPE = 15
+# Production judge delivery: prefer more tables than sections.
+FINAL_TABLE = 8
+FINAL_SECTION = 6
 GENERAL_DENSE_ROUTES = ("production", "semantic", "keyword")
 SPECIAL_ROUTE_CONTENT_TYPES = {
     "table_target": "table",
@@ -155,6 +159,8 @@ def hybrid_search(
     query_routes: dict[str, str] | None = None,
     special_route_reserve: int = 0,
     final_per_type: int | None = None,
+    final_table: int | None = None,
+    final_section: int | None = None,
     aggregate_continuation_tables: bool = False,
     expand_references: bool = False,
     planner: QueryPlanner | None = None,
@@ -180,6 +186,15 @@ def hybrid_search(
         raise ValueError("special_route_reserve must be between 0 and 20")
     if final_per_type is not None and not 1 <= final_per_type <= 50:
         raise ValueError("final_per_type must be between 1 and 50")
+    if final_table is not None and not 1 <= final_table <= 50:
+        raise ValueError("final_table must be between 1 and 50")
+    if final_section is not None and not 1 <= final_section <= 50:
+        raise ValueError("final_section must be between 1 and 50")
+    final_quotas = _resolve_final_type_quotas(
+        final_per_type=final_per_type,
+        final_table=final_table,
+        final_section=final_section,
+    )
     lexical_pool_size = (
         LEXICAL_CANDIDATES_PER_TYPE
         if lexical_candidates_per_type is None
@@ -343,12 +358,14 @@ def hybrid_search(
             routes_injected=routes_injected,
             special_route_reserve=special_route_reserve,
             final_per_type=final_per_type,
+            final_table=final_quotas["table"] if final_quotas else None,
+            final_section=final_quotas["section"] if final_quotas else None,
         )
 
     documents = [_rerank_document(candidate) for candidate in candidate_pool]
     select_n = (
         candidate_count
-        if final_per_type is not None
+        if final_quotas is not None
         else min(top_k, candidate_count)
     )
     try:
@@ -368,8 +385,8 @@ def hybrid_search(
         retrieval_mode = f"{mode_prefix}_rrf_fallback"
         rerank_model = None
 
-    if final_per_type is not None:
-        selected = _slice_final_per_type(ordered, final_per_type=final_per_type)
+    if final_quotas is not None:
+        selected = _slice_final_per_type(ordered, final_quotas=final_quotas)
     else:
         selected = ordered[:top_k]
 
@@ -404,6 +421,8 @@ def hybrid_search(
         routes_injected=routes_injected,
         special_route_reserve=special_route_reserve,
         final_per_type=final_per_type,
+        final_table=final_quotas["table"] if final_quotas else None,
+        final_section=final_quotas["section"] if final_quotas else None,
     )
 
 
@@ -557,11 +576,41 @@ def _special_route_reserves(
     return keyed[:reserve]
 
 
+def _resolve_final_type_quotas(
+    *,
+    final_per_type: int | None,
+    final_table: int | None,
+    final_section: int | None,
+) -> dict[str, int] | None:
+    """Resolve typed delivery quotas after rerank.
+
+    Prefer explicit final_table / final_section. Legacy final_per_type alone
+    still means equal quota for both types.
+    """
+    if final_table is None and final_section is None and final_per_type is None:
+        return None
+    if final_table is not None or final_section is not None:
+        return {
+            "table": int(
+                FINAL_TABLE if final_table is None else final_table
+            ),
+            "section": int(
+                FINAL_SECTION if final_section is None else final_section
+            ),
+        }
+    assert final_per_type is not None
+    return {"table": int(final_per_type), "section": int(final_per_type)}
+
+
 def _slice_final_per_type(
     ordered: list[dict[str, Any]],
     *,
-    final_per_type: int,
+    final_quotas: dict[str, int] | None = None,
+    final_per_type: int | None = None,
 ) -> list[dict[str, Any]]:
+    quotas = final_quotas or {
+        kind: int(final_per_type or 0) for kind in CONTENT_TYPES
+    }
     selected: list[dict[str, Any]] = []
     counts = {kind: 0 for kind in CONTENT_TYPES}
     for hit in ordered:
@@ -569,7 +618,7 @@ def _slice_final_per_type(
         if content_type not in counts:
             # Keep unknown types only if both quotas still have room via fallback bucket.
             content_type = "section" if counts["section"] <= counts["table"] else "table"
-        if counts[content_type] >= final_per_type:
+        if counts[content_type] >= int(quotas.get(content_type, 0)):
             continue
         counts[content_type] += 1
         selected.append(hit)
@@ -589,6 +638,8 @@ def _response(
     routes_injected: bool = False,
     special_route_reserve: int = 0,
     final_per_type: int | None = None,
+    final_table: int | None = None,
+    final_section: int | None = None,
 ) -> dict[str, Any]:
     return {
         "query": query,
@@ -601,6 +652,8 @@ def _response(
         "routes_injected": routes_injected,
         "special_route_reserve": special_route_reserve,
         "final_per_type": final_per_type,
+        "final_table": final_table,
+        "final_section": final_section,
         "rerank_model": rerank_model,
         "degraded": degraded,
         "hits": hits,

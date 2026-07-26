@@ -146,6 +146,8 @@ class VectorSearchResponse(BaseModel):
     routes_injected: bool = False
     special_route_reserve: int = 0
     final_per_type: int | None = None
+    final_table: int | None = None
+    final_section: int | None = None
     rerank_model: str | None = None
     degraded: list[str] = Field(default_factory=list)
     hits: list[VectorSearchHit]

@@ -610,6 +610,54 @@ def test_final_per_type_slices_after_rerank() -> None:
     assert len(result["hits"]) == 2
 
 
+def test_final_table_section_asymmetric_quota_after_rerank() -> None:
+    query = "query"
+
+    def vector_searcher(route_query: str, vector: list[float], **kwargs):
+        content_type = kwargs["content_type"]
+        if content_type == "table":
+            return {
+                "total_candidates": 5,
+                "hits": [
+                    _hit(f"t{i}", 0.9 - i * 0.01, content_type="table", text=f"table {i}")
+                    for i in range(1, 6)
+                ],
+            }
+        return {
+            "total_candidates": 5,
+            "hits": [
+                _hit(f"s{i}", 0.9 - i * 0.01, content_type="section", text=f"section {i}")
+                for i in range(1, 6)
+            ],
+        }
+
+    def reranker(original_query: str, documents: list[str], top_n: int):
+        ranked = [(index, 1.0 - index * 0.01) for index in range(len(documents))]
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        return ranked[:top_n]
+
+    result = retrieval.hybrid_search(
+        query,
+        top_k=12,
+        final_table=3,
+        final_section=1,
+        planner=lambda value: {"semantic": "semantic", "keyword": "keyword"},
+        batch_embedder=lambda queries, **kwargs: [
+            [0.1] * embeddings.DEFAULT_DIMENSION for _ in queries
+        ],
+        vector_searcher=vector_searcher,
+        reranker=reranker,
+        lexical_enabled=False,
+    )
+
+    types = [hit["business_metadata"]["content_type"] for hit in result["hits"]]
+    assert types.count("table") == 3
+    assert types.count("section") == 1
+    assert len(result["hits"]) == 4
+    assert result["final_table"] == 3
+    assert result["final_section"] == 1
+
+
 def test_enrich_evidence_hits_expands_references_then_aggregates_continuations(monkeypatch) -> None:
     section = {
         "chunk_id": "s1",
