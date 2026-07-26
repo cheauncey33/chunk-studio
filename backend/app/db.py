@@ -280,6 +280,8 @@ def init_db() -> None:
     _backfill_chunk_layers()
     _backfill_auto_metadata()
     _seed_knowledge_base_and_assistant()
+    _backfill_oil_parameter_schema_fields()
+    _backfill_judge_delivery_quotas()
     _backfill_applied_init_profiles()
     _migrate_assistant_kb_one_to_one()
     _migrate_assistant_single_version()
@@ -341,6 +343,83 @@ def _migrate_assistant_parameter_schema() -> None:
         _conn.execute(
             """ALTER TABLE assistant_versions
                ADD COLUMN parameter_schema TEXT NOT NULL DEFAULT '{}'"""
+        )
+
+
+def _backfill_judge_delivery_quotas() -> None:
+    """Ensure asymmetric final_table / final_section defaults (8 + 6)."""
+    assert _conn is not None
+    rows = _conn.execute(
+        "SELECT id, retrieval_config FROM assistant_versions"
+    ).fetchall()
+    for row in rows:
+        config = _loads_json(row["retrieval_config"], {})
+        if not isinstance(config, dict):
+            continue
+        updated = dict(config)
+        changed = False
+        if "final_table" not in updated:
+            updated["final_table"] = 8
+            changed = True
+        if "final_section" not in updated:
+            updated["final_section"] = 6
+            changed = True
+        # Migrate previous production default 8+4 -> 8+6.
+        elif (
+            int(updated.get("final_table", 0)) == 8
+            and int(updated.get("final_section", 0)) == 4
+        ):
+            updated["final_section"] = 6
+            changed = True
+        if not changed:
+            continue
+        _conn.execute(
+            "UPDATE assistant_versions SET retrieval_config=? WHERE id=?",
+            (json.dumps(updated, ensure_ascii=False), row["id"]),
+        )
+
+
+def _backfill_oil_parameter_schema_fields() -> None:
+    """Append newly supported oil-transformer fields without replacing edits."""
+    assert _conn is not None
+    from .parameter_schema import oil_parameter_schema
+
+    desired = oil_parameter_schema()
+    desired_fields = {
+        str(field["key"]): field
+        for field in desired["fields"]
+        if isinstance(field, dict) and str(field.get("key") or "").strip()
+    }
+    rows = _conn.execute(
+        """SELECT id, parameter_schema
+           FROM assistant_versions
+           WHERE assistant_id='assistant_oil_transformer_audit'"""
+    ).fetchall()
+    for row in rows:
+        existing = _loads_json(row["parameter_schema"], {})
+        if not isinstance(existing, dict):
+            existing = {}
+        fields = [
+            field
+            for field in (existing.get("fields") or [])
+            if isinstance(field, dict) and str(field.get("key") or "").strip()
+        ]
+        present = {str(field["key"]) for field in fields}
+        additions = [
+            dict(desired_fields[key])
+            for key in desired_fields
+            if key not in present
+        ]
+        if not additions and fields:
+            continue
+        updated = {
+            **desired,
+            **existing,
+            "fields": fields + additions if fields else list(desired["fields"]),
+        }
+        _conn.execute(
+            "UPDATE assistant_versions SET parameter_schema=? WHERE id=?",
+            (json.dumps(updated, ensure_ascii=False), row["id"]),
         )
 
 
@@ -1011,6 +1090,8 @@ def _default_model_config() -> dict[str, Any]:
         "temperature": 0,
         "response_format": "json_object",
         "thinking": "disabled",
+        # Parallel case audits (query planner + judge). 1 disables concurrency.
+        "judge_concurrency": 8,
     }
 
 
@@ -1021,6 +1102,9 @@ def _default_retrieval_config() -> dict[str, Any]:
         "top_k": 10,
         "route_top_k": 30,
         "candidate_count_per_type": 20,
+        # Judge delivery after rerank: 8 tables + 6 sections.
+        "final_table": 8,
+        "final_section": 6,
         "final_per_type": 15,
         "special_route_reserve": 3,
         "similarity_threshold": 0.2,
@@ -1819,8 +1903,13 @@ def assistant_evidence_file_ids(
 
 # --- Settings helpers (key/value table) ---
 def get_setting(key: str, default: str = "") -> str:
-    row = get_conn().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-    return row["value"] if row else default
+    # Serialize with writers: concurrent audit workers call this from LLM config.
+    with _db_lock:
+        row = get_conn().execute(
+            "SELECT value FROM settings WHERE key=?",
+            (key,),
+        ).fetchone()
+        return row["value"] if row else default
 
 
 def set_setting(key: str, value: str) -> None:
@@ -1833,8 +1922,9 @@ def set_setting(key: str, value: str) -> None:
 
 
 def get_all_settings() -> dict[str, str]:
-    rows = get_conn().execute("SELECT key,value FROM settings").fetchall()
-    return {r["key"]: r["value"] for r in rows}
+    with _db_lock:
+        rows = get_conn().execute("SELECT key,value FROM settings").fetchall()
+        return {r["key"]: r["value"] for r in rows}
 
 
 # --- Field config helpers ---

@@ -74,6 +74,8 @@ def run_assistant_audit(
     report_file_id: str,
     naming_rule_file_id: str | None = None,
     report_id: str | None = None,
+    job_id: str | None = None,
+    started_at: str | None = None,
 ) -> dict[str, Any]:
     """Run the end-to-end audit workflow and write a timestamped report JSON.
 
@@ -91,6 +93,13 @@ def run_assistant_audit(
     short = assistant_id.replace("assistant_", "")[:24] or "audit"
     report_name = f"end_to_end_audit_{short}_{stamp}.json"
     output_path = REPORTS_DIR / report_name
+    run_started = (started_at or "").strip() or time.strftime("%Y-%m-%dT%H:%M:%S")
+
+    file_row = db.get_conn().execute(
+        "SELECT name FROM files WHERE id=?",
+        (report_file_id,),
+    ).fetchone()
+    report_file_name = str(file_row["name"]) if file_row and file_row["name"] else None
 
     cmd = [
         sys.executable,
@@ -104,7 +113,11 @@ def run_assistant_audit(
         report_file_id,
         "--output",
         str(output_path),
+        "--started-at",
+        run_started,
     ]
+    if job_id:
+        cmd.extend(["--job-id", job_id])
     if report_id:
         cmd.extend(["--case-pool", "--report-id", report_id])
     if resolved_naming_id:
@@ -128,15 +141,39 @@ def run_assistant_audit(
         raise RuntimeError("audit workflow finished but report file was not written")
 
     summary: dict[str, Any] = {}
+    finished_at = time.strftime("%Y-%m-%dT%H:%M:%S")
     try:
         payload = json.loads(output_path.read_text(encoding="utf-8"))
-        summary = payload.get("summary") or {}
+        if isinstance(payload, dict):
+            # Ensure identity fields survive even if the CLI path omitted them.
+            changed = False
+            for key, value in (
+                ("report_file_id", report_file_id),
+                ("report_file_name", report_file_name),
+                ("job_id", job_id),
+                ("started_at", run_started),
+                ("finished_at", finished_at),
+            ):
+                if value and not payload.get(key):
+                    payload[key] = value
+                    changed = True
+            if changed:
+                output_path.write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            summary = payload.get("summary") or {}
+            finished_at = str(payload.get("finished_at") or finished_at)
     except (OSError, json.JSONDecodeError):
         pass
 
     return {
         "report_name": report_name,
         "report_path": config.to_rel(output_path),
+        "report_file_id": report_file_id,
+        "report_file_name": report_file_name,
+        "started_at": run_started,
+        "finished_at": finished_at,
         "summary": summary,
         "naming_rule_file_id": resolved_naming_id,
         "stdout_tail": (completed.stdout or "")[-1000:],

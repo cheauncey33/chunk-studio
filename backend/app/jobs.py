@@ -208,15 +208,20 @@ def enqueue_assistant_audit(
     # Fail fast: after excluding runtime inputs, corpus evidence must remain.
     db.assistant_evidence_file_ids(assistant_id, excluded_file_ids=excluded)
 
-    existing = db.get_conn().execute(
+    # Reuse only an in-flight job for the same assistant + report (resume after
+    # client disconnect). Different reports must not share one job row.
+    existing_rows = db.get_conn().execute(
         """SELECT * FROM jobs
            WHERE type='audit' AND target_type='assistant' AND target_id=?
              AND status IN ('queued','running')
-           ORDER BY created_at DESC LIMIT 1""",
+           ORDER BY created_at DESC""",
         (assistant_id,),
-    ).fetchone()
-    if existing:
-        return get_job(existing["id"])
+    ).fetchall()
+    for row in existing_rows:
+        existing_job = _row_to_job(row)
+        existing_report = str((existing_job.get("result") or {}).get("report_file_id") or "")
+        if existing_report == report_file_id:
+            return existing_job
 
     # Validate inputs early so the API can fail fast.
     audit_run.resolve_markdown_path(report_file_id)
@@ -356,6 +361,49 @@ def get_job(job_id: str) -> dict[str, Any]:
     if not row:
         raise KeyError("job not found")
     return _row_to_job(row)
+
+
+def merge_job_result(job_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+    """Merge fields into a queued/running job's result JSON (e.g. live progress).
+
+    Returns the updated job dict, or None if the job is missing / already terminal.
+    Nested ``progress`` is shallow-merged so callers can patch individual keys.
+    """
+    jid = str(job_id or "").strip()
+    if not jid or not isinstance(patch, dict) or not patch:
+        return None
+    # Read+write under one lock so concurrent audit progress updates are safe.
+    with db.transaction() as conn:
+        row = conn.execute(
+            "SELECT result, status FROM jobs WHERE id=?",
+            (jid,),
+        ).fetchone()
+        if not row or row["status"] not in ("queued", "running"):
+            return None
+        try:
+            current = json.loads(row["result"] or "{}")
+        except Exception:
+            current = {}
+        if not isinstance(current, dict):
+            current = {}
+        merged = {**current, **patch}
+        if isinstance(patch.get("progress"), dict):
+            prev_progress = (
+                current.get("progress")
+                if isinstance(current.get("progress"), dict)
+                else {}
+            )
+            merged["progress"] = {**prev_progress, **patch["progress"]}
+        conn.execute(
+            """UPDATE jobs
+               SET result=?
+               WHERE id=? AND status IN ('queued', 'running')""",
+            (json.dumps(merged, ensure_ascii=False), jid),
+        )
+    try:
+        return get_job(jid)
+    except KeyError:
+        return None
 
 
 def list_jobs(
@@ -530,6 +578,19 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
         _fail_job(job, "audit job missing report_file_id")
         return
 
+    merge_job_result(
+        str(job.get("id") or ""),
+        {
+            "progress": {
+                "stage": "starting",
+                "stage_label": "启动审查",
+                "percent": 1,
+                "message": "正在启动审查工作流…",
+                "updated_at": now_iso(),
+            }
+        },
+    )
+
     try:
         outcome = await asyncio.to_thread(
             audit_run.run_assistant_audit,
@@ -537,6 +598,8 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
             report_file_id=report_file_id,
             naming_rule_file_id=naming_rule_file_id,
             report_id=report_id,
+            job_id=str(job.get("id") or "") or None,
+            started_at=str(job.get("started_at") or "") or None,
         )
     except (ValueError, RuntimeError, OSError) as exc:
         _fail_job(job, str(exc))
@@ -546,6 +609,14 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
     result = {
         **payload,
         **outcome,
+        "job_id": job.get("id"),
+        "progress": {
+            "stage": "done",
+            "stage_label": "已完成",
+            "percent": 100,
+            "message": "审查完成",
+            "updated_at": finished,
+        },
     }
     with db.transaction() as conn:
         conn.execute(
