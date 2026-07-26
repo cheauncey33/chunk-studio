@@ -67,16 +67,58 @@ def _report_kind(name: str) -> str:
     return "report"
 
 
+def _assistant_name(assistant_id: str | None) -> str | None:
+    aid = str(assistant_id or "").strip()
+    if not aid:
+        return None
+    row = db.get_conn().execute(
+        "SELECT name FROM audit_assistants WHERE id=?",
+        (aid,),
+    ).fetchone()
+    return str(row["name"]) if row and row["name"] else aid
+
+
+def _job_status_for_report(report_name: str, job_id: str | None) -> str | None:
+    if job_id:
+        row = db.get_conn().execute(
+            "SELECT status FROM jobs WHERE id=?",
+            (job_id,),
+        ).fetchone()
+        if row:
+            return str(row["status"] or "") or None
+    row = db.get_conn().execute(
+        """SELECT status FROM jobs
+           WHERE type='audit' AND json_extract(result, '$.report_name')=?
+           ORDER BY COALESCE(finished_at, started_at, created_at) DESC
+           LIMIT 1""",
+        (report_name,),
+    ).fetchone()
+    return str(row["status"]) if row else None
+
+
 def _report_list_item(path: Path) -> dict[str, Any]:
     stat = path.stat()
     item: dict[str, Any] = {
         "name": path.name,
+        "run_id": path.name,
         "kind": _report_kind(path.name),
         "size_bytes": stat.st_size,
         "modified_at": stat.st_mtime,
         "summary": None,
         "case_count": None,
         "parse_error": None,
+        "report_file_id": None,
+        "report_file_name": None,
+        "assistant_id": None,
+        "assistant_name": None,
+        "knowledge_base_id": None,
+        "knowledge_base_name": None,
+        "started_at": None,
+        "finished_at": None,
+        "job_id": None,
+        "job_status": None,
+        "audit_mode": None,
+        "judgments": None,
     }
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -92,6 +134,37 @@ def _report_list_item(path: Path) -> dict[str, Any]:
         item["version"] = payload.get("version")
         item["scope"] = payload.get("scope")
         item["retrieval_policy"] = payload.get("retrieval_policy")
+        item["audit_mode"] = payload.get("audit_mode") or (
+            "case_pool" if str(payload.get("scope") or "") == "case_pool_audit" else None
+        )
+        item["report_file_id"] = payload.get("report_file_id")
+        item["report_file_name"] = payload.get("report_file_name")
+        item["assistant_id"] = payload.get("assistant_id")
+        item["assistant_name"] = payload.get("assistant_name") or _assistant_name(
+            str(payload.get("assistant_id") or "")
+        )
+        item["knowledge_base_id"] = payload.get("knowledge_base_id")
+        item["knowledge_base_name"] = payload.get("knowledge_base_name")
+        item["started_at"] = payload.get("started_at")
+        item["finished_at"] = payload.get("finished_at")
+        item["job_id"] = payload.get("job_id")
+        if isinstance(summary, dict) and isinstance(summary.get("judgments"), dict):
+            item["judgments"] = summary["judgments"]
+        item["job_status"] = _job_status_for_report(
+            path.name,
+            str(payload.get("job_id") or "") or None,
+        )
+        # Legacy reports: fall back to file stem timestamp / mtime.
+        if not item["started_at"]:
+            item["started_at"] = time.strftime(
+                "%Y-%m-%dT%H:%M:%S",
+                time.localtime(stat.st_mtime),
+            )
+        if not item["report_file_name"]:
+            # Best-effort: use basename of markdown path.
+            report_path = str(payload.get("report") or "")
+            if report_path:
+                item["report_file_name"] = Path(report_path).stem
     return item
 
 
@@ -129,8 +202,17 @@ def _legacy_node_io(
     case: dict[str, Any],
 ) -> tuple[Any, Any, str]:
     judgment = _record(case.get("judgment"))
+    sample_profile = case.get("sample_profile") or payload.get("sample_profile")
+    profile_report = (
+        sample_profile.get("from_report")
+        if isinstance(sample_profile, dict)
+        else None
+    )
     runtime_case = {
-        "sample_context": case.get("sample_context") or payload.get("parameters"),
+        "sample_profile": sample_profile,
+        "sample_context": case.get("sample_context")
+        or profile_report
+        or payload.get("parameters"),
         "test_item": case.get("test_item"),
         "reported_requirement": case.get("reported_requirement"),
     }
@@ -156,12 +238,23 @@ def _legacy_node_io(
                 "report_parameters": payload.get("parameters"),
                 "naming_rule": payload.get("naming_rule"),
             },
-            payload.get("model_decode"),
-            "旧报告未记录型号规则 Markdown 原文。",
+            {
+                "model_decode": payload.get("model_decode"),
+                "sample_profile": payload.get("sample_profile"),
+            },
+            "旧报告未记录型号规则 Markdown 原文；sample_profile 为参数与解码的合并结果。",
         )
     if node_id == "query_planner":
         return (
-            {**runtime_case, "decoded_model": payload.get("model_decode")},
+            {
+                "sample_profile": runtime_case.get("sample_profile")
+                or {
+                    "from_report": runtime_case.get("sample_context"),
+                    "from_model_decode": payload.get("model_decode"),
+                },
+                "test_item": runtime_case.get("test_item"),
+                "reported_requirement": runtime_case.get("reported_requirement"),
+            },
             case.get("queries"),
             "输入由报告字段重建；输出是报告记录的最终查询集合。",
         )
@@ -177,8 +270,13 @@ def _legacy_node_io(
     if node_id == "audit_judge":
         return (
             {
-                **runtime_case,
-                "decoded_model": payload.get("model_decode"),
+                "sample_profile": runtime_case.get("sample_profile")
+                or {
+                    "from_report": runtime_case.get("sample_context"),
+                    "from_model_decode": payload.get("model_decode"),
+                },
+                "test_item": runtime_case.get("test_item"),
+                "reported_requirement": runtime_case.get("reported_requirement"),
                 "peer_report_context": case.get("peer_report_context"),
                 "manual_knowledge_rules": case.get("manual_knowledge_rules"),
                 "candidates": judgment.get("evidence"),
@@ -274,7 +372,16 @@ def _build_workflow_trace(
 
 
 @router.get("/reports")
-def list_audit_reports() -> dict[str, Any]:
+def list_audit_reports(
+    history: bool = False,
+    scope: str | None = None,
+) -> dict[str, Any]:
+    """List audit report JSON files.
+
+    ``history=true`` (or ``scope=full_report``) keeps production full-report
+    runs for the workbench history list and drops case-pool / retrieval eval
+    artefacts.
+    """
     if not REPORTS_DIR.exists():
         return {"reports": []}
     reports = [
@@ -282,22 +389,63 @@ def list_audit_reports() -> dict[str, Any]:
         for path in REPORTS_DIR.glob("*.json")
         if path.is_file() and not path.name.endswith(".checkpoint.json")
     ]
-    reports.sort(key=lambda item: item["modified_at"], reverse=True)
+    want_history = history or (str(scope or "").strip().lower() == "full_report")
+    if want_history:
+        filtered: list[dict[str, Any]] = []
+        for item in reports:
+            mode = str(item.get("audit_mode") or "").strip().lower()
+            scope_val = str(item.get("scope") or "").strip().lower()
+            name = str(item.get("name") or "")
+            if mode == "case_pool" or scope_val == "case_pool_audit":
+                continue
+            if name.startswith("hbjc_") or "retrieval" in name:
+                continue
+            if item.get("kind") not in {"end_to_end_audit", "report"}:
+                continue
+            # Prefer named end_to_end_audit_* production runs.
+            if item.get("kind") == "report" and not name.startswith("end_to_end_audit"):
+                continue
+            filtered.append(item)
+        reports = filtered
+    reports.sort(
+        key=lambda item: str(item.get("started_at") or item.get("finished_at") or "")
+        or str(item.get("modified_at") or 0),
+        reverse=True,
+    )
     return {"reports": reports}
 
 
 @router.get("/reports/{name}")
 def get_audit_report(name: str) -> dict[str, Any]:
     path = _safe_report_path(name)
-    stat = path.stat()
+    meta = _report_list_item(path)
+    payload = _load_json(path)
     return {
-        "name": path.name,
-        "kind": _report_kind(path.name),
-        "size_bytes": stat.st_size,
-        "modified_at": stat.st_mtime,
-        "payload": _load_json(path),
+        **meta,
+        "payload": payload,
         "reviews": _case_reviews(path.name),
     }
+
+
+@router.delete("/reports/{name}")
+def delete_audit_report(name: str) -> dict[str, Any]:
+    """Delete one audit-run result JSON (and its checkpoint / case reviews).
+
+    Does not delete the source report PDF.
+    """
+    path = _safe_report_path(name)
+    checkpoint = path.with_suffix(".checkpoint.json")
+    removed = [path.name]
+    path.unlink()
+    if checkpoint.is_file():
+        checkpoint.unlink()
+        removed.append(checkpoint.name)
+    with db.transaction() as conn:
+        conn.execute(
+            "DELETE FROM audit_case_reviews WHERE report_name=?",
+            (path.name,),
+        )
+    return {"ok": True, "removed": removed}
 
 
 class CaseReviewRequest(BaseModel):

@@ -3,7 +3,6 @@ import {
   CircleHelp,
   ClipboardCheck,
   FolderOpen,
-  History,
   Moon,
   Settings,
   ShieldCheck,
@@ -19,7 +18,6 @@ import { cn } from '@/lib/utils'
 const NAV = [
   { to: '/', label: '审查', icon: ClipboardCheck, end: true, help: helpText.nav.workbench },
   { to: '/knowledge-bases', label: '知识库', icon: FolderOpen, help: helpText.nav.knowledge },
-  { to: '/runs', label: '结果详情', icon: History, help: helpText.nav.runs },
   { to: '/settings', label: '系统设置', icon: Settings, help: helpText.nav.settings },
 ] as const
 
@@ -32,7 +30,6 @@ function isNavActive(to: string, pathname: string, end?: boolean) {
     )
   }
   if (to === '/settings') return pathname.startsWith('/settings')
-  if (to === '/runs') return pathname === '/runs' || pathname.startsWith('/runs/')
   if (end) return pathname === to
   return pathname === to || pathname.startsWith(`${to}/`)
 }

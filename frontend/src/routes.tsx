@@ -17,8 +17,6 @@ const DatasetMetadataPage = lazy(() => import('@/pages/dataset/metadata'))
 const DatasetSettingsPage = lazy(() => import('@/pages/dataset/settings'))
 const ChunkPage = lazy(() => import('@/pages/chunk'))
 const AssistantsPage = lazy(() => import('@/pages/assistants'))
-const RunsPage = lazy(() => import('@/pages/runs'))
-
 function RouteFallback() {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
@@ -60,7 +58,8 @@ export const router = createBrowserRouter([
       // Legacy assistant routes redirect into knowledge-base / settings.
       { path: 'assistants', element: withSuspense(<AssistantsPage />) },
       { path: 'assistants/:id', element: withSuspense(<AssistantsPage />) },
-      { path: 'runs', element: withSuspense(<RunsPage />) },
+      // Legacy bookmark: workflow tracing now lives inside each audit history record.
+      { path: 'runs', element: <Navigate to="/" replace /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'settings/fields', element: <FieldsSettingsPage /> },
       { path: 'settings/assistant-template', element: <AssistantTemplateSettingsPage /> },

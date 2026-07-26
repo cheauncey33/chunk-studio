@@ -52,13 +52,16 @@ const STATUS_LABELS: Record<string, string> = {
 export function AuditPage({
   embedded = false,
   initialReport = '',
+  initialCaseId = '',
 }: {
   embedded?: boolean
   initialReport?: string
+  /** When set, focus this case and open eval panel. */
+  initialCaseId?: string
 } = {}) {
   const [reports, setReports] = useState<AuditReportListItem[]>([])
   const [selectedReportName, setSelectedReportName] = useState(initialReport)
-  const [selectedCaseId, setSelectedCaseId] = useState('')
+  const [selectedCaseId, setSelectedCaseId] = useState(initialCaseId)
   const [report, setReport] = useState<AuditReportDetail | null>(null)
   const [reviews, setReviews] = useState<Record<string, AuditCaseReview>>({})
   const [workflow, setWorkflow] = useState<AuditWorkflowTrace | null>(null)
@@ -70,8 +73,14 @@ export function AuditPage({
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [loadingWorkflow, setLoadingWorkflow] = useState(false)
   const [error, setError] = useState('')
-  const [evalOpen, setEvalOpen] = useState(false)
+  const [evalOpen, setEvalOpen] = useState(Boolean(initialCaseId))
   const [shadowOpen, setShadowOpen] = useState(false)
+
+  useEffect(() => {
+    if (!initialCaseId) return
+    setSelectedCaseId(initialCaseId)
+    setEvalOpen(true)
+  }, [initialCaseId])
 
   const refreshReports = useCallback(async () => {
     setLoadingReports(true)
@@ -144,14 +153,14 @@ export function AuditPage({
   ), [report])
 
   useEffect(() => {
-    if (!cases.length) {
-      setSelectedCaseId('')
+    if (!cases.length) return
+    if (cases.some(item => caseId(item) === selectedCaseId)) return
+    if (initialCaseId && cases.some(item => caseId(item) === initialCaseId)) {
+      setSelectedCaseId(initialCaseId)
       return
     }
-    if (!cases.some(item => caseId(item) === selectedCaseId)) {
-      setSelectedCaseId(caseId(cases[0]))
-    }
-  }, [cases, selectedCaseId])
+    setSelectedCaseId(caseId(cases[0]))
+  }, [cases, selectedCaseId, initialCaseId])
 
   const selectedCase = useMemo(() => (
     cases.find(item => caseId(item) === selectedCaseId) || cases[0] || null

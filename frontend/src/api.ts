@@ -45,6 +45,18 @@ export interface Chunk {
   updated_at: string
 }
 
+export type AuditJobProgress = {
+  stage?: string
+  stage_label?: string
+  case_done?: number
+  case_total?: number
+  case_label?: string
+  project_name?: string
+  percent?: number
+  message?: string
+  updated_at?: string
+}
+
 export interface Job {
   id: string
   type: string
@@ -55,7 +67,7 @@ export interface Job {
   attempts: number
   max_attempts: number
   error: string
-  result: Record<string, unknown>
+  result: Record<string, unknown> & { progress?: AuditJobProgress }
   created_at: string
   started_at: string | null
   finished_at: string | null
@@ -335,8 +347,17 @@ export interface AssistantVersion {
   activated_at: string | null
 }
 
+export interface AuditJudgmentCounts {
+  supported?: number
+  mismatch?: number
+  insufficient_context?: number
+  not_audited?: number
+  [key: string]: number | undefined
+}
+
 export interface AuditReportListItem {
   name: string
+  run_id?: string
   kind: string
   size_bytes: number
   modified_at: number
@@ -346,6 +367,18 @@ export interface AuditReportListItem {
   version?: unknown
   scope?: unknown
   retrieval_policy?: unknown
+  report_file_id?: string | null
+  report_file_name?: string | null
+  assistant_id?: string | null
+  assistant_name?: string | null
+  knowledge_base_id?: string | null
+  knowledge_base_name?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  job_id?: string | null
+  job_status?: string | null
+  audit_mode?: string | null
+  judgments?: AuditJudgmentCounts | null
 }
 
 export interface AuditReportListResponse {
@@ -363,11 +396,7 @@ export interface AuditCaseReview {
   updated_at: string
 }
 
-export interface AuditReportDetail {
-  name: string
-  kind: string
-  size_bytes: number
-  modified_at: number
+export interface AuditReportDetail extends AuditReportListItem {
   payload: Record<string, unknown>
   reviews?: Record<string, AuditCaseReview>
 }
@@ -774,8 +803,32 @@ export const api = {
   listFileParses: (id: string) =>
     fetch(`${API}/files/${id}/parses`).then(j<DocumentParse[]>),
 
-  pageImageUrl: (fileId: string, page: number) =>
-    `${API}/files/${fileId}/pages/${page}`,
+  pageImageUrl: (fileId: string, page: number, dpi?: number) => {
+    const qs = dpi ? `?dpi=${encodeURIComponent(String(dpi))}` : ''
+    return `${API}/files/${fileId}/pages/${page}${qs}`
+  },
+  locateFileText: (
+    fileId: string,
+    q: string,
+    options: { project?: string; requirement?: string } = {},
+  ) => {
+    const params = new URLSearchParams()
+    if (q) params.set('q', q)
+    if (options.project) params.set('project', options.project)
+    if (options.requirement) params.set('requirement', options.requirement)
+    return fetch(
+      `${API}/files/${encodeURIComponent(fileId)}/locate?${params.toString()}`,
+    ).then(
+      j<{
+        file_id: string
+        page: number | null
+        page_count: number
+        score: number
+        matched: boolean
+        reason: string
+      }>,
+    )
+  },
 
   listChunks: (fileId?: string, options: { hasLlmSuggestions?: boolean } = {}) => {
     const params = new URLSearchParams()
@@ -891,9 +944,18 @@ export const api = {
       body: JSON.stringify({ settings }),
     }).then(j<SettingsPayload>).then(normalizeSettingsPayload),
 
-  listAuditReports: () => fetch(`${API}/audit/reports`).then(j<AuditReportListResponse>),
+  listAuditReports: (opts?: { history?: boolean; scope?: string }) => {
+    const params = new URLSearchParams()
+    if (opts?.history) params.set('history', 'true')
+    if (opts?.scope) params.set('scope', opts.scope)
+    const qs = params.toString()
+    return fetch(`${API}/audit/reports${qs ? `?${qs}` : ''}`).then(j<AuditReportListResponse>)
+  },
   getAuditReport: (name: string) =>
     fetch(`${API}/audit/reports/${encodeURIComponent(name)}`).then(j<AuditReportDetail>),
+  deleteAuditReport: (name: string) =>
+    fetch(`${API}/audit/reports/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      .then(j<{ ok: boolean; removed: string[] }>),
   getAuditWorkflow: (name: string, caseId: string) =>
     fetch(`${API}/audit/reports/${encodeURIComponent(name)}/workflow/${encodeURIComponent(caseId)}`)
       .then(j<AuditWorkflowTrace>),

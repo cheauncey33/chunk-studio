@@ -17,8 +17,10 @@ from app.routers.audit import (
     _build_workflow_trace,
     _report_kind,
     _safe_report_path,
+    delete_audit_report,
     delete_case_review,
     get_audit_report,
+    list_audit_reports,
     upsert_case_review,
 )
 
@@ -179,4 +181,85 @@ def test_case_review_rejects_invalid_corrections(monkeypatch, tmp_path: Path) ->
             name, "missing-case", CaseReviewRequest(status="confirmed")
         )
     assert exc.value.status_code == 404
+    conn.close()
+
+
+def test_list_audit_reports_history_filters_eval_artefacts(monkeypatch, tmp_path: Path) -> None:
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    monkeypatch.setattr(audit_module, "REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(db, "_conn", sqlite3.connect(tmp_path / "hist.db"))
+    db.get_conn().row_factory = sqlite3.Row
+    db.get_conn().executescript(db._SCHEMA)
+    db.get_conn().commit()
+
+    (reports_dir / "end_to_end_audit_oil_20260726_010203.json").write_text(
+        json.dumps(
+            {
+                "audit_mode": "full_report",
+                "scope": "full_report_audit",
+                "assistant_id": "assistant_oil_transformer_audit",
+                "assistant_name": "油浸式变压器审查",
+                "report_file_id": "file_abc",
+                "report_file_name": "出厂报告.pdf",
+                "started_at": "2026-07-26T01:02:03",
+                "summary": {
+                    "cases": 2,
+                    "judgments": {"supported": 1, "mismatch": 1},
+                },
+                "cases": [{"case_id": "a"}, {"case_id": "b"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (reports_dir / "hbjc_end_to_end_audit_top20.json").write_text(
+        json.dumps({"audit_mode": "case_pool", "cases": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (reports_dir / "retrieval_candidates_v1.json").write_text(
+        json.dumps({"cases": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    all_reports = list_audit_reports()
+    assert len(all_reports["reports"]) == 3
+
+    history = list_audit_reports(history=True)
+    assert len(history["reports"]) == 1
+    item = history["reports"][0]
+    assert item["report_file_name"] == "出厂报告.pdf"
+    assert item["report_file_id"] == "file_abc"
+    assert item["assistant_name"] == "油浸式变压器审查"
+    assert item["judgments"]["mismatch"] == 1
+    assert item["case_count"] == 2
+
+    detail = get_audit_report("end_to_end_audit_oil_20260726_010203.json")
+    assert detail["report_file_id"] == "file_abc"
+    assert detail["payload"]["assistant_name"] == "油浸式变压器审查"
+    db.get_conn().close()
+
+
+def test_delete_audit_report_removes_json_checkpoint_and_reviews(monkeypatch, tmp_path: Path) -> None:
+    conn = _review_env(monkeypatch, tmp_path)
+    name = "end_to_end_audit_test.json"
+    reports_dir = audit_module.REPORTS_DIR
+    checkpoint = reports_dir / "end_to_end_audit_test.checkpoint.json"
+    checkpoint.write_text("{}", encoding="utf-8")
+
+    upsert_case_review(name, "item_abc", CaseReviewRequest(status="confirmed"))
+    result = delete_audit_report(name)
+    assert result["ok"] is True
+    assert name in result["removed"]
+    assert checkpoint.name in result["removed"]
+    assert not (reports_dir / name).exists()
+    assert not checkpoint.exists()
+    with pytest.raises(HTTPException) as exc:
+        get_audit_report(name)
+    assert exc.value.status_code == 404
+    rows = conn.execute(
+        "SELECT COUNT(*) AS n FROM audit_case_reviews WHERE report_name=?",
+        (name,),
+    ).fetchone()
+    assert int(rows["n"]) == 0
     conn.close()
