@@ -83,6 +83,39 @@ def test_chat_json_requires_deepseek_key(monkeypatch) -> None:
         llm.chat_json([{"role": "user", "content": "return JSON"}])
 
 
+def test_chat_json_retries_transient_connect_error(monkeypatch) -> None:
+    settings = {
+        "llm.api_key": "deepseek-key",
+        "llm.base_url": "https://deepseek.example/v1",
+        "llm.model": "deepseek-v4-flash",
+    }
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_MODEL", raising=False)
+    monkeypatch.setattr(llm.db, "get_setting", lambda key, default="": settings.get(key, default))
+    monkeypatch.setattr(llm, "_HTTP_RETRY_ATTEMPTS", 3)
+    monkeypatch.setattr(llm, "_HTTP_RETRY_BASE_DELAY_S", 0)
+    monkeypatch.setattr(llm.time, "sleep", lambda *_a, **_k: None)
+    calls = {"n": 0}
+
+    def post(url, **kwargs):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise llm.httpx.ConnectError("SSL: UNEXPECTED_EOF_WHILE_READING")
+        return SimpleNamespace(
+            status_code=200,
+            text="",
+            json=lambda: {"choices": [{"message": {"content": "{\"ok\": true}"}}]},
+        )
+
+    monkeypatch.setattr(llm.httpx, "post", post)
+
+    result = llm.chat_json([{"role": "user", "content": "return JSON"}])
+
+    assert result == {"ok": True}
+    assert calls["n"] == 3
+
+
 def test_public_config_is_deepseek_only_and_never_contains_secret(monkeypatch) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "must-not-leak")
     monkeypatch.setattr(llm.db, "get_setting", lambda key, default="": default)

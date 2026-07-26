@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from http import HTTPStatus
 from typing import Any
 
@@ -13,6 +14,16 @@ from . import db
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-v4-flash"
+# Transient TLS / connection drops (e.g. UNEXPECTED_EOF_WHILE_READING).
+_HTTP_RETRY_ATTEMPTS = max(1, int(os.environ.get("LLM_HTTP_RETRIES", "4")))
+_HTTP_RETRY_BASE_DELAY_S = float(os.environ.get("LLM_HTTP_RETRY_BASE_DELAY_S", "1.0"))
+_TRANSIENT_HTTPX_ERRORS = (
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.RemoteProtocolError,
+    httpx.TimeoutException,
+)
 
 
 def public_config(*, model: str | None = None) -> dict[str, Any]:
@@ -47,6 +58,33 @@ def resolve_config(*, model: str | None = None) -> dict[str, str]:
     }
 
 
+def _post_chat_completions(
+    *,
+    config: dict[str, str],
+    payload: dict[str, Any],
+    timeout: float,
+) -> httpx.Response:
+    """POST /chat/completions with retries on transient transport errors."""
+    url = f"{config['base_url']}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {config['api_key']}",
+        "Content-Type": "application/json",
+    }
+    last_error: Exception | None = None
+    for attempt in range(1, _HTTP_RETRY_ATTEMPTS + 1):
+        try:
+            return httpx.post(url, headers=headers, json=payload, timeout=timeout)
+        except _TRANSIENT_HTTPX_ERRORS as exc:
+            last_error = exc
+            if attempt >= _HTTP_RETRY_ATTEMPTS:
+                break
+            time.sleep(_HTTP_RETRY_BASE_DELAY_S * (2 ** (attempt - 1)))
+    assert last_error is not None
+    raise RuntimeError(
+        f"DeepSeek connection failed after {_HTTP_RETRY_ATTEMPTS} attempts: {last_error}"
+    ) from last_error
+
+
 def chat_text(
     messages: list[dict[str, str]],
     *,
@@ -56,13 +94,9 @@ def chat_text(
 ) -> str:
     """Plain-text chat completion (no JSON response_format)."""
     config = resolve_config(model=model)
-    response = httpx.post(
-        f"{config['base_url']}/chat/completions",
-        headers={
-            "Authorization": f"Bearer {config['api_key']}",
-            "Content-Type": "application/json",
-        },
-        json={
+    response = _post_chat_completions(
+        config=config,
+        payload={
             "model": config["model"],
             "messages": messages,
             "temperature": temperature,
@@ -96,13 +130,9 @@ def chat_json(
     timeout: float = 180,
 ) -> dict[str, Any]:
     config = resolve_config(model=model)
-    response = httpx.post(
-        f"{config['base_url']}/chat/completions",
-        headers={
-            "Authorization": f"Bearer {config['api_key']}",
-            "Content-Type": "application/json",
-        },
-        json={
+    response = _post_chat_completions(
+        config=config,
+        payload={
             "model": config["model"],
             "messages": messages,
             "temperature": temperature,
