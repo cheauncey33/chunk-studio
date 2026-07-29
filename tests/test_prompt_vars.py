@@ -162,6 +162,16 @@ def test_audit_judge_brief_single_block_with_rules_summary() -> None:
     assert "sample_context：" not in out
 
 
+def test_audit_judge_brief_requires_numeric_limit_checklist() -> None:
+    brief = format_audit_judge_brief(kb_name="库A")
+    assert "数值限值强制核对" in brief
+    assert "比较符/方向" in brief
+    assert "松紧比较" in brief
+    assert "标准 ≤0.370、报告 ≤0.500 → mismatch" in brief
+    assert "标准 ≤55、报告 ≥55" in brief
+    assert "不得跳过核对直接凭语感判定 supported" in brief
+
+
 def test_audit_judge_compose_drops_nested_full_judge_notes() -> None:
     full = Path(__file__).resolve().parents[1] / (
         "evaluation/prompts/generic/standard_value_audit_judge_generic_v1.md"
