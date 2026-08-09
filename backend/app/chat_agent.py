@@ -4,10 +4,11 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from typing import Any
+from typing import Any, Callable
 
 from . import business_analytics, config, db, llm, retrieval
 from .agent_runtime.models import ToolDefinition
+from .tool_registry import ToolContext, ToolFactory, ToolRegistry
 
 
 CHAT_SYSTEM_PROMPT = """You are the knowledge-base question answering agent.
@@ -62,13 +63,8 @@ def _require_question(arguments: dict[str, Any]) -> None:
         raise ValueError("question is too long")
 
 
-def _build_tools(
-    *,
-    assistant_id: str,
-    file_ids: list[str],
-    retrieval_config: dict[str, Any],
-    model: str,
-) -> list[ToolDefinition]:
+def _knowledge_base_tools(context: ToolContext) -> list[ToolDefinition]:
+    retrieval_config = context.retrieval_config
     top_k = max(1, min(int(retrieval_config.get("top_k") or 10), 20))
     route_top_k = max(1, min(int(retrieval_config.get("route_top_k") or 30), 60))
     candidates_per_type = max(
@@ -90,7 +86,7 @@ def _build_tools(
                 retrieval_config.get("aggregate_continuation_tables", False)
             ),
             expand_references=bool(retrieval_config.get("expand_references", False)),
-            file_ids=file_ids,
+            file_ids=context.file_ids,
         )
         hits = list(result.get("hits") or [])[:top_k]
         bounded_hits = []
@@ -112,23 +108,6 @@ def _build_tools(
             "degraded": list(result.get("degraded") or []),
         }
 
-    def query_business(arguments: dict[str, Any]) -> dict[str, Any]:
-        question = str(arguments.get("question") or "").strip()
-        _require_question({"question": question})
-        result = business_analytics.query_business_data(
-            question,
-            source=db.get_conn(),
-            reports_dir=config.DATA_DIR / "reports",
-            model=model,
-        )
-        # Keep the model context bounded while returning the full chart/table
-        # result to the API caller through the tool event.
-        return {
-            **result,
-            "rows": list(result.get("rows") or [])[:50],
-            "summary": str(result.get("answer") or "business query completed"),
-        }
-
     return [
         ToolDefinition(
             name="search_knowledge_base",
@@ -146,6 +125,40 @@ def _build_tools(
             category="search",
             validate=_require_question,
         ),
+    ]
+
+
+def _business_tools(context: ToolContext) -> list[ToolDefinition]:
+    def query_business(arguments: dict[str, Any]) -> dict[str, Any]:
+        question = str(arguments.get("question") or "").strip()
+        _require_question({"question": question})
+        result = business_analytics.query_business_data(
+            question,
+            source=db.get_conn(),
+            reports_dir=config.DATA_DIR / "reports",
+            model=context.model,
+        )
+        return {
+            **result,
+            "rows": list(result.get("rows") or [])[:50],
+            "summary": str(result.get("answer") or "business query completed"),
+        }
+
+    def business_schema(_arguments: dict[str, Any]) -> dict[str, Any]:
+        return {"schema": business_analytics.describe_business_schema()}
+
+    def business_overview(_arguments: dict[str, Any]) -> dict[str, Any]:
+        snapshot = business_analytics.build_business_snapshot(
+            source=db.get_conn(),
+            reports_dir=config.DATA_DIR / "reports",
+        )
+        try:
+            return business_analytics.get_business_overview(snapshot)
+        finally:
+            snapshot.close()
+
+    empty_schema = {"type": "object", "properties": {}, "additionalProperties": False}
+    return [
         ToolDefinition(
             name="query_business_data",
             description=(
@@ -162,7 +175,51 @@ def _build_tools(
             category="read",
             validate=_require_question,
         ),
+        ToolDefinition(
+            name="get_business_schema",
+            description="Describe the curated read-only analytics schema and chart types.",
+            input_schema=empty_schema,
+            execute=business_schema,
+            category="read",
+        ),
+        ToolDefinition(
+            name="get_business_overview",
+            description="Read current workspace metrics and audit status distribution.",
+            input_schema=empty_schema,
+            execute=business_overview,
+            category="read",
+        ),
     ]
+
+
+tool_registry = ToolRegistry()
+tool_registry.register("knowledge_base", _knowledge_base_tools)
+tool_registry.register("business_analytics", _business_tools)
+
+
+def register_chat_tool_factory(
+    name: str,
+    factory: ToolFactory,
+    *,
+    replace: bool = False,
+) -> None:
+    """Register another scoped tool factory for all Agent chat requests."""
+    tool_registry.register(name, factory, replace=replace)
+
+
+def _build_tools(
+    *,
+    assistant_id: str,
+    file_ids: list[str],
+    retrieval_config: dict[str, Any],
+    model: str,
+) -> list[ToolDefinition]:
+    return tool_registry.build(ToolContext(
+        assistant_id=assistant_id,
+        file_ids=file_ids,
+        retrieval_config=retrieval_config,
+        model=model,
+    ))
 
 
 def _parse_tool_call(raw: Any) -> tuple[str, str, dict[str, Any]] | None:
@@ -186,6 +243,41 @@ def _parse_tool_call(raw: Any) -> tuple[str, str, dict[str, Any]] | None:
     return str(raw.get("id") or ""), name, arguments
 
 
+def summarize_context(
+    existing_summary: str,
+    messages: list[dict[str, Any]],
+    *,
+    model: str,
+) -> str:
+    """Compress older native messages into a bounded, model-readable summary."""
+    transcript = "\n".join(
+        json.dumps(message, ensure_ascii=False, separators=(",", ":"))[:1600]
+        for message in messages
+    )[:12000]
+    if not transcript:
+        return existing_summary.strip()
+    prompt = (
+        "Summarize this conversation for a future knowledge-base Agent turn. "
+        "Keep user goals, confirmed document facts, citations, business query "
+        "results, unresolved questions, and important constraints. Do not add "
+        "facts. Return plain text under 500 words.\n\n"
+        f"Existing summary:\n{existing_summary.strip()[:5000]}\n\n"
+        f"New transcript:\n{transcript}"
+    )
+    return llm.chat_text(
+        [{"role": "system", "content": "You compact Agent context faithfully."},
+         {"role": "user", "content": prompt}],
+        model=model,
+        temperature=0,
+        timeout=90,
+    ).strip()[:6000]
+
+
+def _emit(event_sink: Callable[[dict[str, Any]], None] | None, event: dict[str, Any]) -> None:
+    if event_sink:
+        event_sink(event)
+
+
 def run_chat_agent(
     *,
     assistant_id: str,
@@ -198,6 +290,7 @@ def run_chat_agent(
     max_tool_calls: int = 6,
     max_search_calls: int = 3,
     timeout_seconds: float = 90,
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run model -> native tool call -> tool result until final text."""
     tools = _build_tools(
@@ -232,6 +325,7 @@ def run_chat_agent(
                 "turns": turn - 1,
                 "tool_calls": tool_calls,
             }
+        _emit(event_sink, {"type": "turn_started", "turn": turn})
         response = llm.chat_tools(
             request_messages,
             [_tool_schema(tool) for tool in tools],
@@ -245,6 +339,11 @@ def run_chat_agent(
         }
         request_messages.append(assistant_message)
         new_messages.append(assistant_message)
+        _emit(event_sink, {
+            "type": "assistant_message",
+            "turn": turn,
+            "message": assistant_message,
+        })
         raw_calls = assistant_message["tool_calls"]
         if not raw_calls:
             answer = str(assistant_message["content"] or "").strip()
@@ -277,6 +376,13 @@ def run_chat_agent(
             tool = by_name.get(tool_name)
             if not call_id:
                 call_id = f"call_{turn}_{tool_calls + 1}"
+            _emit(event_sink, {
+                "type": "tool_call",
+                "turn": turn,
+                "tool_call_id": call_id,
+                "name": tool_name,
+                "arguments": arguments,
+            })
             if invalid_tool_call:
                 pass
             elif tool is None:
@@ -302,6 +408,13 @@ def run_chat_agent(
                 tool_calls += 1
                 if tool.category == "search":
                     search_calls += 1
+            _emit(event_sink, {
+                "type": "tool_result",
+                "turn": turn,
+                "tool_call_id": call_id,
+                "name": tool_name,
+                "result": result,
+            })
             if isinstance(result.get("citations"), list):
                 citations.extend(item for item in result["citations"] if isinstance(item, dict))
             chart = result.get("chart")

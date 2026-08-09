@@ -5,6 +5,7 @@ from app import chat_agent
 
 def test_chat_agent_runs_native_tool_loop_and_collects_citations(monkeypatch) -> None:
     calls: list[list[dict]] = []
+    events: list[dict] = []
     responses = iter([
         {
             "role": "assistant",
@@ -54,6 +55,7 @@ def test_chat_agent_runs_native_tool_loop_and_collects_citations(monkeypatch) ->
         file_ids=["f1"],
         retrieval_config={},
         model="test-model",
+        event_sink=events.append,
     )
 
     assert result["stop_reason"] == "finished"
@@ -62,6 +64,10 @@ def test_chat_agent_runs_native_tool_loop_and_collects_citations(monkeypatch) ->
     assert result["citations"][0]["file_name"] == "GB.pdf"
     assert calls[1][-1]["role"] == "tool"
     assert calls[1][-1]["tool_call_id"] == "call_search"
+    assert [event["type"] for event in events] == [
+        "turn_started", "assistant_message", "tool_call", "tool_result",
+        "turn_started", "assistant_message",
+    ]
 
 
 def test_chat_agent_returns_chart_from_business_tool(monkeypatch) -> None:

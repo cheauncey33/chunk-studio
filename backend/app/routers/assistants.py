@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import json
+import queue
+import threading
 import time
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .. import chat_agent, chat_sessions, db, jobs, llm, retrieval
@@ -748,13 +751,7 @@ def get_agent_conversation(assistant_id: str, conversation_id: str) -> dict[str,
     }
 
 
-@router.post("/{assistant_id}/agent-chat")
-def assistant_agent_chat(assistant_id: str, body: AgentChatRequest) -> dict[str, Any]:
-    """Persistent Agent chat using native model tool calls.
-
-    The existing /chat endpoint remains available as a rollback path while the
-    frontend migrates to server-owned conversations.
-    """
+def _prepare_agent_context(assistant_id: str, body: AgentChatRequest) -> dict[str, Any]:
     assistant = _assistant_row(assistant_id)
     if not assistant["active_version_id"]:
         raise HTTPException(400, "assistant has no active version")
@@ -793,24 +790,34 @@ def assistant_agent_chat(assistant_id: str, body: AgentChatRequest) -> dict[str,
     retrieval_config = _loads(version["retrieval_config"])
     model = str(model_config.get("model") or llm.DEFAULT_MODEL)
     temperature = float(model_config.get("temperature") or 0)
-    try:
-        result = chat_agent.run_chat_agent(
-            assistant_id=assistant_id,
-            messages=chat_sessions.load_messages(conversation_id),
-            file_ids=file_ids,
-            retrieval_config=retrieval_config,
+    chat_sessions.compact_conversation(
+        conversation_id,
+        summarize=lambda existing, messages: chat_agent.summarize_context(
+            existing,
+            messages,
             model=model,
-            temperature=temperature,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(502, str(exc)) from exc
+        ),
+    )
+    return {
+        "conversation_id": conversation_id,
+        "file_ids": file_ids,
+        "retrieval_config": retrieval_config,
+        "model": model,
+        "temperature": temperature,
+    }
 
+
+def _persist_agent_result(conversation_id: str, result: dict[str, Any]) -> None:
     persisted_events: list[tuple[str, dict[str, Any]]] = []
     for message in result.get("new_messages") or []:
         if not isinstance(message, dict):
             continue
         if message.get("role") == "assistant":
-            persisted_events.append(("assistant_message", {"message": message}))
+            payload: dict[str, Any] = {"message": message}
+            if not message.get("tool_calls"):
+                payload["citations"] = result.get("citations") or []
+                payload["charts"] = result.get("charts") or []
+            persisted_events.append(("assistant_message", payload))
         elif message.get("role") == "tool":
             persisted_events.append((
                 "tool_result",
@@ -822,6 +829,8 @@ def assistant_agent_chat(assistant_id: str, body: AgentChatRequest) -> dict[str,
             ))
     chat_sessions.append_events(conversation_id, persisted_events)
 
+
+def _agent_response(conversation_id: str, model: str, result: dict[str, Any]) -> dict[str, Any]:
     return {
         "conversation_id": conversation_id,
         "answer": result["answer"],
@@ -832,3 +841,85 @@ def assistant_agent_chat(assistant_id: str, body: AgentChatRequest) -> dict[str,
         "turns": result.get("turns", 0),
         "tool_calls": result.get("tool_calls", 0),
     }
+
+
+@router.post("/{assistant_id}/agent-chat")
+def assistant_agent_chat(assistant_id: str, body: AgentChatRequest) -> dict[str, Any]:
+    """Persistent Agent chat using native model tool calls."""
+    context = _prepare_agent_context(assistant_id, body)
+    try:
+        result = chat_agent.run_chat_agent(
+            assistant_id=assistant_id,
+            messages=chat_sessions.load_messages(context["conversation_id"]),
+            file_ids=context["file_ids"],
+            retrieval_config=context["retrieval_config"],
+            model=context["model"],
+            temperature=context["temperature"],
+        )
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    _persist_agent_result(context["conversation_id"], result)
+    return _agent_response(context["conversation_id"], context["model"], result)
+
+
+def _sse(event: str, payload: dict[str, Any]) -> str:
+    return (
+        f"event: {event}\n"
+        f"data: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+    )
+
+
+@router.post("/{assistant_id}/agent-chat/stream")
+def assistant_agent_chat_stream(assistant_id: str, body: AgentChatRequest) -> StreamingResponse:
+    """Stream Agent lifecycle events while keeping the final result durable."""
+    context = _prepare_agent_context(assistant_id, body)
+    events: queue.Queue[dict[str, Any] | None] = queue.Queue()
+
+    def worker() -> None:
+        try:
+            result = chat_agent.run_chat_agent(
+                assistant_id=assistant_id,
+                messages=chat_sessions.load_messages(context["conversation_id"]),
+                file_ids=context["file_ids"],
+                retrieval_config=context["retrieval_config"],
+                model=context["model"],
+                temperature=context["temperature"],
+                event_sink=lambda event: events.put({"kind": "agent", "payload": event}),
+            )
+            _persist_agent_result(context["conversation_id"], result)
+            events.put({
+                "kind": "final",
+                "payload": _agent_response(
+                    context["conversation_id"],
+                    context["model"],
+                    result,
+                ),
+            })
+        except Exception as exc:
+            events.put({
+                "kind": "error",
+                "payload": {"error_type": type(exc).__name__, "error": str(exc)},
+            })
+        finally:
+            events.put(None)
+
+    threading.Thread(target=worker, name="agent-chat-stream", daemon=True).start()
+
+    def body_iter():
+        yield _sse("conversation", {"conversation_id": context["conversation_id"]})
+        while True:
+            item = events.get()
+            if item is None:
+                break
+            yield _sse(str(item["kind"]), item["payload"])
+        yield _sse("done", {})
+
+    return StreamingResponse(
+        body_iter(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

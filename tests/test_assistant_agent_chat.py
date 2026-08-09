@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from app import db
 from app.routers import assistants
 
@@ -61,6 +63,53 @@ def test_agent_chat_persists_conversation_and_reuses_it(monkeypatch, tmp_path) -
     assert [row["event_type"] for row in events] == [
         "user_message", "assistant_message", "user_message", "assistant_message",
     ]
+
+    db.get_conn().close()
+    monkeypatch.setattr(db, "_conn", None)
+
+
+def test_agent_chat_stream_emits_sse_lifecycle_events(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO files(id,name,path,metadata,created_at)
+               VALUES ('f1','std.pdf','files/std.pdf','{}','now')"""
+        )
+        conn.execute(
+            """INSERT INTO knowledge_base_files
+               (knowledge_base_id,file_id,enabled,created_at)
+               VALUES ('kb_uncategorized','f1',1,'now')"""
+        )
+
+    def fake_run(**kwargs):
+        kwargs["event_sink"]({"type": "turn_started", "turn": 1})
+        return {
+            "answer": "流式回答",
+            "new_messages": [{"role": "assistant", "content": "流式回答", "tool_calls": []}],
+            "citations": [],
+            "charts": [],
+            "stop_reason": "finished",
+            "turns": 1,
+            "tool_calls": 0,
+        }
+
+    monkeypatch.setattr(assistants.chat_agent, "run_chat_agent", fake_run)
+    response = assistants.assistant_agent_chat_stream(
+        "assistant_oil_transformer_audit",
+        assistants.AgentChatRequest(message="流式问题"),
+    )
+
+    async def collect() -> str:
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+        return "".join(chunks)
+
+    payload = asyncio.run(collect())
+    assert "event: conversation" in payload
+    assert "event: agent" in payload
+    assert "event: final" in payload
+    assert "event: done" in payload
 
     db.get_conn().close()
     monkeypatch.setattr(db, "_conn", None)

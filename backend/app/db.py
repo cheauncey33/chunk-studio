@@ -256,6 +256,7 @@ CREATE TABLE IF NOT EXISTS chat_conversations (
     title          TEXT NOT NULL DEFAULT '',
     summary        TEXT NOT NULL DEFAULT '',
     summary_version INTEGER NOT NULL DEFAULT 0,
+    summary_sequence INTEGER NOT NULL DEFAULT 0,
     created_at     TEXT NOT NULL,
     updated_at     TEXT NOT NULL,
     FOREIGN KEY (assistant_id) REFERENCES audit_assistants(id) ON DELETE CASCADE
@@ -300,6 +301,7 @@ def init_db() -> None:
     _migrate_assistant_category_profile()
     _migrate_assistant_version_name()
     _migrate_assistant_init_drafts()
+    _migrate_chat_conversation_summary()
     _migrate_query_planner_category_notes()
     _migrate_audit_judge_category_notes()
     _migrate_test_items_model_decode_category_notes()
@@ -313,6 +315,20 @@ def init_db() -> None:
     _migrate_assistant_single_version()
     _ensure_knowledge_base_assistants()
     _conn.commit()
+
+
+def _migrate_chat_conversation_summary() -> None:
+    """Add the compaction cursor to databases created before Agent chat."""
+    assert _conn is not None
+    cols = {
+        row["name"]
+        for row in _conn.execute("PRAGMA table_info(chat_conversations)").fetchall()
+    }
+    if "summary_sequence" not in cols:
+        _conn.execute(
+            """ALTER TABLE chat_conversations
+               ADD COLUMN summary_sequence INTEGER NOT NULL DEFAULT 0"""
+        )
 
 
 def _migrate_assistant_single_version() -> None:
