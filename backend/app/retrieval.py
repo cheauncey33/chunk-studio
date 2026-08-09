@@ -13,6 +13,7 @@ from http import HTTPStatus
 from typing import Any
 
 from . import embeddings, lexical, llm, retrieval_experiments
+from .evidence_locator import chunk_text_sha256
 
 
 QUERY_REWRITE_MODEL = os.environ.get("RETRIEVAL_QUERY_MODEL", llm.DEFAULT_MODEL)
@@ -424,6 +425,199 @@ def hybrid_search(
         final_table=final_quotas["table"] if final_quotas else None,
         final_section=final_quotas["section"] if final_quotas else None,
     )
+
+
+def _candidate_pool_order(
+    _query: str,
+    documents: list[str],
+    top_n: int,
+) -> list[tuple[int, float]]:
+    """Keep internal RRF order without making an external rerank call."""
+    return [(index, 0.0) for index in range(min(top_n, len(documents)))]
+
+
+def retrieve_candidate_pool(
+    query: str,
+    *,
+    query_routes: dict[str, str] | None = None,
+    route_top_k: int = ROUTE_TOP_K,
+    candidates_per_type: int = CANDIDATES_PER_TYPE,
+    lexical_candidates_per_type: int | None = None,
+    rrf_k: int = RRF_K,
+    special_route_reserve: int = 0,
+    planner: QueryPlanner | None = None,
+    batch_embedder: QueryBatchEmbedder | None = None,
+    vector_searcher: VectorSearcher | None = None,
+    lexical_searcher: LexicalSearcher | None = None,
+    lexical_enabled: bool | None = None,
+    file_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return the bounded hybrid candidate pool before external reranking."""
+    result = hybrid_search(
+        query,
+        top_k=50,
+        route_top_k=route_top_k,
+        candidates_per_type=candidates_per_type,
+        lexical_candidates_per_type=lexical_candidates_per_type,
+        rrf_k=rrf_k,
+        similarity_threshold=None,
+        query_routes=query_routes,
+        special_route_reserve=special_route_reserve,
+        aggregate_continuation_tables=False,
+        expand_references=False,
+        planner=planner,
+        batch_embedder=batch_embedder,
+        vector_searcher=vector_searcher,
+        reranker=_candidate_pool_order,
+        lexical_searcher=lexical_searcher,
+        lexical_enabled=lexical_enabled,
+        file_ids=file_ids,
+    )
+    for hit in result["hits"]:
+        hit["rerank_score"] = None
+    prefix = str(result.get("retrieval_mode") or "hybrid").split("_", 1)[0]
+    result["retrieval_mode"] = f"{prefix}_candidate_pool"
+    result["rerank_model"] = None
+    return result
+
+
+def merge_and_rerank_candidate_pools(
+    query: str,
+    pools: list[dict[str, Any]],
+    *,
+    top_k: int,
+    rrf_k: int = RRF_K,
+    final_table: int | None = None,
+    final_section: int | None = None,
+    similarity_threshold: float | None = None,
+    aggregate_continuation_tables: bool = False,
+    expand_references: bool = False,
+    reranker: TextReranker | None = None,
+) -> dict[str, Any]:
+    """Hash-deduplicate candidate pools, apply one RRF, then one rerank."""
+    if not 1 <= top_k <= 50:
+        raise ValueError("top_k must be between 1 and 50")
+    if not pools:
+        return {
+            "query": query,
+            "candidate_count": 0,
+            "retrieval_mode": "recovery_empty",
+            "rerank_model": None,
+            "degraded": [],
+            "hits": [],
+        }
+
+    merged: dict[str, dict[str, Any]] = {}
+    degraded: list[str] = []
+    for pool_index, pool in enumerate(pools, start=1):
+        degraded.extend(str(item) for item in pool.get("degraded") or [])
+        for pool_rank, raw_hit in enumerate(pool.get("hits") or [], start=1):
+            hit = dict(raw_hit)
+            text_hash = chunk_text_sha256(hit.get("text"))
+            key = text_hash or str(hit.get("chunk_id") or f"pool-{pool_index}-{pool_rank}")
+            current = merged.get(key)
+            if current is None:
+                current = {
+                    "hit": hit,
+                    "rrf_score": 0.0,
+                    "source_ranks": {},
+                    "route_ranks": {},
+                    "retrieval_sources": [],
+                }
+                merged[key] = current
+
+            source_ranks = hit.get("source_ranks")
+            if not isinstance(source_ranks, dict) or not source_ranks:
+                source_ranks = {"pool": pool_rank}
+            for source, rank_value in source_ranks.items():
+                rank = int(rank_value)
+                source_key = f"p{pool_index}:{source}"
+                if source_key in current["source_ranks"]:
+                    continue
+                current["source_ranks"][source_key] = rank
+                current["rrf_score"] += 1 / (rrf_k + rank)
+
+            for route, rank_value in (hit.get("route_ranks") or {}).items():
+                current["route_ranks"][f"p{pool_index}:{route}"] = int(rank_value)
+            for source in hit.get("retrieval_sources") or []:
+                source_name = f"p{pool_index}:{source}"
+                if source_name not in current["retrieval_sources"]:
+                    current["retrieval_sources"].append(source_name)
+
+    candidates = sorted(
+        merged.values(),
+        key=lambda item: (
+            float(item["rrf_score"]),
+            str(item["hit"].get("chunk_id") or ""),
+        ),
+        reverse=True,
+    )
+    documents = [_rerank_document({"hit": item["hit"]}) for item in candidates]
+    active_reranker = reranker or rerank_documents
+    final_quotas = _resolve_final_type_quotas(
+        final_per_type=None,
+        final_table=final_table,
+        final_section=final_section,
+    )
+    select_n = len(candidates) if final_quotas is not None else min(top_k, len(candidates))
+    try:
+        ranked = active_reranker(query, documents, select_n)
+        ordered = []
+        for index, score in ranked:
+            item = candidates[index]
+            hit = dict(item["hit"])
+            hit["rrf_score"] = item["rrf_score"]
+            hit["rerank_score"] = float(score)
+            hit["source_ranks"] = item["source_ranks"]
+            hit["route_ranks"] = item["route_ranks"]
+            hit["retrieval_sources"] = item["retrieval_sources"]
+            ordered.append(hit)
+        rerank_model: str | None = RERANK_MODEL
+        mode = "recovery_unified_rerank"
+    except RuntimeError:
+        degraded.append("rerank_failed")
+        ordered = []
+        for item in candidates[:select_n]:
+            hit = dict(item["hit"])
+            hit["rrf_score"] = item["rrf_score"]
+            hit["rerank_score"] = None
+            hit["source_ranks"] = item["source_ranks"]
+            hit["route_ranks"] = item["route_ranks"]
+            hit["retrieval_sources"] = item["retrieval_sources"]
+            ordered.append(hit)
+        rerank_model = None
+        mode = "recovery_rrf_fallback"
+
+    if final_quotas is not None:
+        selected = _slice_final_per_type(ordered, final_quotas=final_quotas)
+    else:
+        selected = ordered[:top_k]
+    if similarity_threshold is not None:
+        selected = [
+            hit
+            for hit in selected
+            if float(
+                hit["rerank_score"]
+                if hit.get("rerank_score") is not None
+                else hit.get("score") or 0.0
+            )
+            >= similarity_threshold
+        ]
+    if expand_references or aggregate_continuation_tables:
+        selected = _enrich_evidence_hits(
+            selected,
+            expand_references=expand_references,
+            aggregate_continuations=aggregate_continuation_tables,
+        )
+    return {
+        "query": query,
+        "candidate_count": len(candidates),
+        "dedup_strategy": "chunk_text_sha256",
+        "retrieval_mode": mode,
+        "rerank_model": rerank_model,
+        "degraded": list(dict.fromkeys(degraded)),
+        "hits": selected,
+    }
 
 
 def _enrich_evidence_hits(

@@ -320,7 +320,7 @@ def format_extraction_brief(
         "",
         "提取规则：",
         "1. 只提取报告直接记载的样品/报告级参数；找不到时该字段 value 与 unit 均为空字符串，但 key 仍须出现在输出中。",
-        "2. 保留原始完整表达，不拆分、不改写单位与符号（如 10/0.4kV、Dyn11、LI75 AC35）。",
+        "2. 保留原始完整表达，不拆分、不改写单位、符号、类别标签和试验等级。",
         "3. 短路阻抗、空载/负载损耗、空载电流、温升、绝缘电阻、电压比偏差、耐压试验电压与时长、"
         "声级、以及任何检测项目的符合/不符合结论，一律不得作为报告级参数。",
         f"4. {extra_line}",
@@ -471,6 +471,21 @@ def format_audit_judge_brief(
             "reason": "",
             "evidence_candidate_keys": [],
             "missing_context_fields": [],
+            "comparison": {
+                "kind": "exact|upper_bound|lower_bound|tolerance|range|scope_count|text",
+                "report_value": "",
+                "report_unit": "",
+                "report_operator": "eq|le|lt|ge|gt|range|tolerance|unknown",
+                "standard_value": "",
+                "standard_unit": "",
+                "standard_operator": "eq|le|lt|ge|gt|range|tolerance|unknown",
+                "report_tolerance": "",
+                "standard_tolerance": "",
+                "report_scope": "",
+                "standard_scope": "",
+                "relation": "equal|stricter|looser|different|overlap|unknown",
+                "conclusion": "supports|conflicts|unknown",
+            },
         },
         ensure_ascii=False,
         indent=2,
@@ -478,6 +493,51 @@ def format_audit_judge_brief(
 
     parts: list[str] = [
         format_node_framework_preamble("audit_judge"),
+        (
+            "Applicability rule: determine conditions only from the reported parameters "
+            "and cited applicability evidence. deterministic_applicability contains "
+            "reported parameters only; it does not select a standard branch. Preserve "
+            "unresolved or conflicting conditions explicitly."
+        ),
+        (
+            "Evidence-role rule: candidates carry evidence_roles. A nominal numeric value "
+            "must cite nominal_rule; a tolerance comparison must additionally cite "
+            "tolerance_rule. method_rule explains how to test and applicability_rule "
+            "selects a branch, but neither may alone support or contradict a nominal value."
+        ),
+        (
+            "Table-row rule: deterministic_table_bindings contains generic condition-row "
+            "matches from retrieved tables. Only state=matched is authoritative. Treat "
+            "unresolved or ambiguous bindings as evidence gaps and never choose another "
+            "row by model judgment."
+        ),
+        (
+            "Deterministic comparison rule: deterministic_comparisons contains only "
+            "complete generic comparison traces with a uniquely bound property and table "
+            "row. These conflicts are authoritative for status and candidate_key. A "
+            "partial or ambiguous trace is never authoritative."
+        ),
+        (
+            "Comparison semantics: a bare test voltage, duration, count, ratio, or "
+            "setpoint is an exact prescribed condition, not a minimum/maximum threshold; "
+            "a different value is mismatch unless the evidence explicitly defines a "
+            "range or comparator. Preserve scope and denominator: a per-phase, per-tap, "
+            "or subgroup count cannot support a report's total count."
+        ),
+        (
+            "Structured comparison: for every numeric, tolerance, range, or count "
+            "judgment, fill comparison before status. Values must be copied from the "
+            "report and selected evidence, never calculated from unstated domain "
+            "knowledge. Use kind=text and empty values only for genuinely nonnumeric "
+            "requirements. The program may reject a status that conflicts with this "
+            "comparison. For kind=tolerance, report_value/standard_value are the "
+            "nominal values and report_tolerance/standard_tolerance are the separate "
+            "allowed bands; never put a compound expression into one value field. "
+            "Always preserve each side's comparator in report_operator and "
+            "standard_operator; equal numbers with opposite directions still conflict. "
+            "Alphanumeric category, type, and group labels use kind=text unless an "
+            "explicit unit or quantity grammar establishes a numeric value."
+        ),
         f"知识库：{name}" + (f"。{description}" if description != EMPTY_VALUE else "。"),
         "",
         "状态：",
@@ -490,6 +550,8 @@ def format_audit_judge_brief(
         "1. 提取报告要求：完整复述待审主张（可为数值限值、文字条款、试验条件或公式关系）。",
         "2. 提取标准依据：仅从候选 Chunk，以及 allowed_use 适用的 manual_knowledge_rules "
         "中引用依据；写明标准号与表号/条款（若有）。",
+        "   - 名义值必须引用 evidence_roles 含 nominal_rule 的候选；仅引用 method_rule 禁止形成数值结论。",
+        "   - 若 deterministic_table_bindings 有匹配行，名义值必须采用绑定行及其 candidate_key。",
         "3. 多标准取舍（看候选的 standard_priority / business_metadata.standard_no）：",
         "   优先级从高到低：技术规范书 > 企/行标 > 国标 > 其他。",
         "   - 多个候选对同一要求给出可核对限值/条款时，以更高优先级来源作为主依据；",
@@ -524,7 +586,7 @@ def format_audit_judge_brief(
         "例：标准 ±0.5%、报告 ±1% → mismatch。",
         "D. 禁止误判：",
         "   - 不得因“报告数字更大/更醒目”或“包含了标准数字”就判 supported。",
-        "   - 不得仅因“等于限值”判 mismatch；同向且数值相等 → supported。",
+        "   - 不得仅因“等于限值”判定 mismatch。同向且数值相等 → supported。",
         "   - reason 须点明：比较符是否一致、数值松紧结论"
         "（更宽/更严/相等/单位等价）；若判 supported 却写出报告宽于标准，视为无效。",
         "",

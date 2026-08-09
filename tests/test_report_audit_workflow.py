@@ -310,7 +310,7 @@ def test_full_audit_units_cover_every_requirement_with_stable_ids() -> None:
     units = workflow._build_full_audit_units(extracted)
 
     assert len(units) == 2  # blank requirement rows are skipped
-    assert all(unit["gold_case"] is None for unit in units)
+    assert all("gold_case" not in unit for unit in units)
     assert units[0]["test_item"]["item_no"] == "1"
     assert units[1]["requirement"]["requirement_text"] == "≤ 5000 W"
     # Ids are deterministic across reruns so checkpoint resume matches.
@@ -603,6 +603,294 @@ def test_consistency_flags_agreement_under_insufficient_context() -> None:
     assert any("agreement" in issue for issue in issues)
 
 
+def test_consistency_ignores_negated_support_phrase_under_insufficient_context() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "insufficient_context",
+            "reason": "缺少偏差限值证据，无法核对该要求是否被标准支持。",
+            "missing_context_fields": ["偏差限值"],
+        },
+        _sample_profile_fixture(),
+    )
+
+    assert not any("agreement" in issue for issue in issues)
+
+
+def test_consistency_does_not_encode_one_aggregate_sentence_shape() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "supported",
+            "reason": "标准规定试验应为9次，即每相各3次；报告仅写试验次数3次，因此支持。",
+            "missing_context_fields": [],
+        },
+        _sample_profile_fixture(),
+    )
+
+    assert not any("aggregate and subgroup" in issue for issue in issues)
+
+
+def test_consistency_flags_structured_exact_value_conflict() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "supported",
+            "reason": "The report and standard are supported.",
+            "missing_context_fields": [],
+            "comparison": {
+                "kind": "exact",
+                "report_value": "1.5",
+                "report_unit": "Ur",
+                "standard_value": "1.155",
+                "standard_unit": "Ur",
+                "relation": "equal",
+                "conclusion": "supports",
+            },
+        },
+        _sample_profile_fixture(),
+    )
+
+    assert any("deterministic relation 'different'" in issue for issue in issues)
+
+
+def test_consistency_preserves_opposite_comparator_direction_at_equal_value() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "mismatch",
+            "reason": "报告为≥55，标准为≤55，方向冲突。",
+            "missing_context_fields": [],
+            "comparison": {
+                "kind": "lower_bound",
+                "report_value": "55",
+                "report_unit": "K",
+                "report_operator": "ge",
+                "standard_value": "55",
+                "standard_unit": "K",
+                "standard_operator": "le",
+                "relation": "different",
+                "conclusion": "conflicts",
+            },
+        },
+        _sample_profile_fixture(),
+    )
+
+    assert not any("deterministic relation" in issue for issue in issues)
+
+
+def test_consistency_allows_alphanumeric_category_as_text() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "mismatch",
+            "reason": "AX12 与 BY34 不同。",
+            "missing_context_fields": [],
+            "comparison": {
+                "kind": "text",
+                "report_value": "AX12",
+                "standard_value": "BY34",
+                "relation": "different",
+                "conclusion": "conflicts",
+            },
+        },
+        _sample_profile_fixture(),
+    )
+
+    assert issues == []
+
+
+def test_mismatch_tolerance_can_fail_closed_without_inventing_nominal_base() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "mismatch",
+            "reason": "报告允许偏差1.0%，标准为0.5%，报告更宽。",
+            "missing_context_fields": [],
+            "comparison": {
+                "kind": "tolerance",
+                "report_value": "1.0",
+                "report_unit": "%",
+                "standard_value": "0.5",
+                "standard_unit": "%",
+                "relation": "looser",
+                "conclusion": "conflicts",
+            },
+        },
+        _sample_profile_fixture(),
+    )
+
+    assert not any("requires separate" in issue for issue in issues)
+
+
+def test_consistency_flags_looser_structured_tolerance() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "supported",
+            "reason": "The nominal value is the same.",
+            "missing_context_fields": [],
+            "comparison": {
+                "kind": "tolerance",
+                "report_value": "4.0",
+                "report_unit": "%",
+                "standard_value": "4.0",
+                "standard_unit": "%",
+                "report_tolerance": "20%",
+                "standard_tolerance": "10%",
+                "relation": "equal",
+                "conclusion": "supports",
+            },
+        },
+        _sample_profile_fixture(),
+    )
+
+    assert any("deterministic relation 'looser'" in issue for issue in issues)
+
+
+def test_consistency_rejects_ungrounded_supported_nominal_value() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "supported",
+            "reason": "The generic waveform tolerance is supported.",
+            "missing_context_fields": [],
+            "comparison": {
+                "kind": "tolerance",
+                "report_value": "60",
+                "report_unit": "kV",
+                "standard_value": "60",
+                "standard_unit": "kV",
+                "report_tolerance": "3%",
+                "standard_tolerance": "3%",
+                "relation": "equal",
+                "conclusion": "supports",
+            },
+            "evidence": [{
+                "content_type": "section",
+                "text": "The waveform tolerance is ±3%; the duration is 60 s.",
+            }],
+        },
+        _sample_profile_fixture(),
+    )
+
+    assert any("not grounded in selected evidence" in issue for issue in issues)
+
+
+def test_consistency_rejects_method_only_numeric_evidence() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "supported",
+            "reason": "方法条款给出了允许偏差。",
+            "missing_context_fields": [],
+            "comparison": {
+                "kind": "tolerance",
+                "report_value": "60",
+                "report_unit": "kV",
+                "standard_value": "60",
+                "standard_unit": "kV",
+                "report_tolerance": "3%",
+                "standard_tolerance": "3%",
+                "relation": "equal",
+                "conclusion": "supports",
+            },
+            "evidence": [{
+                "content_type": "section",
+                "evidence_roles": ["method_rule", "tolerance_rule"],
+                "text": "试验电压值的偏差为±3%。",
+            }],
+        },
+        _sample_profile_fixture(),
+    )
+
+    assert any("only by method/tolerance/applicability" in issue for issue in issues)
+
+
+def test_consistency_accepts_nominal_and_tolerance_role_chain() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "supported",
+            "reason": "绑定表行给出60kV，方法条款给出±3%。",
+            "missing_context_fields": [],
+            "comparison": {
+                "kind": "tolerance",
+                "report_value": "60",
+                "report_unit": "kV",
+                "standard_value": "60",
+                "standard_unit": "kV",
+                "report_tolerance": "3%",
+                "standard_tolerance": "3%",
+                "relation": "equal",
+                "conclusion": "supports",
+            },
+            "evidence": [
+                {
+                    "content_type": "table",
+                    "evidence_roles": ["nominal_rule"],
+                    "text": "Um 12 kV | 雷电全波冲击 60 kV",
+                },
+                {
+                    "content_type": "section",
+                    "evidence_roles": ["method_rule", "tolerance_rule"],
+                    "text": "试验电压值的偏差为±3%。",
+                },
+            ],
+        },
+        _sample_profile_fixture(),
+    )
+
+    assert not any("evidence" in issue for issue in issues)
+
+
+def test_consistency_preserves_unresolved_applicability_request() -> None:
+    profile = _sample_profile_fixture()
+    profile["deterministic_applicability"] = {"state": "parameters_only"}
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "insufficient_context",
+            "reason": "缺少绝缘类型。",
+            "missing_context_fields": ["绝缘类型", "用户特殊要求"],
+        },
+        profile,
+    )
+
+    assert not any("not required by deterministic applicability" in issue for issue in issues)
+
+
+def test_consistency_rejects_numeric_values_hidden_as_text_kind() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "insufficient_context",
+            "reason": "A numeric comparison was deferred.",
+            "missing_context_fields": [],
+            "comparison": {
+                "kind": "text",
+                "report_value": "1.5Ur",
+                "standard_value": "2Ur/sqrt(3)",
+                "relation": "different",
+                "conclusion": "unknown",
+            },
+        },
+        _sample_profile_fixture(),
+    )
+
+    assert issues == ["numeric comparison cannot use kind 'text'"]
+
+
+def test_consistency_flags_scope_count_even_when_values_match() -> None:
+    issues = workflow._collect_judgment_consistency_issues(
+        {
+            "status": "supported",
+            "reason": "The count is supported.",
+            "missing_context_fields": [],
+            "comparison": {
+                "kind": "scope_count",
+                "report_value": "3",
+                "standard_value": "3",
+                "report_scope": "total",
+                "standard_scope": "per phase",
+                "relation": "equal",
+                "conclusion": "supports",
+            },
+        },
+        _sample_profile_fixture(),
+    )
+
+    assert any("deterministic relation 'different'" in issue for issue in issues)
+
+
 def test_consistency_flags_missing_fields_already_in_profile() -> None:
     issues = workflow._collect_judgment_consistency_issues(
         {
@@ -666,6 +954,51 @@ def test_run_audit_judge_rejudeges_on_consistency_failure(monkeypatch) -> None:
     assert judgment["rejudge"]["triggered"] is True
     assert "rejudge_input" in trace
     assert any("rejudge triggered" in issue for issue in judgment["validation_issues"])
+
+
+def test_run_audit_judge_applies_retrieved_deterministic_conflict_without_rejudge(
+    monkeypatch,
+) -> None:
+    candidate = _candidate("c01")
+    candidate["evidence_roles"] = ["nominal_rule"]
+    calls = []
+
+    def fake_call_model(prompt: str, payload: dict, *, model: str):
+        calls.append(payload)
+        return {
+            "status": "insufficient_context",
+            "reason": "模型未完成比较。",
+            "evidence_candidate_keys": [],
+            "missing_context_fields": ["绝缘类型"],
+        }
+
+    monkeypatch.setattr(workflow, "_call_model", fake_call_model)
+    judgment, _trace = workflow._run_audit_judge_with_consistency(
+        judge_prompt="judge",
+        judge_input={
+            "deterministic_comparisons": [{
+                "source": "generic_bound_table_claim",
+                "candidate_key": "c01",
+                "kind": "exact",
+                "report_value": "25",
+                "standard_value": "30",
+                "relation": "different",
+                "conclusion": "conflicts",
+                "trace": {
+                    "report_claim": {"property": {"source_text": "持续时间"}},
+                    "evidence_claim": {"property": {"source_text": "持续时间"}},
+                },
+            }],
+        },
+        judge_model="deepseek-v4-flash",
+        candidates=[candidate],
+        sample_profile=_sample_profile_fixture(),
+    )
+
+    assert len(calls) == 1
+    assert judgment["status"] == "mismatch"
+    assert judgment["evidence_candidate_keys"] == ["c01"]
+    assert judgment["deterministic_judge"]["applied"] is True
 
 
 def test_run_audit_judge_downgrades_when_rejudge_remains_inconsistent(
@@ -793,6 +1126,10 @@ def test_retrieve_hybrid_candidates_maps_hits_and_passes_scope(monkeypatch) -> N
     assert debug["final_section"] == 6
 
 
+def test_workflow_has_no_fixed_applicability_lookup_hook() -> None:
+    assert not hasattr(workflow, "_inject_applicability_candidates")
+
+
 def test_job_priorities_keep_interactive_jobs_above_parse() -> None:
     """Audit / init / embed must outrank slow MinerU parses in the queue."""
     import inspect
@@ -876,8 +1213,12 @@ def test_enqueue_accepts_report_outside_knowledge_base(monkeypatch, tmp_path) ->
     )
     assert job["status"] == "queued"
     assert job["type"] == "audit"
-    # Default runs audit the full report; report_id is an eval-only opt-in.
-    assert "report_id" not in (job.get("result") or {})
+    # The queued runtime payload contains only inputs needed for full-report audit.
+    assert set((job.get("result") or {})) == {
+        "assistant_id",
+        "report_file_id",
+        "naming_rule_file_id",
+    }
     _close_temp_db(monkeypatch)
 
 

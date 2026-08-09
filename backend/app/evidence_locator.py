@@ -22,7 +22,14 @@ def resolve_evidence_locator(
     conn: sqlite3.Connection,
     locator: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    """Return current chunks that exactly match a stable evidence locator."""
+    """Return logical evidence matches for a stable locator.
+
+    A standard PDF can be registered more than once while pointing at the same
+    stored source path.  Those rows produce physically distinct chunk IDs but
+    are not distinct evidence.  Collapse only that exact duplicate condition;
+    different source paths remain separate matches and keep the locator
+    ambiguous for review.
+    """
     clauses = [
         "json_extract(business_metadata, '$.standard_no') = ?",
         "json_extract(business_metadata, '$.content_type') = ?",
@@ -34,23 +41,42 @@ def resolve_evidence_locator(
             clauses.append(f"json_extract(business_metadata, '$.{field}') = ?")
             params.append(locator[field])
 
-    rows = conn.execute(
-        f"""
-        SELECT id, page, text, business_metadata, source_trace
-        FROM chunks
-        WHERE {' AND '.join(clauses)}
-        """,
-        params,
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT c.id, c.file_id, f.path AS source_path, c.page, c.text,
+                   c.business_metadata, c.source_trace
+            FROM chunks c
+            JOIN files f ON f.id=c.file_id
+            WHERE {' AND '.join(clauses)}
+            """,
+            params,
+        ).fetchall()
+    except sqlite3.OperationalError as error:
+        # Tiny in-memory tests and third-party callers may provide only the
+        # chunks table. Keep the original resolver contract in that case.
+        if "no such table: files" not in str(error):
+            raise
+        rows = conn.execute(
+            f"""
+            SELECT id, id AS file_id, id AS source_path, page, text,
+                   business_metadata, source_trace
+            FROM chunks
+            WHERE {' AND '.join(clauses)}
+            """,
+            params,
+        ).fetchall()
 
     matches: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row) if isinstance(row, sqlite3.Row) else {
             "id": row[0],
-            "page": row[1],
-            "text": row[2],
-            "business_metadata": row[3],
-            "source_trace": row[4],
+            "file_id": row[1],
+            "source_path": row[2],
+            "page": row[3],
+            "text": row[4],
+            "business_metadata": row[5],
+            "source_trace": row[6],
         }
         business = _json_object(item["business_metadata"])
         trace = _json_object(item["source_trace"])
@@ -67,12 +93,23 @@ def resolve_evidence_locator(
             continue
         matches.append({
             "current_chunk_id": item["id"],
+            "current_chunk_ids": [item["id"]],
+            "source_path": item["source_path"],
             "page_start": page_start,
             "page_end": page_end,
             "business_metadata": business,
             "canonical_text": canonicalize_chunk_text(item["text"]),
         })
-    return matches
+
+    logical: dict[tuple[str, str], dict[str, Any]] = {}
+    for match in matches:
+        key = (str(match["source_path"]), chunk_text_sha256(match["canonical_text"]))
+        existing = logical.get(key)
+        if existing is None:
+            logical[key] = match
+        else:
+            existing["current_chunk_ids"].extend(match["current_chunk_ids"])
+    return list(logical.values())
 
 
 def _json_object(value: Any) -> dict[str, Any]:

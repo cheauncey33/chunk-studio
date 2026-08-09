@@ -151,6 +151,8 @@ def test_audit_judge_brief_single_block_with_rules_summary() -> None:
     assert "- model（" not in out
     assert '"status"' in out
     assert "insufficient_context" in out
+    assert "exact prescribed condition" in out
+    assert "scope and denominator" in out
     assert "判定流程（必须按顺序执行；完成前不得给出最终 status）：" in out
     assert "技术规范书 > 企/行标 > 国标" in out
     assert "standard_priority" in out

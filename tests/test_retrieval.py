@@ -765,3 +765,84 @@ def test_enrich_evidence_hits_expands_references_then_aggregates_continuations(m
     assert "表7 第一页" in table_hit["text"]
     assert "表7（续）第二页" in table_hit["text"]
     assert [m["chunk_id"] for m in table_hit["evidence_unit"]["members"]] == ["t7a", "t7b"]
+
+
+def test_retrieve_candidate_pool_skips_external_rerank() -> None:
+    vector_hit = {
+        "chunk_id": "c1",
+        "file_id": "f1",
+        "text": "same evidence",
+        "score": 0.8,
+        "business_metadata": {"content_type": "section"},
+    }
+
+    result = retrieval.retrieve_candidate_pool(
+        "query",
+        query_routes={"production": "query"},
+        batch_embedder=lambda queries, **kwargs: [[0.1] for _ in queries],
+        vector_searcher=lambda query, vector, **kwargs: {
+            "total_candidates": 1,
+            "hits": [vector_hit],
+        },
+        lexical_enabled=False,
+    )
+
+    assert result["retrieval_mode"] == "dense_candidate_pool"
+    assert result["rerank_model"] is None
+    assert result["hits"][0]["rerank_score"] is None
+    assert result["hits"][0]["source_ranks"]
+
+
+def test_merge_candidate_pools_deduplicates_text_and_reranks_once() -> None:
+    calls = []
+    shared = {
+        "chunk_id": "c1",
+        "file_id": "f1",
+        "text": "same evidence",
+        "score": 0.8,
+        "business_metadata": {"content_type": "section"},
+        "source_ranks": {"dense:production": 1},
+        "route_ranks": {"production": 1},
+        "retrieval_sources": ["dense"],
+    }
+    duplicate = {**shared, "chunk_id": "c2"}
+
+    def reranker(query, documents, top_n):
+        calls.append((query, list(documents), top_n))
+        return [(0, 0.9)]
+
+    result = retrieval.merge_and_rerank_candidate_pools(
+        "original value-free query",
+        [{"hits": [shared]}, {"hits": [duplicate]}],
+        top_k=10,
+        reranker=reranker,
+    )
+
+    assert result["candidate_count"] == 1
+    assert result["dedup_strategy"] == "chunk_text_sha256"
+    assert len(calls) == 1
+    assert calls[0][0] == "original value-free query"
+    assert len(result["hits"][0]["source_ranks"]) == 2
+
+
+def test_merge_candidate_pools_keeps_zero_rerank_score_below_threshold() -> None:
+    hit = {
+        "chunk_id": "c1",
+        "file_id": "f1",
+        "text": "irrelevant evidence",
+        "score": 0.99,
+        "business_metadata": {"content_type": "section"},
+        "source_ranks": {"dense:production": 1},
+        "route_ranks": {"production": 1},
+        "retrieval_sources": ["dense"],
+    }
+
+    result = retrieval.merge_and_rerank_candidate_pools(
+        "original query",
+        [{"hits": [hit]}],
+        top_k=10,
+        similarity_threshold=0.5,
+        reranker=lambda query, documents, top_n: [(0, 0.0)],
+    )
+
+    assert result["hits"] == []

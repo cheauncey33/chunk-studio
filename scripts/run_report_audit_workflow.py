@@ -1,8 +1,6 @@
 """Run a read-only end-to-end report standard-value audit.
 
-Default mode audits every extracted test-item requirement in the report.
-``--case-pool`` restores the legacy evaluation mode that only audits cases
-from the frozen retrieval case pool and computes gold-recall diagnostics.
+Audits every extracted test-item requirement in the report.
 """
 from __future__ import annotations
 
@@ -26,7 +24,23 @@ sys.path.insert(0, str(BACKEND))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from app import db, embeddings, llm  # noqa: E402
+from app.agent_runtime import AgentPolicy  # noqa: E402
+from app.audit_policy import (  # noqa: E402
+    PRODUCTION_EVIDENCE_COMPRESSION_MODE,
+    PRODUCTION_RECOVERY_MODE,
+    RECOVERY_MAX_SEARCH_CALLS,
+    RECOVERY_MAX_TOOL_CALLS,
+    RECOVERY_MAX_TURNS,
+    RECOVERY_TIMEOUT_SECONDS,
+)
 from app.evidence_locator import chunk_text_sha256  # noqa: E402
+from app.evidence_compression import compress_judge_input  # noqa: E402
+from app.audit_semantics import (  # noqa: E402
+    annotate_candidates,
+    build_deterministic_comparisons,
+    evaluate_candidate_applicability,
+    resolve_applicability,
+)
 from app.parameter_schema import (  # noqa: E402
     normalize_extracted_parameters,
     present_parameter_labels,
@@ -37,21 +51,42 @@ from app.query_planner_routes import (  # noqa: E402
     enabled_query_planner_route_ids,
     resolve_query_planner_routes,
 )
-from build_retrieval_evidence_reviews import (  # noqa: E402
-    FINAL_PER_TYPE,
-    RRF_K,
-    ROUTE_TOP_K,
-    _call_model,
-    _production_query,
-)
+from app.recovery.gate import decide_recovery  # noqa: E402
+from app.recovery.runner import run_recovery_agent  # noqa: E402
+from app.recovery.tools import RecoveryToolEnvironment, _default_exact_search  # noqa: E402
 from extract_report_test_items import extract_report  # noqa: E402
 
 
-CASE_POOL = ROOT / "evaluation" / "retrieval_case_pool_v1.json"
-GOLD = ROOT / "evaluation" / "retrieval_gold_candidates_v1.json"
+ROUTE_TOP_K = 20
+FINAL_PER_TYPE = 20
+RRF_K = 60
 DEFAULT_OUTPUT = BACKEND / "data" / "reports" / "hbjc_end_to_end_audit_v1.json"
 DEFAULT_JUDGE_CONCURRENCY = 8
 MAX_JUDGE_CONCURRENCY = 500
+
+
+def _call_model(system_prompt: str, payload: dict[str, Any], *, model: str) -> dict[str, Any]:
+    return llm.chat_json(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+        model=model,
+        temperature=0,
+    )
+
+
+def _production_query(case: dict[str, Any]) -> str:
+    context = case.get("sample_context") or {}
+    parts = [
+        str(context.get(key) or "").strip()
+        for key in ("model", "rated_capacity", "rated_voltage", "sample_name")
+    ]
+    parts.extend([
+        case["test_item"]["project_name"],
+        case["reported_requirement"]["text"],
+    ])
+    return " ".join(dict.fromkeys(part for part in parts if part))
 _DETECTION_BASIS_CELL_RE = re.compile(
     r"<td\b[^>]*>\s*(?:检测|检验)依据\s*</td>\s*"
     r"<td\b[^>]*>(?P<content>.*?)</td>",
@@ -563,33 +598,9 @@ def _build_full_audit_units(extracted: dict[str, Any]) -> list[dict[str, Any]]:
                 "case_id": case_id,
                 "test_item": item,
                 "requirement": requirement,
-                "gold_case": None,
             }
         )
     return units
-
-
-def _build_case_pool_units(
-    extracted: dict[str, Any],
-    *,
-    report_id: str,
-) -> list[dict[str, Any]]:
-    cases = [
-        case for case in json.loads(CASE_POOL.read_text(encoding="utf-8"))["cases"]
-        if case["report_id"] == report_id
-    ]
-    gold_by_id = {
-        case["case_id"]: case
-        for case in json.loads(GOLD.read_text(encoding="utf-8"))["cases"]
-    }
-    return [
-        {
-            "case_id": case["case_id"],
-            **_find_requirement(extracted, case),
-            "gold_case": gold_by_id[case["case_id"]],
-        }
-        for case in cases
-    ]
 
 
 def _peer_context_terms(
@@ -695,7 +706,7 @@ def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         str(metadata.get(key) or "")
         for key in ("table_title", "section_title", "section")
     )
-    return {
+    compact = {
         "candidate_key": candidate["candidate_key"],
         "content_type": candidate["content_type"],
         "business_metadata": metadata,
@@ -705,6 +716,12 @@ def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         ),
         "text": candidate["text"],
     }
+    roles = [str(role) for role in candidate.get("evidence_roles") or [] if str(role)]
+    if roles:
+        compact["evidence_roles"] = roles
+    if isinstance(candidate.get("table_row_binding"), dict):
+        compact["table_row_binding"] = candidate["table_row_binding"]
+    return compact
 
 
 def _candidate_locator(candidate: dict[str, Any]) -> tuple[str, str, str]:
@@ -760,6 +777,229 @@ _MISMATCH_SIGNAL_RE = re.compile(
     re.IGNORECASE,
 )
 _MISSING_FIELD_SUFFIXES = ("ur", "um", "u", "值", "参数", "信息")
+
+
+_COMPARISON_NUMBER_RE = re.compile(r"[-+]?\d+(?:[.,]\d+)?")
+_COMPARISON_KINDS = {
+    "exact",
+    "upper_bound",
+    "lower_bound",
+    "tolerance",
+    "range",
+    "scope_count",
+    "text",
+}
+_COMPARISON_OPERATORS = {"eq", "le", "lt", "ge", "gt", "range", "tolerance", "unknown", ""}
+
+
+def _comparison_number(value: Any) -> float | None:
+    match = _COMPARISON_NUMBER_RE.search(str(value or "").replace(",", "."))
+    return float(match.group(0)) if match else None
+
+
+def _numeric_comparison_value(value: Any) -> bool:
+    """True for quantities/formulas, false for alphanumeric category labels."""
+    text = str(value or "").strip()
+    if not text:
+        return False
+    return bool(re.match(r"^[\s≤≥<>±+\-]?(?:\d|\.|\(|sqrt)", text, re.IGNORECASE))
+
+
+def _operator_direction(value: Any) -> str | None:
+    operator = str(value or "").strip().lower()
+    if operator in {"le", "lt"}:
+        return "upper"
+    if operator in {"ge", "gt"}:
+        return "lower"
+    if operator == "eq":
+        return "exact"
+    return None
+
+
+def _standard_value_grounded_in_selected_evidence(
+    comparison: dict[str, Any],
+    evidence: list[dict[str, Any]],
+) -> bool:
+    """Verify a simple nominal value is actually present in cited evidence."""
+    raw_value = str(comparison.get("standard_value") or "").strip()
+    unit = str(comparison.get("standard_unit") or "").strip()
+    number = _comparison_number(raw_value)
+    if number is None:
+        return False
+    number_token = re.escape(f"{number:g}")
+    unit_token = re.escape(unit) if unit else ""
+    for item in evidence:
+        text = str(item.get("text") or "")
+        if not re.search(rf"(?<![\d.]){number_token}(?![\d.])", text):
+            continue
+        if not unit_token:
+            return True
+        close = re.search(
+            rf"(?:{number_token}\s*.{{0,16}}?{unit_token}|{unit_token}.{{0,16}}?{number_token})",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        metadata = item.get("business_metadata") or {}
+        is_table = str(metadata.get("content_type") or item.get("content_type") or "") == "table"
+        if close or (is_table and re.search(unit_token, text, re.IGNORECASE)):
+            return True
+    return False
+
+
+def _comparison_consistency_issues(judgment: dict[str, Any]) -> list[str]:
+    """Cross-check the Judge's structured comparison without inventing evidence."""
+    comparison = judgment.get("comparison")
+    if comparison is None:
+        return []
+    if not isinstance(comparison, dict):
+        return ["comparison must be an object"]
+    kind = str(comparison.get("kind") or "").strip()
+    if kind not in _COMPARISON_KINDS:
+        return [f"comparison has invalid kind '{kind}'"]
+    if kind == "text":
+        if (
+            _numeric_comparison_value(comparison.get("report_value"))
+            or _numeric_comparison_value(comparison.get("standard_value"))
+        ):
+            return ["numeric comparison cannot use kind 'text'"]
+        return []
+
+    issues: list[str] = []
+    status = str(judgment.get("status") or "").strip()
+    relation = str(comparison.get("relation") or "unknown").strip()
+    conclusion = str(comparison.get("conclusion") or "unknown").strip()
+    report_operator = str(comparison.get("report_operator") or "").strip().lower()
+    standard_operator = str(comparison.get("standard_operator") or "").strip().lower()
+    if report_operator not in _COMPARISON_OPERATORS:
+        issues.append(f"comparison has invalid report_operator '{report_operator}'")
+    if standard_operator not in _COMPARISON_OPERATORS:
+        issues.append(f"comparison has invalid standard_operator '{standard_operator}'")
+    if status == "supported" and conclusion == "conflicts":
+        issues.append("comparison conclusion conflicts with supported status")
+    if status == "mismatch" and conclusion == "supports":
+        issues.append("comparison conclusion supports the report under mismatch status")
+
+    report_value = _comparison_number(comparison.get("report_value"))
+    standard_value = _comparison_number(comparison.get("standard_value"))
+    report_unit = str(comparison.get("report_unit") or "").strip().lower()
+    standard_unit = str(comparison.get("standard_unit") or "").strip().lower()
+    comparable_units = not report_unit or not standard_unit or report_unit == standard_unit
+    computed: str | None = None
+    if report_value is not None and standard_value is not None and comparable_units:
+        equal = abs(report_value - standard_value) <= 1e-9
+        report_direction = _operator_direction(report_operator)
+        standard_direction = _operator_direction(standard_operator)
+        if (
+            report_direction in {"upper", "lower"}
+            and standard_direction in {"upper", "lower"}
+            and report_direction != standard_direction
+        ):
+            computed = "different"
+        elif kind in {"exact", "scope_count"}:
+            same_scope = True
+            if kind == "scope_count":
+                report_scope = str(comparison.get("report_scope") or "").strip().lower()
+                standard_scope = str(comparison.get("standard_scope") or "").strip().lower()
+                same_scope = bool(
+                    report_scope and standard_scope and report_scope == standard_scope
+                )
+            computed = "equal" if equal and same_scope else "different"
+        elif kind == "upper_bound":
+            computed = (
+                "equal"
+                if equal
+                else ("stricter" if report_value < standard_value else "looser")
+            )
+        elif kind == "lower_bound":
+            computed = (
+                "equal"
+                if equal
+                else ("stricter" if report_value > standard_value else "looser")
+            )
+
+    if kind == "tolerance":
+        report_tolerance = _comparison_number(comparison.get("report_tolerance"))
+        standard_tolerance = _comparison_number(comparison.get("standard_tolerance"))
+        if status == "supported" and (report_value is None or standard_value is None):
+            issues.append("tolerance comparison requires separate nominal report and standard values")
+        if status == "supported" and (report_tolerance is None or standard_tolerance is None):
+            issues.append("tolerance comparison requires separate report and standard tolerances")
+        if (
+            status == "supported"
+            and not _standard_value_grounded_in_selected_evidence(
+                comparison,
+                [item for item in judgment.get("evidence") or [] if isinstance(item, dict)],
+            )
+        ):
+            issues.append(
+                "supported tolerance comparison nominal standard value is not grounded in selected evidence"
+            )
+        if (
+            report_value is not None
+            and standard_value is not None
+            and report_tolerance is not None
+            and standard_tolerance is not None
+            and comparable_units
+        ):
+            same_base = abs(report_value - standard_value) <= 1e-9
+            if not same_base:
+                computed = "different"
+            elif abs(report_tolerance - standard_tolerance) <= 1e-9:
+                computed = "equal"
+            elif report_tolerance < standard_tolerance:
+                computed = "stricter"
+            else:
+                computed = "looser"
+
+    compatible_conflicts = (
+        status == "mismatch"
+        and conclusion == "conflicts"
+        and computed in {"different", "looser"}
+        and relation in {"different", "looser"}
+    )
+    if computed and relation not in {computed, "unknown"} and not compatible_conflicts:
+        issues.append(
+            f"comparison relation '{relation}' disagrees with deterministic relation '{computed}'"
+        )
+    if computed in {"different", "looser"} and conclusion == "supports":
+        issues.append(f"comparison marks deterministic relation '{computed}' as supports")
+    if computed in {"equal", "stricter"} and conclusion == "conflicts":
+        issues.append(f"comparison marks deterministic relation '{computed}' as conflicts")
+    if status == "supported" and computed in {"different", "looser"}:
+        issues.append(
+            f"deterministic comparison relation '{computed}' conflicts with supported status"
+        )
+    return issues
+
+
+def _evidence_role_issues(judgment: dict[str, Any]) -> list[str]:
+    """Require value evidence instead of accepting a method clause as a value."""
+    status = str(judgment.get("status") or "").strip()
+    comparison = judgment.get("comparison")
+    if status not in {"supported", "mismatch"} or not isinstance(comparison, dict):
+        return []
+    kind = str(comparison.get("kind") or "").strip()
+    numeric_claim = kind in _COMPARISON_KINDS - {"text"}
+    if not numeric_claim:
+        return []
+    selected = [item for item in judgment.get("evidence") or [] if isinstance(item, dict)]
+    roles = {
+        str(role)
+        for item in selected
+        for role in (item.get("evidence_roles") or [])
+        if str(role)
+    }
+    issues: list[str] = []
+    if "nominal_rule" not in roles:
+        if roles and roles <= {"method_rule", "tolerance_rule", "applicability_rule"}:
+            issues.append(
+                "numeric nominal conclusion is supported only by method/tolerance/applicability evidence"
+            )
+        else:
+            issues.append("numeric nominal conclusion requires selected nominal_rule evidence")
+    if kind == "tolerance" and "tolerance_rule" not in roles:
+        issues.append("tolerance conclusion requires selected tolerance_rule evidence")
+    return issues
 
 
 def _normalize_profile_token(value: str) -> str:
@@ -911,8 +1151,15 @@ def _reason_status_conflict_issues(judgment: dict[str, Any]) -> list[str]:
             f"{'/'.join(conflicting_claims)} but status is '{status}'"
         )
 
-    has_supported = bool(_SUPPORTED_SIGNAL_RE.search(reason))
-    has_mismatch = bool(_MISMATCH_SIGNAL_RE.search(reason))
+    def has_unnegated_signal(pattern: re.Pattern[str]) -> bool:
+        negative = re.compile(r"(?:无法|不能|未|难以|缺少|不足以|是否)\S{0,8}$")
+        return any(
+            not negative.search(reason[max(0, match.start() - 20):match.start()])
+            for match in pattern.finditer(reason)
+        )
+
+    has_supported = has_unnegated_signal(_SUPPORTED_SIGNAL_RE)
+    has_mismatch = has_unnegated_signal(_MISMATCH_SIGNAL_RE)
     if status == "mismatch" and has_supported and not has_mismatch:
         issues.append("reason supports agreement but status is mismatch")
     if status == "supported" and has_mismatch and not has_supported:
@@ -930,6 +1177,8 @@ def _collect_judgment_consistency_issues(
 ) -> list[str]:
     """Program checks that warrant rejecting the judgment and re-running judge."""
     issues = _reason_status_conflict_issues(judgment)
+    issues.extend(_comparison_consistency_issues(judgment))
+    issues.extend(_evidence_role_issues(judgment))
     covered = _spurious_missing_context_fields(judgment, sample_profile)
     if covered:
         issues.append(
@@ -983,6 +1232,73 @@ def _validate_judgment(
     return judgment
 
 
+def _apply_deterministic_conflict(
+    judgment: dict[str, Any],
+    judge_input: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Apply only high-confidence conflicts produced from retrieved evidence."""
+    comparisons = [
+        item
+        for item in judge_input.get("deterministic_comparisons") or []
+        if isinstance(item, dict)
+        and item.get("source") == "generic_bound_table_claim"
+        and isinstance(item.get("trace"), dict)
+        and item.get("relation") == "different"
+        and item.get("conclusion") == "conflicts"
+    ]
+    by_key = {str(item.get("candidate_key") or ""): item for item in candidates}
+    binding = next(
+        (
+            item
+            for item in comparisons
+            if str(item.get("candidate_key") or "") in by_key
+        ),
+        None,
+    )
+    if binding is None:
+        return judgment
+    key = str(binding["candidate_key"])
+    source = str(binding.get("source") or "deterministic_binding")
+    previous = {
+        "status": judgment.get("status"),
+        "reason": judgment.get("reason"),
+        "evidence_candidate_keys": list(judgment.get("evidence_candidate_keys") or []),
+    }
+    deterministic = {
+        **judgment,
+        "status": "mismatch",
+        "reason": (
+            "确定性证据绑定发现报告名义值与适用标准值冲突："
+            f"{binding.get('report_value')} != {binding.get('standard_value')}"
+            f"（{source}）。"
+        ),
+        "evidence_candidate_keys": [key],
+        "missing_context_fields": [],
+        "comparison": {
+            "kind": str(binding.get("kind") or "exact"),
+            "report_value": str(binding.get("report_value") or ""),
+            "report_unit": "",
+            "report_operator": "eq",
+            "standard_value": str(binding.get("standard_value") or ""),
+            "standard_unit": "",
+            "standard_operator": "eq",
+            "report_tolerance": "",
+            "standard_tolerance": "",
+            "report_scope": "",
+            "standard_scope": "",
+            "relation": "different",
+            "conclusion": "conflicts",
+        },
+        "deterministic_judge": {
+            "applied": True,
+            "binding": binding,
+            "previous_judgment": previous,
+        },
+    }
+    return _validate_judgment(deterministic, candidates)
+
+
 def _run_audit_judge_with_consistency(
     *,
     judge_prompt: str,
@@ -996,6 +1312,7 @@ def _run_audit_judge_with_consistency(
         _call_model(judge_prompt, judge_input, model=judge_model),
         candidates,
     )
+    judgment = _apply_deterministic_conflict(judgment, judge_input, candidates)
     trace: dict[str, Any] = {
         "input": judge_input,
         "output": judgment,
@@ -1010,6 +1327,7 @@ def _run_audit_judge_with_consistency(
         "missing_context_fields": list(judgment.get("missing_context_fields") or []),
         "evidence_candidate_keys": list(judgment.get("evidence_candidate_keys") or []),
         "validation_issues": list(judgment.get("validation_issues") or []),
+        "comparison": judgment.get("comparison"),
     }
     feedback_input = {
         **judge_input,
@@ -1017,6 +1335,7 @@ def _run_audit_judge_with_consistency(
             "previous_judgment": previous,
             "issues": consistency_issues,
             "repair_instructions": [
+                "For numeric/count cases, repair comparison first; status must agree with its deterministic relation.",
                 "先前输出未通过程序一致性校验，请重新输出完整 JSON。",
                 "reason 必须与 status 一致；禁止误判/更正/改判等自我修正话术。",
                 "missing_context_fields 不得列入 sample_profile 已给出的信息"
@@ -1339,6 +1658,40 @@ def _resolve_judge_concurrency(
     return min(value, MAX_JUDGE_CONCURRENCY)
 
 
+def _sample_profile_with_recovery(
+    sample_profile: dict[str, Any],
+    recovered_parameters: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Add only sourced, previously missing report fields for the final Judge."""
+    updated = dict(sample_profile)
+    from_report = dict(
+        sample_profile.get("from_report")
+        if isinstance(sample_profile.get("from_report"), dict)
+        else {}
+    )
+    provenance = []
+    for item in recovered_parameters:
+        if not isinstance(item, dict) or str(item.get("status") or "") != "found":
+            continue
+        field = str(item.get("field") or item.get("key") or "").strip()
+        value = item.get("value")
+        if not field or value in (None, "") or from_report.get(field) not in (None, ""):
+            continue
+        from_report[field] = value
+        provenance.append(dict(item))
+    updated["from_report"] = from_report
+    if provenance:
+        updated["from_recovery"] = provenance
+    return updated
+
+
+def _recovery_candidate_summary(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Keep recovery state useful without pinning full retrieved chunks."""
+    compact = _compact_candidate(candidate)
+    compact["text"] = str(compact.get("text") or "")[:500]
+    return compact
+
+
 def _audit_one_case(
     unit: dict[str, Any],
     *,
@@ -1350,6 +1703,7 @@ def _audit_one_case(
     query_prompt: str,
     judge_prompt: str,
     judge_model: str,
+    evidence_compression_mode: str,
     profile: dict[str, Any],
     evidence_file_ids: list[str],
     top_k: int,
@@ -1363,10 +1717,19 @@ def _audit_one_case(
     aggregate_continuation_tables: bool,
     expand_references: bool,
     retrieval_lock: threading.Lock,
+    report_markdown: str = "",
+    recovery_mode: str = "off",
+    recovery_semaphore: threading.Semaphore | None = None,
 ) -> dict[str, Any]:
     """Run planner → retrieval → judge for one audit unit."""
     fresh = {"test_item": unit["test_item"], "requirement": unit["requirement"]}
-    gold_case = unit.get("gold_case")
+    sample_profile = dict(sample_profile)
+    deterministic_applicability = resolve_applicability(
+        sample_profile,
+        project_name=str(fresh["test_item"].get("project_name") or ""),
+        requirement_text=str(fresh["requirement"].get("requirement_text") or ""),
+    )
+    sample_profile["deterministic_applicability"] = deterministic_applicability
     from_report = (
         sample_profile.get("from_report")
         if isinstance(sample_profile.get("from_report"), dict)
@@ -1425,10 +1788,44 @@ def _audit_one_case(
             aggregate_continuation_tables=aggregate_continuation_tables,
             expand_references=expand_references,
         )
+    retrieval_debug["applicability_exact"] = {
+        "searched": False,
+        "added": 0,
+        "reason": "case-shaped fixed clause lookup removed",
+    }
+    annotate_candidates(candidates, deterministic_applicability)
     for rank, candidate in enumerate(candidates, start=1):
         candidate["candidate_key"] = f"c{rank:02d}"
-    judge_input = {
+    deterministic_applicability["candidate_evaluations"] = (
+        evaluate_candidate_applicability(candidates, deterministic_applicability)
+    )
+    deterministic_table_bindings = [
+        {
+            "candidate_key": candidate["candidate_key"],
+            "standard_no": str(
+                (candidate.get("business_metadata") or {}).get("standard_no") or ""
+            ),
+            "table_no": str(
+                (candidate.get("business_metadata") or {}).get("table_no") or ""
+            ),
+            "table_title": str(
+                (candidate.get("business_metadata") or {}).get("table_title") or ""
+            ),
+            "binding": candidate["table_row_binding"],
+        }
+        for candidate in candidates
+        if isinstance(candidate.get("table_row_binding"), dict)
+    ]
+    deterministic_comparisons = build_deterministic_comparisons(
+        runtime_case["reported_requirement"]["text"],
+        runtime_case["test_item"]["project_name"],
+        candidates,
+    )
+    raw_judge_input = {
         "sample_profile": sample_profile,
+        "deterministic_applicability": deterministic_applicability,
+        "deterministic_table_bindings": deterministic_table_bindings,
+        "deterministic_comparisons": deterministic_comparisons,
         "test_item": runtime_case["test_item"],
         "reported_requirement": runtime_case["reported_requirement"],
         "peer_report_context": peer_report_context,
@@ -1440,6 +1837,23 @@ def _audit_one_case(
         ),
         "candidates": [_compact_candidate(candidate) for candidate in candidates],
     }
+    judge_input = raw_judge_input
+    compression_trace: dict[str, Any] = {
+        "mode": evidence_compression_mode,
+        "applied": False,
+        "fallback": False,
+        "additional_model_calls": 0,
+    }
+    if evidence_compression_mode == "active":
+        judge_input, compression_trace = compress_judge_input(
+            judge_input,
+            candidates,
+            call_model=lambda prompt, payload: _call_model(
+                prompt,
+                payload,
+                model=judge_model,
+            ),
+        )
     judgment, judge_trace = _run_audit_judge_with_consistency(
         judge_prompt=judge_prompt,
         judge_input=judge_input,
@@ -1447,12 +1861,201 @@ def _audit_one_case(
         candidates=candidates,
         sample_profile=sample_profile,
     )
-    gold_hashes = {
-        evidence["locator"]["text_sha256"]
-        for evidence in gold_case["selected_evidence"]
-        if evidence["label"] == "direct_candidate"
-    } if gold_case is not None else set()
-    hit_hashes = {chunk_text_sha256(candidate["text"]) for candidate in candidates}
+    judge_trace["evidence_compression"] = compression_trace
+    provisional_judgment = dict(judgment)
+    recovery_decision = decide_recovery(
+        judgment=provisional_judgment,
+        retrieval_trace={
+            "output": {
+                **retrieval_debug,
+                "candidate_counts": {
+                    kind: sum(c["content_type"] == kind for c in candidates)
+                    for kind in ("table", "section")
+                },
+            }
+        },
+        sample_profile=sample_profile,
+    )
+    recovery_trace: dict[str, Any] | None = None
+    if (
+        recovery_mode in {"shadow", "active"}
+        and recovery_decision.get("action") == "agent_recovery"
+    ):
+        immutable_recovery_state = {
+            "case_id": unit["case_id"],
+            "assistant_id": profile.get("assistant_id"),
+            "assistant_version_id": profile.get("id"),
+            "allowed_file_ids": evidence_file_ids,
+            "test_item": runtime_case["test_item"],
+            "reported_requirement": runtime_case["reported_requirement"],
+            "sample_profile": sample_profile,
+            "initial_queries": queries,
+            "initial_candidates": [_recovery_candidate_summary(item) for item in candidates],
+            "provisional_judgment": provisional_judgment,
+            "recovery_decision": recovery_decision,
+        }
+        recovery_config = {
+            "top_k": top_k,
+            "route_top_k": route_top_k,
+            "candidate_count_per_type": candidates_per_type,
+            "final_table": final_table,
+            "final_section": final_section,
+            "special_route_reserve": special_route_reserve,
+            "rrf_k": rrf_k,
+            "similarity_threshold": similarity_threshold,
+            "aggregate_continuation_tables": aggregate_continuation_tables,
+            "expand_references": expand_references,
+        }
+        recovery_environment = RecoveryToolEnvironment(
+            report_markdown=report_markdown,
+            allowed_file_ids=evidence_file_ids,
+            requirement_text=runtime_case["reported_requirement"]["text"],
+            original_query=(
+                queries.get("semantic")
+                or queries.get("keyword")
+                or runtime_case["test_item"]["project_name"]
+            ),
+            model=judge_model,
+            retrieval_config=recovery_config,
+        )
+        initial_pool = {
+            "query": queries["production"],
+            "hits": candidates,
+            "candidate_count": len(candidates),
+            "degraded": retrieval_debug.get("degraded") or [],
+            "retrieval_mode": "initial_delivered_pool",
+        }
+
+        def _run_recovery() -> dict[str, Any]:
+            return run_recovery_agent(
+                immutable_state=immutable_recovery_state,
+                environment=recovery_environment,
+                initial_pool=initial_pool,
+                policy=AgentPolicy(
+                    max_turns=RECOVERY_MAX_TURNS,
+                    max_tool_calls=RECOVERY_MAX_TOOL_CALLS,
+                    max_search_calls=RECOVERY_MAX_SEARCH_CALLS,
+                    timeout_seconds=RECOVERY_TIMEOUT_SECONDS,
+                ),
+            )
+
+        if recovery_semaphore is None:
+            recovery_trace = _run_recovery()
+        else:
+            with recovery_semaphore:
+                recovery_trace = _run_recovery()
+
+        merged_retrieval = recovery_trace.get("merged_retrieval")
+        merged_hits = (
+            list(merged_retrieval.get("hits") or [])
+            if isinstance(merged_retrieval, dict)
+            else []
+        )
+        if merged_hits:
+            recovered_candidates = []
+            for rank, hit in enumerate(merged_hits, start=1):
+                metadata = hit.get("business_metadata") or {}
+                recovered_candidates.append({
+                    **hit,
+                    "candidate_key": f"r{rank:02d}",
+                    "content_type": str(
+                        metadata.get("content_type")
+                        or hit.get("content_type")
+                        or "section"
+                    ),
+                })
+            recovered_profile = _sample_profile_with_recovery(
+                sample_profile,
+                list(
+                    (recovery_trace.get("mutable_state") or {}).get(
+                        "recovered_parameters"
+                    )
+                    or []
+                ),
+            )
+            recovered_applicability = resolve_applicability(
+                recovered_profile,
+                project_name=str(runtime_case["test_item"].get("project_name") or ""),
+                requirement_text=str(runtime_case["reported_requirement"].get("text") or ""),
+            )
+            recovered_profile["deterministic_applicability"] = recovered_applicability
+            annotate_candidates(recovered_candidates, recovered_applicability)
+            recovered_applicability["candidate_evaluations"] = (
+                evaluate_candidate_applicability(
+                    recovered_candidates,
+                    recovered_applicability,
+                )
+            )
+            recovered_table_bindings = [
+                {
+                    "candidate_key": candidate["candidate_key"],
+                    "standard_no": str(
+                        (candidate.get("business_metadata") or {}).get("standard_no") or ""
+                    ),
+                    "table_no": str(
+                        (candidate.get("business_metadata") or {}).get("table_no") or ""
+                    ),
+                    "table_title": str(
+                        (candidate.get("business_metadata") or {}).get("table_title") or ""
+                    ),
+                    "binding": candidate["table_row_binding"],
+                }
+                for candidate in recovered_candidates
+                if isinstance(candidate.get("table_row_binding"), dict)
+            ]
+            recovered_deterministic_comparisons = build_deterministic_comparisons(
+                runtime_case["reported_requirement"]["text"],
+                runtime_case["test_item"]["project_name"],
+                recovered_candidates,
+            )
+            recovery_judge_input = {
+                **raw_judge_input,
+                "sample_profile": recovered_profile,
+                "deterministic_applicability": recovered_applicability,
+                "deterministic_table_bindings": recovered_table_bindings,
+                "deterministic_comparisons": recovered_deterministic_comparisons,
+                "candidates": [
+                    _compact_candidate(candidate)
+                    for candidate in recovered_candidates
+                ],
+                "recovery_context": {
+                    "decision": recovery_decision,
+                    "result": recovery_trace.get("result") or {},
+                },
+            }
+            recovery_compression_trace: dict[str, Any] = {
+                "mode": evidence_compression_mode,
+                "applied": False,
+                "fallback": False,
+                "additional_model_calls": 0,
+            }
+            if evidence_compression_mode == "active":
+                recovery_judge_input, recovery_compression_trace = compress_judge_input(
+                    recovery_judge_input,
+                    recovered_candidates,
+                    call_model=lambda prompt, payload: _call_model(
+                        prompt,
+                        payload,
+                        model=judge_model,
+                    ),
+                )
+            recovered_judgment, recovered_judge_trace = (
+                _run_audit_judge_with_consistency(
+                    judge_prompt=judge_prompt,
+                    judge_input=recovery_judge_input,
+                    judge_model=judge_model,
+                    candidates=recovered_candidates,
+                    sample_profile=recovered_profile,
+                )
+            )
+            recovered_judge_trace["evidence_compression"] = (
+                recovery_compression_trace
+            )
+            recovery_trace["shadow_judgment"] = recovered_judgment
+            recovery_trace["final_judge"] = recovered_judge_trace
+            recovery_trace["recovered_sample_profile"] = recovered_profile
+            if recovery_mode == "active":
+                judgment = recovered_judgment
     compact_candidates = [_compact_candidate(candidate) for candidate in candidates]
     entry: dict[str, Any] = {
         "case_id": unit["case_id"],
@@ -1464,6 +2067,9 @@ def _audit_one_case(
             kind: sum(c["content_type"] == kind for c in candidates)
             for kind in ("table", "section")
         },
+        "provisional_judgment": provisional_judgment,
+        "recovery_decision": recovery_decision,
+        "agent_recovery": recovery_trace,
         "judgment": judgment,
         "workflow_trace": {
             "query_planner": {
@@ -1499,19 +2105,6 @@ def _audit_one_case(
             "audit_judge": judge_trace,
         },
     }
-    if gold_case is not None:
-        entry["direct_gold_available"] = bool(gold_hashes)
-        entry["direct_gold_recalled"] = bool(gold_hashes & hit_hashes)
-        entry["workflow_trace"]["gold_comparison"] = {
-            "input": {
-                "direct_gold_text_sha256": sorted(gold_hashes),
-                "retrieved_text_sha256": sorted(hit_hashes),
-            },
-            "output": {
-                "direct_gold_available": bool(gold_hashes),
-                "direct_gold_recalled": bool(gold_hashes & hit_hashes),
-            },
-        }
     return entry
 
 
@@ -1528,6 +2121,23 @@ def main() -> None:
     parser.add_argument("--started-at", default="")
     parser.add_argument("--judge-model")
     parser.add_argument(
+        "--evidence-compression",
+        choices=("off", "active"),
+        default=str(
+            os.environ.get("AUDIT_EVIDENCE_COMPRESSION")
+            or PRODUCTION_EVIDENCE_COMPRESSION_MODE
+        ).strip().lower(),
+        help="validated LLM Evidence Cards before the fixed Judge",
+    )
+    parser.add_argument(
+        "--recovery-mode",
+        choices=("off", "shadow", "active"),
+        default=str(
+            os.environ.get("AUDIT_RECOVERY_MODE") or PRODUCTION_RECOVERY_MODE
+        ).strip().lower(),
+        help="conditional retrieval recovery: off, shadow comparison, or active final judgment",
+    )
+    parser.add_argument(
         "--judge-concurrency",
         type=int,
         default=None,
@@ -1537,11 +2147,6 @@ def main() -> None:
             f"else model_config.judge_concurrency, else {DEFAULT_JUDGE_CONCURRENCY}. "
             f"Capped at {MAX_JUDGE_CONCURRENCY}."
         ),
-    )
-    parser.add_argument(
-        "--case-pool",
-        action="store_true",
-        help="legacy evaluation mode: audit only frozen case-pool cases and compute gold recall",
     )
     args = parser.parse_args()
 
@@ -1645,10 +2250,7 @@ def main() -> None:
     checkpoint["sample_profile"] = sample_profile
     checkpoint_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    if args.case_pool:
-        units = _build_case_pool_units(extracted, report_id=args.report_id)
-    else:
-        units = _build_full_audit_units(extracted)
+    units = _build_full_audit_units(extracted)
     manual_knowledge_rules = _load_manual_knowledge_rules(
         db.resolve_assistant_manual_rules(
             args.assistant_id,
@@ -1667,6 +2269,7 @@ def main() -> None:
     ]
     state_lock = threading.Lock()
     retrieval_lock = threading.Lock()
+    recovery_semaphore = threading.Semaphore(2)
     _report_job_progress(
         job_id,
         stage="audit_cases",
@@ -1709,6 +2312,7 @@ def main() -> None:
             query_prompt=query_prompt,
             judge_prompt=judge_prompt,
             judge_model=judge_model,
+            evidence_compression_mode=args.evidence_compression,
             profile=profile,
             evidence_file_ids=evidence_file_ids,
             top_k=top_k,
@@ -1722,6 +2326,9 @@ def main() -> None:
             aggregate_continuation_tables=aggregate_continuation_tables,
             expand_references=expand_references,
             retrieval_lock=retrieval_lock,
+            report_markdown=markdown,
+            recovery_mode=args.recovery_mode,
+            recovery_semaphore=recovery_semaphore,
         )
         with state_lock:
             results.append(entry)
@@ -1771,10 +2378,49 @@ def main() -> None:
         case_total=total_units,
         message="正在写入审查结果…",
     )
+    recovery_rows = [
+        item for item in results if isinstance(item.get("agent_recovery"), dict)
+    ]
+    recovery_usage = [item["agent_recovery"].get("usage") or {} for item in recovery_rows]
+    failure_classes: dict[str, int] = {}
+    resolution_states: dict[str, int] = {}
+    for item in results:
+        decision = item.get("recovery_decision") or {}
+        failure_class = str(decision.get("failure_class") or "unknown")
+        resolution_state = str(decision.get("resolution_state") or "unknown")
+        failure_classes[failure_class] = failure_classes.get(failure_class, 0) + 1
+        resolution_states[resolution_state] = resolution_states.get(resolution_state, 0) + 1
+    recovery_summary = {
+        "mode": args.recovery_mode,
+        "failure_classes": dict(sorted(failure_classes.items())),
+        "resolution_states": dict(sorted(resolution_states.items())),
+        "eligible_cases": sum(
+            (item.get("recovery_decision") or {}).get("action") == "agent_recovery"
+            for item in results
+        ),
+        "activated_cases": len(recovery_rows),
+        "shadow_judged_cases": sum(
+            isinstance(item["agent_recovery"].get("shadow_judgment"), dict)
+            for item in recovery_rows
+        ),
+        "shadow_status_changes": sum(
+            (item.get("provisional_judgment") or {}).get("status")
+            != (item["agent_recovery"].get("shadow_judgment") or {}).get("status")
+            for item in recovery_rows
+            if isinstance(item["agent_recovery"].get("shadow_judgment"), dict)
+        ),
+        "turns": sum(int(usage.get("turns") or 0) for usage in recovery_usage),
+        "tool_calls": sum(int(usage.get("tool_calls") or 0) for usage in recovery_usage),
+        "search_calls": sum(int(usage.get("search_calls") or 0) for usage in recovery_usage),
+        "elapsed_seconds": round(
+            sum(float(usage.get("elapsed_seconds") or 0.0) for usage in recovery_usage),
+            3,
+        ),
+    }
     output = {
         "version": 1,
-        "scope": "read_only_case_pool_trial" if args.case_pool else "full_report_audit",
-        "audit_mode": "case_pool" if args.case_pool else "full_report",
+        "scope": "full_report_audit",
+        "audit_mode": "full_report",
         "database_writes": False,
         "report": str(args.report),
         "naming_rule": str(args.naming_rule),
@@ -1834,6 +2480,25 @@ def main() -> None:
                 "scoped_file_count": len(evidence_file_ids),
                 "planner_routes_enabled": True,
             },
+            "recovery_config": {
+                "mode": args.recovery_mode,
+                "provider": "deepseek",
+                "model": judge_model,
+                "thinking": "disabled",
+                "max_turns": RECOVERY_MAX_TURNS,
+                "max_tool_calls": RECOVERY_MAX_TOOL_CALLS,
+                "max_search_calls": RECOVERY_MAX_SEARCH_CALLS,
+                "timeout_seconds": RECOVERY_TIMEOUT_SECONDS,
+                "concurrency": 2,
+            },
+            "evidence_compression_config": {
+                "mode": args.evidence_compression,
+                "provider": "deepseek",
+                "model": judge_model,
+                "thinking": "disabled",
+                "max_cards": 5,
+                "fallback": "full_candidates",
+            },
             "prompts": {
                 key: dict(value)
                 for key, value in profile["node_prompts"].items()
@@ -1873,17 +2538,10 @@ def main() -> None:
         "sample_profile": sample_profile,
         "extraction_summary": {"items": len(extracted["items"]), "requirements": sum(len(item["requirements"]) for item in extracted["items"])},
         "summary": {
-            "mode": "case_pool" if args.case_pool else "full_report",
+            "mode": "full_report",
             "cases": len(results),
-            **(
-                {
-                    "direct_gold_cases": sum(bool(item.get("direct_gold_available")) for item in results),
-                    "direct_gold_recalled": sum(bool(item.get("direct_gold_recalled")) for item in results),
-                }
-                if args.case_pool
-                else {}
-            ),
             "judgments": {status: sum(item["judgment"].get("status") == status for item in results) for status in JUDGE_STATUSES},
+            "recovery": recovery_summary,
         },
         "cases": results,
     }
