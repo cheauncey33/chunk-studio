@@ -759,6 +759,31 @@ export const api = {
         degraded: string[]
       }
     }>),
+  agentChatAssistant: (
+    id: string,
+    body: { message: string; conversation_id?: string },
+  ) =>
+    fetch(`${API}/assistants/${id}/agent-chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<{
+      conversation_id: string
+      answer: string
+      citations: Array<{
+        chunk_id?: string
+        file_id?: string
+        file_name?: string
+        page?: number | null
+        score?: number | null
+        snippet?: string
+      }>
+      charts: BusinessChart[]
+      model: string
+      stop_reason: string
+      turns: number
+      tool_calls: number
+    }>),
 
   listFiles: () => fetch(`${API}/files`).then(j<CSFile[]>),
   getFile: (id: string) => fetch(`${API}/files/${id}`).then(j<CSFile>),

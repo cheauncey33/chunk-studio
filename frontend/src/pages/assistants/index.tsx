@@ -17,6 +17,7 @@ import {
 import { toast } from 'sonner'
 import {
   api,
+  type BusinessChart,
   type AssistantVersion,
   type AuditAssistant,
   type KnowledgeBase,
@@ -56,6 +57,7 @@ import {
 } from '@/lib/step-rules'
 
 const RAGFLOW_TEAL = '#13c2c2'
+const INLINE_CHART_COLORS = ['#13c2c2', '#ef4444', '#f59e0b', '#6366f1', '#22c55e']
 
 const FLOW_STEPS = [
   { id: 'report_parameters', label: '提取报告参数', kind: 'AI' },
@@ -70,6 +72,57 @@ const FLOW_STEPS = [
 type FlowStepId = (typeof FLOW_STEPS)[number]['id']
 type MainTab = 'chat' | 'workflow'
 type ManualRuleDraft = NonNullable<ManualKnowledgeRules['rules']>[number]
+
+function InlineChart({ chart }: { chart: BusinessChart }) {
+  if (chart.type === 'metric') {
+    return <div className="mt-3 text-3xl font-bold text-[#0f766e]">{String(chart.value ?? '—')}</div>
+  }
+  const denominator = chart.type === 'pie'
+    ? chart.denominator
+    : chart.data.reduce((total, item) => total + item.value, 0)
+  if (chart.type === 'pie') {
+    let cursor = 0
+    const background = denominator
+      ? `conic-gradient(${chart.data.map((item, index) => {
+          const start = cursor
+          cursor += (item.value / denominator) * 100
+          return `${INLINE_CHART_COLORS[index % INLINE_CHART_COLORS.length]} ${start}% ${cursor}%`
+        }).join(',')})`
+      : '#e5e7eb'
+    return (
+      <div className="mt-3 flex flex-wrap items-center gap-4">
+        <div className="relative size-24 rounded-full" style={{ background }}>
+          <div className="absolute inset-5 grid place-items-center rounded-full bg-white text-xs font-semibold">
+            {denominator}
+          </div>
+        </div>
+        <div className="grid gap-1 text-xs text-[#6b7280]">
+          {chart.data.map((item, index) => (
+            <div className="flex items-center gap-1.5" key={item.label}>
+              <span className="size-2 rounded-full" style={{ backgroundColor: INLINE_CHART_COLORS[index % INLINE_CHART_COLORS.length] }} />
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+  const maximum = Math.max(1, ...chart.data.map(item => item.value))
+  return (
+    <div className="mt-3 grid gap-1.5">
+      {chart.data.map((item, index) => (
+        <div className="grid grid-cols-[5rem_1fr_2rem] items-center gap-2 text-xs" key={item.label}>
+          <span className="truncate text-[#6b7280]">{item.label}</span>
+          <div className="h-2 overflow-hidden rounded-full bg-[#e5e7eb]">
+            <div className="h-full rounded-full" style={{ width: `${(item.value / maximum) * 100}%`, backgroundColor: INLINE_CHART_COLORS[index % INLINE_CHART_COLORS.length] }} />
+          </div>
+          <strong className="text-right">{item.value}</strong>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 function normalizeManualRuleDrafts(payload: ManualKnowledgeRules | null | undefined): ManualRuleDraft[] {
   const rules = Array.isArray(payload?.rules) ? payload.rules : []
@@ -328,6 +381,7 @@ export function AssistantSettings({
   const [pendingInitialization, setPendingInitialization] = useState(false)
   const [chatInput, setChatInput] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
+  const [conversationId, setConversationId] = useState<string | null>(null)
   const [messages, setMessages] = useState<
     Array<{
       id: string
@@ -339,8 +393,14 @@ export function AssistantSettings({
         score?: number | null
         snippet?: string
       }>
+      charts?: BusinessChart[]
     }>
   >([])
+
+  useEffect(() => {
+    setConversationId(null)
+    setMessages([])
+  }, [assistant.id])
 
   useEffect(() => {
     setMainTab(initialTab)
@@ -682,13 +742,16 @@ export function AssistantSettings({
       toast.error('请先在右侧绑定知识库并保存')
       return
     }
-    const history = messages.map(item => ({ role: item.role, content: item.content }))
     const userMsg = { id: `u_${Date.now()}`, role: 'user' as const, content: text }
     setMessages(prev => [...prev, userMsg])
     setChatInput('')
     setChatBusy(true)
     try {
-      const result = await api.chatAssistant(assistant.id, { message: text, history })
+      const result = await api.agentChatAssistant(assistant.id, {
+        message: text,
+        ...(conversationId ? { conversation_id: conversationId } : {}),
+      })
+      setConversationId(result.conversation_id)
       setMessages(prev => [
         ...prev,
         {
@@ -696,6 +759,7 @@ export function AssistantSettings({
           role: 'assistant',
           content: result.answer || '（空回复）',
           citations: result.citations,
+          charts: result.charts,
         },
       ])
     } catch (err) {
@@ -843,6 +907,9 @@ export function AssistantSettings({
                         ))}
                       </div>
                     )}
+                    {item.role === 'assistant' && item.charts?.map((chart, index) => (
+                      <InlineChart chart={chart} key={`${item.id}-chart-${index}`} />
+                    ))}
                   </div>
                 </div>
               ))}
