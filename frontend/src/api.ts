@@ -31,6 +31,42 @@ export interface BusinessQueryResult {
   chart: BusinessChart | null
 }
 
+export interface AgentCitation {
+  chunk_id?: string
+  file_id?: string
+  file_name?: string
+  page?: number | null
+  score?: number | null
+  snippet?: string
+}
+
+export interface AgentConversation {
+  id: string
+  assistant_id: string
+  title: string
+  summary: string
+  summary_version: number
+  summary_sequence: number
+  created_at: string
+  updated_at: string
+}
+
+export interface AgentChatResponse {
+  conversation_id: string
+  answer: string
+  citations: AgentCitation[]
+  charts: BusinessChart[]
+  model: string
+  stop_reason: string
+  turns: number
+  tool_calls: number
+}
+
+export interface AgentStreamEvent {
+  event: string
+  data: Record<string, unknown>
+}
+
 export interface CSFile {
   id: string
   name: string
@@ -767,23 +803,55 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }).then(j<{
-      conversation_id: string
-      answer: string
-      citations: Array<{
-        chunk_id?: string
-        file_id?: string
-        file_name?: string
-        page?: number | null
-        score?: number | null
-        snippet?: string
+    }).then(j<AgentChatResponse>),
+  listAgentConversations: (id: string) =>
+    fetch(`${API}/assistants/${id}/conversations`).then(j<{ items: AgentConversation[] }>),
+  getAgentConversation: (assistantId: string, conversationId: string) =>
+    fetch(`${API}/assistants/${assistantId}/conversations/${conversationId}`).then(j<AgentConversation & {
+      events: Array<{
+        event_type: string
+        payload: Record<string, unknown>
+        sequence: number
       }>
-      charts: BusinessChart[]
-      model: string
-      stop_reason: string
-      turns: number
-      tool_calls: number
     }>),
+  streamAgentChatAssistant: async function* (
+    id: string,
+    body: { message: string; conversation_id?: string },
+  ): AsyncGenerator<AgentStreamEvent> {
+    const response = await fetch(`${API}/assistants/${id}/agent-chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(body),
+    })
+    if (!response.ok) {
+      const text = await response.text().catch(() => response.statusText)
+      throw new Error(`${response.status} ${text}`)
+    }
+    if (!response.body) throw new Error('SSE response body is unavailable')
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+      const blocks = buffer.split('\n\n')
+      buffer = blocks.pop() || ''
+      for (const block of blocks) {
+        const eventLine = block.split('\n').find(line => line.startsWith('event:'))
+        const dataLine = block.split('\n').find(line => line.startsWith('data:'))
+        if (!dataLine) continue
+        let data: Record<string, unknown>
+        try {
+          const parsed: unknown = JSON.parse(dataLine.slice(5).trim())
+          data = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+        } catch {
+          continue
+        }
+        yield { event: eventLine?.slice(6).trim() || 'message', data }
+      }
+      if (done) break
+    }
+  },
 
   listFiles: () => fetch(`${API}/files`).then(j<CSFile[]>),
   getFile: (id: string) => fetch(`${API}/files/${id}`).then(j<CSFile>),

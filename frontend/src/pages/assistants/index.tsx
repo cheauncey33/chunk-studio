@@ -17,6 +17,9 @@ import {
 import { toast } from 'sonner'
 import {
   api,
+  type AgentChatResponse,
+  type AgentCitation,
+  type AgentConversation,
   type BusinessChart,
   type AssistantVersion,
   type AuditAssistant,
@@ -72,6 +75,45 @@ const FLOW_STEPS = [
 type FlowStepId = (typeof FLOW_STEPS)[number]['id']
 type MainTab = 'chat' | 'workflow'
 type ManualRuleDraft = NonNullable<ManualKnowledgeRules['rules']>[number]
+type AssistantChatMessage = {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  citations?: AgentCitation[]
+  charts?: BusinessChart[]
+}
+
+function messagesFromConversation(
+  events: Array<{ event_type: string; payload: Record<string, unknown>; sequence: number }>,
+): AssistantChatMessage[] {
+  const messages: AssistantChatMessage[] = []
+  for (const event of events) {
+    if (event.event_type === 'user_message') {
+      const content = typeof event.payload.content === 'string' ? event.payload.content : ''
+      if (content) messages.push({ id: `history-u-${event.sequence}`, role: 'user', content })
+      continue
+    }
+    if (event.event_type !== 'assistant_message') continue
+    const raw = event.payload.message
+    if (!raw || typeof raw !== 'object') continue
+    const message = raw as Record<string, unknown>
+    const content = typeof message.content === 'string' ? message.content : ''
+    const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : []
+    if (!content && toolCalls.length > 0) continue
+    messages.push({
+      id: `history-a-${event.sequence}`,
+      role: 'assistant',
+      content: content || '（空回复）',
+      citations: Array.isArray(event.payload.citations)
+        ? event.payload.citations as AgentCitation[]
+        : undefined,
+      charts: Array.isArray(event.payload.charts)
+        ? event.payload.charts as BusinessChart[]
+        : undefined,
+    })
+  }
+  return messages
+}
 
 function InlineChart({ chart }: { chart: BusinessChart }) {
   if (chart.type === 'metric') {
@@ -381,25 +423,26 @@ export function AssistantSettings({
   const [pendingInitialization, setPendingInitialization] = useState(false)
   const [chatInput, setChatInput] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
+  const [chatStatus, setChatStatus] = useState('')
   const [conversationId, setConversationId] = useState<string | null>(null)
-  const [messages, setMessages] = useState<
-    Array<{
-      id: string
-      role: 'user' | 'assistant'
-      content: string
-      citations?: Array<{
-        file_name?: string
-        page?: number | null
-        score?: number | null
-        snippet?: string
-      }>
-      charts?: BusinessChart[]
-    }>
-  >([])
+  const [conversationItems, setConversationItems] = useState<AgentConversation[]>([])
+  const [messages, setMessages] = useState<AssistantChatMessage[]>([])
 
   useEffect(() => {
     setConversationId(null)
     setMessages([])
+    setConversationItems([])
+    let active = true
+    void api.listAgentConversations(assistant.id)
+      .then(result => {
+        if (active) setConversationItems(result.items)
+      })
+      .catch(() => {
+        if (active) setConversationItems([])
+      })
+    return () => {
+      active = false
+    }
   }, [assistant.id])
 
   useEffect(() => {
@@ -735,6 +778,32 @@ export function AssistantSettings({
     if (navigationBlocker.state === 'blocked') navigationBlocker.proceed()
   }
 
+  const refreshConversations = async () => {
+    const result = await api.listAgentConversations(assistant.id)
+    setConversationItems(result.items)
+  }
+
+  const startNewChat = () => {
+    if (chatBusy) return
+    setConversationId(null)
+    setMessages([])
+    setChatStatus('')
+  }
+
+  const openConversation = async (id: string) => {
+    if (chatBusy || id === conversationId) return
+    setChatBusy(true)
+    try {
+      const conversation = await api.getAgentConversation(assistant.id, id)
+      setConversationId(id)
+      setMessages(messagesFromConversation(conversation.events))
+    } catch (err) {
+      toast.error((err as Error).message)
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
   const sendChat = async () => {
     const text = chatInput.trim()
     if (!text || chatBusy) return
@@ -743,31 +812,74 @@ export function AssistantSettings({
       return
     }
     const userMsg = { id: `u_${Date.now()}`, role: 'user' as const, content: text }
-    setMessages(prev => [...prev, userMsg])
+    const assistantMsgId = `a_${Date.now()}`
+    setMessages(prev => [
+      ...prev,
+      userMsg,
+      { id: assistantMsgId, role: 'assistant', content: '' },
+    ])
     setChatInput('')
     setChatBusy(true)
+    setChatStatus('连接 Agent 中…')
     try {
-      const result = await api.agentChatAssistant(assistant.id, {
+      for await (const event of api.streamAgentChatAssistant(assistant.id, {
         message: text,
         ...(conversationId ? { conversation_id: conversationId } : {}),
-      })
-      setConversationId(result.conversation_id)
-      setMessages(prev => [
-        ...prev,
-        {
-          id: `a_${Date.now()}`,
-          role: 'assistant',
-          content: result.answer || '（空回复）',
-          citations: result.citations,
-          charts: result.charts,
-        },
-      ])
+      })) {
+        if (event.event === 'conversation') {
+          if (typeof event.data.conversation_id === 'string') {
+            setConversationId(event.data.conversation_id)
+          }
+          continue
+        }
+        if (event.event === 'agent') {
+          const type = String(event.data.type || '')
+          if (type === 'tool_call') {
+            setChatStatus(`正在调用 ${String(event.data.name || '工具')}…`)
+          } else if (type === 'tool_result') {
+            setChatStatus('工具返回，正在整理回答…')
+          } else if (type === 'turn_started') {
+            setChatStatus('正在生成回答…')
+          } else if (type === 'assistant_message') {
+            const message = event.data.message
+            if (message && typeof message === 'object') {
+              const content = (message as Record<string, unknown>).content
+              if (typeof content === 'string' && content) {
+                setMessages(prev => prev.map(item => (
+                  item.id === assistantMsgId ? { ...item, content } : item
+                )))
+              }
+            }
+          }
+          continue
+        }
+        if (event.event === 'final') {
+          const result = event.data as unknown as AgentChatResponse
+          setConversationId(result.conversation_id)
+          setMessages(prev => prev.map(item => (
+            item.id === assistantMsgId
+              ? {
+                  ...item,
+                  content: result.answer || '（空回复）',
+                  citations: result.citations,
+                  charts: result.charts,
+                }
+              : item
+          )))
+          await refreshConversations()
+          continue
+        }
+        if (event.event === 'error') {
+          throw new Error(String(event.data.error || 'Agent stream failed'))
+        }
+      }
     } catch (err) {
       toast.error((err as Error).message)
-      setMessages(prev => prev.filter(item => item.id !== userMsg.id))
+      setMessages(prev => prev.filter(item => item.id !== userMsg.id && item.id !== assistantMsgId))
       setChatInput(text)
     } finally {
       setChatBusy(false)
+      setChatStatus('')
     }
   }
 
@@ -870,9 +982,48 @@ export function AssistantSettings({
         )}
 
         {mainTab === 'chat' ? (
-        <div className="mx-auto flex w-full max-w-3xl min-h-0 flex-1 flex-col px-6 py-5">
+        <div className="mx-auto flex w-full max-w-5xl min-h-0 flex-1 flex-col px-6 py-5">
+          <div className="mb-3 flex min-h-10 items-center gap-2 overflow-hidden">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="shrink-0 rounded-lg"
+              disabled={chatBusy}
+              onClick={startNewChat}
+            >
+              <Plus className="size-4" />
+              新对话
+            </Button>
+            <div className="flex min-w-0 gap-2 overflow-x-auto pb-1">
+              {conversationItems.map((item, index) => (
+                <button
+                  type="button"
+                  key={item.id}
+                  disabled={chatBusy}
+                  onClick={() => void openConversation(item.id)}
+                  className={cn(
+                    'max-w-52 shrink-0 rounded-lg border px-3 py-1.5 text-left text-xs transition',
+                    item.id === conversationId
+                      ? 'border-[#111827] bg-[#111827] text-white'
+                      : 'border-[#e5e7eb] bg-white text-[#4b5563] hover:border-[#9ca3af]',
+                  )}
+                  title={item.title}
+                >
+                  <span className="block truncate">{item.title || `对话 ${index + 1}`}</span>
+                  <span className="block text-[10px] opacity-70">{item.updated_at.slice(0, 10)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm">
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
+              {chatBusy && chatStatus && (
+                <div className="flex items-center gap-2 text-xs text-[#6b7280]">
+                  <Loader2 className="size-3 animate-spin" />
+                  {chatStatus}
+                </div>
+              )}
               {!messages.length && (
                 <div className="flex h-full min-h-[16rem] flex-col items-center justify-center gap-2 px-6 text-center">
                   <Bot className="size-10 text-[#9ca3af]" />
@@ -914,7 +1065,7 @@ export function AssistantSettings({
                 </div>
               ))}
               {chatBusy && (
-                <div className="flex items-center gap-2 text-[15px] text-[#6b7280]">
+                <div className="hidden flex items-center gap-2 text-[15px] text-[#6b7280]">
                   <Loader2 className="size-4 animate-spin" />
                   检索并回答中…
                 </div>
