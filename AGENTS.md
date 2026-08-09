@@ -18,7 +18,7 @@ uv sync
 $env:PYTHONPATH='backend'; uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 uv run --with pytest pytest -q
 $env:PYTHONPATH='backend'; uv run python scripts/audit_chunk_quality.py
-uv run python scripts/validate_audit_eval.py
+$env:PYTHONPATH='backend'; uv run python scripts/validate_test_set.py
 ```
 
 For the frontend:

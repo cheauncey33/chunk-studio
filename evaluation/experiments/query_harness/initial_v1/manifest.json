@@ -1,0 +1,23 @@
+{
+  "prompt_version": "query_harness_v1",
+  "generated_at": "2026-07-30T09:19:00.289085+00:00",
+  "model": {
+    "provider": "deepseek",
+    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-v4-flash",
+    "temperature": 0,
+    "response_format": "json_object",
+    "thinking": "disabled"
+  },
+  "strategies": [
+    "raw_anchor",
+    "declarative_requirement",
+    "interrogative_requirement",
+    "reverse_verification",
+    "parameter_declarative",
+    "parameter_interrogative",
+    "numeric_table_exploration",
+    "condition_section_exploration"
+  ],
+  "cases": 33
+}

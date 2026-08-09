@@ -1,0 +1,201 @@
+{
+  "A_baseline4_reverse_parameter": {
+    "routes": [
+      "semantic",
+      "keyword",
+      "table_target",
+      "section_target",
+      "reverse_verification",
+      "parameter_declarative"
+    ],
+    "summary": {
+      "1": {
+        "strict_hits": 7,
+        "strict_recall": 0.21212121212121213,
+        "group_recall": 0.2222222222222222,
+        "mrr": 0.30303030303030304
+      },
+      "3": {
+        "strict_hits": 19,
+        "strict_recall": 0.5757575757575758,
+        "group_recall": 0.5833333333333334,
+        "mrr": 0.45454545454545453
+      },
+      "5": {
+        "strict_hits": 25,
+        "strict_recall": 0.7575757575757576,
+        "group_recall": 0.75,
+        "mrr": 0.4984848484848485
+      },
+      "10": {
+        "strict_hits": 26,
+        "strict_recall": 0.7878787878787878,
+        "group_recall": 0.8055555555555556,
+        "mrr": 0.5015151515151516
+      },
+      "20": {
+        "strict_hits": 33,
+        "strict_recall": 1.0,
+        "group_recall": 1.0,
+        "mrr": 0.5094888276706458
+      }
+    }
+  },
+  "B_semantic_keyword_reverse_parameter": {
+    "routes": [
+      "semantic",
+      "keyword",
+      "reverse_verification",
+      "parameter_declarative"
+    ],
+    "summary": {
+      "1": {
+        "strict_hits": 7,
+        "strict_recall": 0.21212121212121213,
+        "group_recall": 0.2222222222222222,
+        "mrr": 0.3333333333333333
+      },
+      "3": {
+        "strict_hits": 20,
+        "strict_recall": 0.6060606060606061,
+        "group_recall": 0.6111111111111112,
+        "mrr": 0.48989898989898994
+      },
+      "5": {
+        "strict_hits": 25,
+        "strict_recall": 0.7575757575757576,
+        "group_recall": 0.75,
+        "mrr": 0.5262626262626263
+      },
+      "10": {
+        "strict_hits": 26,
+        "strict_recall": 0.7878787878787878,
+        "group_recall": 0.7777777777777778,
+        "mrr": 0.5305916305916306
+      },
+      "20": {
+        "strict_hits": 33,
+        "strict_recall": 1.0,
+        "group_recall": 1.0,
+        "mrr": 0.5398187374123202
+      }
+    }
+  },
+  "C_keyword_reverse_parameter": {
+    "routes": [
+      "keyword",
+      "reverse_verification",
+      "parameter_declarative"
+    ],
+    "summary": {
+      "1": {
+        "strict_hits": 7,
+        "strict_recall": 0.21212121212121213,
+        "group_recall": 0.2222222222222222,
+        "mrr": 0.3333333333333333
+      },
+      "3": {
+        "strict_hits": 20,
+        "strict_recall": 0.6060606060606061,
+        "group_recall": 0.6111111111111112,
+        "mrr": 0.4949494949494949
+      },
+      "5": {
+        "strict_hits": 25,
+        "strict_recall": 0.7575757575757576,
+        "group_recall": 0.75,
+        "mrr": 0.5313131313131314
+      },
+      "10": {
+        "strict_hits": 26,
+        "strict_recall": 0.7878787878787878,
+        "group_recall": 0.7777777777777778,
+        "mrr": 0.5343434343434343
+      },
+      "20": {
+        "strict_hits": 32,
+        "strict_recall": 0.9696969696969697,
+        "group_recall": 0.9722222222222222,
+        "mrr": 0.541643709825528
+      }
+    }
+  },
+  "D_semantic_keyword_reverse": {
+    "routes": [
+      "semantic",
+      "keyword",
+      "reverse_verification"
+    ],
+    "summary": {
+      "1": {
+        "strict_hits": 8,
+        "strict_recall": 0.24242424242424243,
+        "group_recall": 0.25,
+        "mrr": 0.3333333333333333
+      },
+      "3": {
+        "strict_hits": 20,
+        "strict_recall": 0.6060606060606061,
+        "group_recall": 0.6111111111111112,
+        "mrr": 0.5
+      },
+      "5": {
+        "strict_hits": 25,
+        "strict_recall": 0.7575757575757576,
+        "group_recall": 0.75,
+        "mrr": 0.5363636363636364
+      },
+      "10": {
+        "strict_hits": 27,
+        "strict_recall": 0.8181818181818182,
+        "group_recall": 0.8333333333333334,
+        "mrr": 0.5444444444444444
+      },
+      "20": {
+        "strict_hits": 33,
+        "strict_recall": 1.0,
+        "group_recall": 1.0,
+        "mrr": 0.5517447199265381
+      }
+    }
+  },
+  "E_semantic_keyword_parameter": {
+    "routes": [
+      "semantic",
+      "keyword",
+      "parameter_declarative"
+    ],
+    "summary": {
+      "1": {
+        "strict_hits": 8,
+        "strict_recall": 0.24242424242424243,
+        "group_recall": 0.25,
+        "mrr": 0.3333333333333333
+      },
+      "3": {
+        "strict_hits": 20,
+        "strict_recall": 0.6060606060606061,
+        "group_recall": 0.6111111111111112,
+        "mrr": 0.48484848484848486
+      },
+      "5": {
+        "strict_hits": 26,
+        "strict_recall": 0.7878787878787878,
+        "group_recall": 0.7777777777777778,
+        "mrr": 0.5212121212121212
+      },
+      "10": {
+        "strict_hits": 26,
+        "strict_recall": 0.7878787878787878,
+        "group_recall": 0.7777777777777778,
+        "mrr": 0.5245791245791246
+      },
+      "20": {
+        "strict_hits": 33,
+        "strict_recall": 1.0,
+        "group_recall": 1.0,
+        "mrr": 0.5337233894052076
+      }
+    }
+  }
+}

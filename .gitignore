@@ -24,3 +24,12 @@ frontend/dist/
 batch_results.json
 batch_vl_results.csv
 batch_vl_results.json
+
+# Local audit/test command captures (regenerable)
+.audit_*.txt
+.audit_*.json
+.codex_*_audit_*.txt
+.pytest_*.txt
+.shell_*.txt
+.tmp_hbjc_job.json
+.tmp_pytest_out.txt

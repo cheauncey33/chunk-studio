@@ -31,7 +31,7 @@ from app import chunk_schema, db, embeddings  # noqa: E402
 from app.evidence_locator import chunk_text_sha256  # noqa: E402
 
 
-DEFAULT_GROUND_TRUTH = ROOT / "evaluation" / "retrieval_ground_truth_v2_draft.json"
+DEFAULT_GROUND_TRUTH = ROOT / "evaluation" / "test_set.json"
 DEFAULT_QUERIES = (
     ROOT
     / "evaluation"

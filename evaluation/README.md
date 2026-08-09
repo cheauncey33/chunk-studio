@@ -1,146 +1,28 @@
-# Standard Value Audit Evaluation
+# Retrieval Evaluation
 
-`standard_value_audit_v1.json` is a domain-review draft for four transformer audit projects: induced withstand voltage, applied withstand voltage, no-load loss, and load loss.
+This directory intentionally has one editable retrieval benchmark and one immutable historical baseline.
 
-## Contracts
+- `test_set.json`: the 40-case evidence-group test set. It has 33 answerable candidates, but every case remains pending qualified domain review. Its reported scoreable denominator is therefore **0**.
+- `frozen/retrieval_eval_v1_candidate_2026-07-13/`: immutable candidate-gold baseline snapshot. It is retained only for historical, relative-policy comparison and must not be presented as domain-approved accuracy.
+- `FINAL_EXPERIMENT_SUMMARY.md`: the sole retained interpretation of the frozen experiments.
 
-- `backend/schemas/standard_value_audit_card.schema.json` defines one report rule plus report, sample, test, and source context.
-- `backend/schemas/standard_value_audit_result.schema.json` separates basis completeness, audit status, error types, adopted evidence, and human review.
-
-`basis_assessment.status` and `audit_assessment.status` are independent. For example, a rule can be `supported` by available standards while its scope remains `available_bases_only` because a declared tender specification is missing.
-
-## Cases
-
-The 12 cases contain eight report-derived cases, two counterfactual wrong-value cases, and two context-ablation cases. They are executable gold drafts, not expert-approved production truth. `gold_status` must remain `draft_pending_domain_review` until a qualified reviewer confirms the applicability and normalized rules.
-
-Evidence never stores a chunk UUID. A locator combines standard number, content type, section or table number, page range, and a SHA-256 of whitespace-normalized chunk text. Rebuilding unchanged parses resolves the same evidence; changed text intentionally fails validation and requires gold review.
-
-## Retrieval seed experiment
-
-`prompts/report_test_item_extraction_v1.md` defines the shared extraction
-contract used on HBJC, EZC, WHC, and XYC. The model outputs remain runtime
-reports; `report_test_item_extraction_review_v1.json` records item counts,
-initial/repeat coverage, and source-quality exceptions without storing measured
-results.
-
-`retrieval_case_pool_v1.json` is a stratified 40-case pool with 10 reported
-requirements per report. HBJC is development, EZC validation, and WHC plus XYC
-test. Every case remains `candidate_pending_evidence_review`; the pool is not a
-retrieval gold set until standard evidence locators are confirmed.
-
-`retrieval_evidence_candidates_v1.json` contains the typed Top-20 candidate
-review for all 40 cases. A first-pass `qwen3.6-27b` judge is followed by an
-adversarial downgrade/reject pass and explicit main-review overrides. Selected
-evidence uses stable locators only; non-verbatim model quotes are cleared. The
-file remains pending domain review and must not be treated as final gold.
-
-`retrieval_gold_candidates_v1.json` extends that review with leakage-isolated
-gold-discovery queries and exact corpus inspection. It resolves every stored
-locator uniquely and currently has direct evidence for 38 of 40 cases. The two
-remaining cases depend on report attributes not yet confirmed by the extraction
-schema: oil-tank construction for the 70% residual-pressure rule and winding
-construction for the 2% reactance-change rule. They intentionally remain
-uncertain instead of being forced into gold. Gold-discovery queries are never
-valid evaluated retrieval inputs.
-
-`retrieval_ground_truth_v2_draft.json` is the review contract that should replace
-the flat `direct_candidate` metric after domain approval. Every detection
-requirement has required evidence groups: all groups are AND-required, while
-exact chunk locators inside one group are OR-equivalent alternatives. It also
-defines a secondary lenient-relevance profile where any direct or supporting
-chunk is a hit. This diagnoses candidate generation but cannot replace the
-primary strict-answer metric, which requires all evidence groups. Uncertain
-candidates never count in either profile. The four total-loss requirements handled by the
-deterministic report prefilter are excluded from retrieval denominators. Cases missing
-product-structure context or carrying unresolved metric conflicts remain
-`context_required`.
-Reusable tolerance tables are declared under `deterministic_context_evidence` and
-attached after primary value evidence is selected; they do not count as retrieval gold.
-Lightning-impulse voltage plus waveform remains an AND relationship with exact chunk hashes;
-the old broad table selectors are not reused. Exact corpus inspection resolved
-all 15 stale retrieval conflicts: nine already had the target table after gold
-recovery, and six needed their second evidence group added.
-
-The v2 file is deliberately not scoreable yet because it was migrated from
-model-reviewed v1 candidates. Each case must become
-`human_approved` before it can enter reported retrieval metrics. Regenerate and
-validate the draft with:
-
-```powershell
-uv run python scripts/build_retrieval_ground_truth_v2.py
-uv run python scripts/validate_retrieval_ground_truth_v2.py
-```
-
-`retrieval_evidence_groups_hbjc_v1.json` defines the evidence contract for the
-10-case HBJC end-to-end trial. Alternatives inside one group are OR-equivalent;
-all required groups for a case are AND-required. Cases whose applicability
-depends on report attributes absent from the extraction schema are reported as
-`context_required` and excluded from retrieval-recall denominators. This avoids
-both undercounting equivalent standard tables and overstating recall for
-multi-chunk evidence chains.
-
-`retrieval_seed_cases_v1.json` defines eight HBJC retrieval seeds. Each case has
-one production-style query plus semantic and keyword rewrites. Candidate
-generation retrieves Top 20 tables and Top 10 sections independently for each
-route and merges each type by reciprocal-rank fusion. Table candidates then
-receive bounded, deterministic `table_title` and `table_columns` bonuses before
-the final fixed quota of 10 tables plus 10 sections. Section scores are unchanged.
-
-`retrieval_candidate_review_v1.json` preserves the first untyped, soft-prior
-baseline review. It is not domain-approved gold: `gold_status` remains
-`candidate_model_reviewed_pending_domain_review`. The later typed experiment is
-written separately to `backend/data/reports/retrieval_candidates_typed_v1.json`
-so the baseline is not presented as a review of a different candidate set.
-
-`table_metadata_vector_rerank_v1.json` records an isolated experiment that gave
-table-title vectors the highest fusion weight and table-header vectors a lower
-weight. All three target ranks degraded, so the experiment is explicitly marked
-`experiment_rejected_for_production`; its temporary embeddings were never stored
-in the database.
-
-Table-oriented cases may also define an optional `table_target` query. This
-rewrite describes the expected table subject without copying the report's
-claimed standard value. It is an experimental retrieval route, not yet an
-online query-planner contract.
-
-`table_target_query_experiment_v1.json` compares the three failed cases before
-and after that route. The manually authored, leakage-controlled rewrites improve
-all three base ranks and bring all targets into the existing metadata-reranked
-table Top 10. The asset remains pending an LLM-generation test because manually
-writing the intended table description is easier than generating it reliably
-from report context.
-
-`model_naming_rule_experiment_v1.json` replaces the manual Pk rewrite with a
-`qwen-flash` interpretation of `S20-M.RL-400/10-NX2` using JB/T 3837-2024. The
-generated table query ranks the target Q/GDW table 6 at 3 by itself, but evidence
-quality issues and an equal-RRF fused rank of 13 keep the experiment out of the
-production path.
-
-`model_naming_rule_model_comparison_v1.json` compares the same experiment on
-`qwen-flash` and `qwen3.6-27b`. The 27B model produces better segment evidence
-and a target-table standalone rank of 2, but still fails exact-quote and
-per-feature-evidence requirements; both models remain at fused rank 13.
-
-The full 20-candidate texts are runtime reports under `backend/data/reports/` and
-remain untracked because they contain current Chunk IDs and can be regenerated by:
+Run the contract and locator checks with:
 
 ```powershell
 $env:PYTHONPATH='backend'
-uv run python scripts/build_retrieval_candidates.py
+uv run python scripts/validate_test_set.py
 ```
 
-## Validation
+The root-level v1 candidate pools, seed sets, intermediate reviews, and one-off ablation outputs were removed after migration. Runtime prompts, the domain tokenizer dictionary, and versioned manual rules remain because they are application configuration rather than evaluation datasets.
 
-Run contract and label checks without local corpus files:
+## Human review
+
+Open `test_set.json` and review the report requirement, direct evidence and applicability. For a personal demo, approve the whole set in one command:
 
 ```powershell
-uv run python scripts/validate_audit_eval.py --skip-corpus
+$env:PYTHONPATH='backend'
+uv run python scripts/review_test_set.py --approve-all
+uv run python scripts/validate_test_set.py
 ```
 
-Run the full local check when the authorized report fixture and rebuilt chunk database are present:
-
-```powershell
-uv run python scripts/validate_audit_eval.py
-```
-
-The full check also verifies the report SHA-256, unique evidence resolution, and that each `source_excerpt` occurs verbatim in its resolved chunk.
+The project owner is the human reviewer; AI locator checks are supporting evidence, not approval.
