@@ -65,18 +65,18 @@ async function pollInitDraft(
     const job = await api.getJob(jobId)
     const draft = await api.getAssistantInitDraft(assistantId)
     if (job.status === 'failed') {
-      throw new Error(job.error || draft?.payload?.error || '初始化失败')
+      throw new Error(job.error || draft?.payload?.error || '参数提取初始化失败')
     }
     if (draft && (draft.status === 'ready' || draft.status === 'failed')) {
       if (draft.status === 'failed') {
-        throw new Error(draft.payload?.error || '初始化失败')
+        throw new Error(draft.payload?.error || '参数提取初始化失败')
       }
       return draft
     }
     if (job.status === 'done' && draft?.status === 'ready') return draft
     await new Promise(resolve => setTimeout(resolve, 2000))
   }
-  throw new Error('初始化超时，请稍后刷新查看草案')
+  throw new Error('参数提取初始化超时，请稍后刷新查看草案')
 }
 
 type EditTarget = 'schema' | 'prompt'
@@ -152,9 +152,9 @@ function InitUploadDropzone({
       >
         <h3 className="flex items-center gap-2 text-[16px] font-semibold">
           <Sparkles className="size-4 text-[#2563eb]" />
-          初始化
+          参数提取初始化
           <span onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
-            <Explain title="初始化" text={helpText} />
+            <Explain title="参数提取初始化" text={helpText} />
           </span>
         </h3>
         <p className="max-w-md text-center text-[13px] leading-relaxed text-[#6b7280]">
@@ -587,9 +587,9 @@ export function AssistantInitDraftCard({
   const uploadLabel = uploading
     ? '解析中…'
     : generating
-      ? '初始化中…'
+      ? '参数提取初始化中…'
       : '上传 PDF'
-  const initHelpText = `上传一份代表性 PDF 报告，系统只生成变量包：参数 schema + 可选抽参品类约束。检索/判定提示词由系统框架生成，不在初始化里产出。${
+  const initHelpText = `上传一份代表性 PDF 报告，系统只生成变量包：参数 schema + 可选抽参品类约束。检索/判定提示词由系统框架生成，不在参数提取初始化里产出。${
     activeVersion ? '确认启用后将覆盖当前审查配置。' : ''
   }`
 
@@ -624,8 +624,8 @@ export function AssistantInitDraftCard({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="flex items-center gap-2 text-[14px] font-semibold text-[#111827]">
             <Sparkles className="size-4 text-[#2563eb]" />
-            初始化
-            <Explain title="初始化" text={initHelpText} />
+            参数提取初始化
+            <Explain title="参数提取初始化" text={initHelpText} />
           </h3>
           {draft?.status === 'applied' && (
             <span className="text-[13px] text-[#6b7280]">已更新审查配置</span>

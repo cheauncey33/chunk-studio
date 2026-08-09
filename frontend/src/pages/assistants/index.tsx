@@ -896,7 +896,7 @@ export function AssistantSettings({
                   )}
                 />
                 <span className="font-medium text-[#111827]">
-                  {showInitializationPage ? '初始化审查配置' : '审查配置'}
+                  {showInitializationPage ? '参数提取初始化' : '审查配置'}
                 </span>
               </div>
               <div className="flex items-center gap-2">
@@ -924,7 +924,7 @@ export function AssistantSettings({
                       disabled={saving || !version}
                       onClick={requestReinitialize}
                     >
-                      重新初始化
+                      重新生成参数配置
                     </Button>
                     <Button
                       size="sm"
@@ -985,7 +985,7 @@ export function AssistantSettings({
                       setInitializing(true)
                     }}
                   >
-                    去初始化
+                    去参数提取初始化
                   </Button>
                 </div>
               </div>
@@ -1493,9 +1493,9 @@ export function AssistantSettings({
           <Dialog open={confirmAction !== null} onOpenChange={open => !open && setConfirmAction(null)}>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
-                <DialogTitle>重新初始化审查配置？</DialogTitle>
+                <DialogTitle>重新生成参数提取配置？</DialogTitle>
                 <DialogDescription className="leading-relaxed text-[#6b7280]">
-                  将进入初始化流程，根据样例报告重新生成参数 schema 与抽参品类约束。
+                  将进入参数提取初始化，根据样例报告重新生成参数 schema 与抽参品类约束。
                   确认启用后会覆盖当前审查配置，此操作不可撤销。
                 </DialogDescription>
               </DialogHeader>
@@ -1511,7 +1511,7 @@ export function AssistantSettings({
                     setConfirmAction(null)
                   }}
                 >
-                  重新初始化
+                  重新生成参数配置
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -1527,7 +1527,7 @@ export function AssistantSettings({
                 <DialogDescription className="leading-relaxed text-[#6b7280]">
                   当前配置有未保存的字段、规则或提示词修改。
                   {pendingInitialization
-                    ? ' 保存后将进入重新初始化。'
+                    ? ' 保存后将进入参数提取初始化。'
                     : ' 保存后将继续离开当前页面。'}
                 </DialogDescription>
               </DialogHeader>
