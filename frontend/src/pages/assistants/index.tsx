@@ -834,7 +834,17 @@ export function AssistantSettings({
         }
         if (event.event === 'agent') {
           const type = String(event.data.type || '')
-          if (type === 'tool_call') {
+          if (type === 'token') {
+            const token = typeof event.data.content === 'string' ? event.data.content : ''
+            if (token) {
+              setChatStatus('正在输出回答…')
+              setMessages(prev => prev.map(item => (
+                item.id === assistantMsgId
+                  ? { ...item, content: item.content + token }
+                  : item
+              )))
+            }
+          } else if (type === 'tool_call') {
             setChatStatus(`正在调用 ${String(event.data.name || '工具')}…`)
           } else if (type === 'tool_result') {
             setChatStatus('工具返回，正在整理回答…')
