@@ -3,6 +3,34 @@
 
 export const API = '/api'
 
+export type BusinessChart =
+  | { type: 'metric'; value: unknown }
+  | { type: 'pie' | 'bar'; data: Array<{ label: string; value: number }>; denominator: number }
+
+export interface BusinessOverview {
+  metrics: {
+    knowledge_bases: number
+    files: number
+    approved_chunks: number
+    audit_reports: number
+    audit_cases: number
+  }
+  status_distribution: Array<{ label: string; value: number }>
+  denominator: number
+}
+
+export interface BusinessQueryResult {
+  answer: string
+  route: 'fixed_metric' | 'text2sql'
+  question: string
+  sql: string
+  model: string | null
+  columns: string[]
+  rows: Array<Record<string, unknown>>
+  truncated: boolean
+  chart: BusinessChart | null
+}
+
 export interface CSFile {
   id: string
   name: string
@@ -612,7 +640,6 @@ export const api = {
   routeAndRunAssistant: (body: {
     report_file_id: string
     naming_rule_file_id?: string | null
-    report_id?: string
     model?: string
   }) =>
     fetch(`${API}/assistants/route-and-run`, {
@@ -633,7 +660,7 @@ export const api = {
     }>),
   startAssistantRun: (
     id: string,
-    body: { report_file_id: string; naming_rule_file_id?: string | null; report_id?: string },
+    body: { report_file_id: string; naming_rule_file_id?: string | null },
   ) =>
     fetch(`${API}/assistants/${id}/runs`, {
       method: 'POST',
@@ -979,4 +1006,12 @@ export const api = {
     fetch(`${API}/audit/lexical-index`).then(j<LexicalIndexStatus>),
   listRetrievalShadowRuns: (limit = 25) =>
     fetch(`${API}/audit/shadow-runs?limit=${limit}`).then(j<{ runs: RetrievalShadowRun[] }>),
+  getBusinessOverview: () =>
+    fetch(`${API}/analytics/overview`).then(j<BusinessOverview>),
+  queryBusinessData: (question: string) =>
+    fetch(`${API}/analytics/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    }).then(j<BusinessQueryResult>),
 }

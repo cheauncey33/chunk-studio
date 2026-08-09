@@ -17,6 +17,7 @@ const DatasetMetadataPage = lazy(() => import('@/pages/dataset/metadata'))
 const DatasetSettingsPage = lazy(() => import('@/pages/dataset/settings'))
 const ChunkPage = lazy(() => import('@/pages/chunk'))
 const AssistantsPage = lazy(() => import('@/pages/assistants'))
+const BusinessAnalyticsPage = lazy(() => import('@/pages/analytics'))
 function RouteFallback() {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: withSuspense(<WorkbenchPage />) },
       { path: 'knowledge-bases', element: withSuspense(<DatasetsPage />) },
+      { path: 'analytics', element: withSuspense(<BusinessAnalyticsPage />) },
       // Keep old home path working for bookmarks.
       { path: 'datasets', element: <Navigate to="/knowledge-bases" replace /> },
       {

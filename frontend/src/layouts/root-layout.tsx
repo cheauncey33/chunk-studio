@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
+  ChartPie,
   CircleHelp,
   ClipboardCheck,
   FolderOpen,
@@ -18,6 +19,7 @@ import { cn } from '@/lib/utils'
 const NAV = [
   { to: '/', label: '审查', icon: ClipboardCheck, end: true, help: helpText.nav.workbench },
   { to: '/knowledge-bases', label: '知识库', icon: FolderOpen, help: helpText.nav.knowledge },
+  { to: '/analytics', label: '业务问答', icon: ChartPie, help: helpText.nav.analytics },
   { to: '/settings', label: '系统设置', icon: Settings, help: helpText.nav.settings },
 ] as const
 
@@ -30,6 +32,7 @@ function isNavActive(to: string, pathname: string, end?: boolean) {
     )
   }
   if (to === '/settings') return pathname.startsWith('/settings')
+  if (to === '/analytics') return pathname.startsWith('/analytics')
   if (end) return pathname === to
   return pathname === to || pathname.startsWith(`${to}/`)
 }

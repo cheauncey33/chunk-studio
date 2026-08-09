@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from . import config, db, jobs as job_service, lexical
 from .routers import (
     assistants,
+    analytics,
     audit,
     auto_chunks,
     chunks,
@@ -74,7 +75,7 @@ def health():
 # API routers (mounted under /api for clarity)
 api_prefix = "/api"
 for r in (files.router, chunks.router, auto_chunks.router, fields.router, settings.router,
-          knowledge_bases.router, assistants.router, audit.router,
+          knowledge_bases.router, assistants.router, audit.router, analytics.router,
           jobs.router, extract.router, ocr.router, export.router, search.router,
           embeddings.router):
     app.include_router(r, prefix=api_prefix)
