@@ -134,9 +134,7 @@ def _report_list_item(path: Path) -> dict[str, Any]:
         item["version"] = payload.get("version")
         item["scope"] = payload.get("scope")
         item["retrieval_policy"] = payload.get("retrieval_policy")
-        item["audit_mode"] = payload.get("audit_mode") or (
-            "case_pool" if str(payload.get("scope") or "") == "case_pool_audit" else None
-        )
+        item["audit_mode"] = payload.get("audit_mode")
         item["report_file_id"] = payload.get("report_file_id")
         item["report_file_name"] = payload.get("report_file_name")
         item["assistant_id"] = payload.get("assistant_id")
@@ -287,7 +285,7 @@ def _legacy_node_io(
     return (
         {
             "case_id": case.get("case_id"),
-            "gold_source": "evaluation/retrieval_gold_candidates_v1.json",
+            "gold_source": "legacy offline diagnostic (source set removed)",
         },
         {
             "direct_gold_available": case.get("direct_gold_available"),
@@ -379,7 +377,7 @@ def list_audit_reports(
     """List audit report JSON files.
 
     ``history=true`` (or ``scope=full_report``) keeps production full-report
-    runs for the workbench history list and drops case-pool / retrieval eval
+    runs for the workbench history list and drops known retrieval-evaluation
     artefacts.
     """
     if not REPORTS_DIR.exists():
@@ -393,11 +391,7 @@ def list_audit_reports(
     if want_history:
         filtered: list[dict[str, Any]] = []
         for item in reports:
-            mode = str(item.get("audit_mode") or "").strip().lower()
-            scope_val = str(item.get("scope") or "").strip().lower()
             name = str(item.get("name") or "")
-            if mode == "case_pool" or scope_val == "case_pool_audit":
-                continue
             if name.startswith("hbjc_") or "retrieval" in name:
                 continue
             if item.get("kind") not in {"end_to_end_audit", "report"}:

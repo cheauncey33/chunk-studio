@@ -157,13 +157,9 @@ def enqueue_assistant_audit(
     *,
     report_file_id: str,
     naming_rule_file_id: str | None = None,
-    report_id: str | None = None,
     priority: int = 5,
 ) -> dict[str, Any]:
     """Queue an end-to-end assistant audit run.
-
-    ``report_id`` is an evaluation-only option: when set, the run audits the
-    frozen case pool for that report instead of the full extracted report.
 
     The report is an audit input (not KB corpus). Naming PDF is a KB attribute
     and also need not appear in knowledge_base_files. Evidence still comes from
@@ -234,8 +230,6 @@ def enqueue_assistant_audit(
         "report_file_id": report_file_id,
         "naming_rule_file_id": resolved_naming_id,
     }
-    if report_id:
-        payload["report_id"] = report_id
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO jobs
@@ -573,7 +567,6 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
     assistant_id = str(payload.get("assistant_id") or job["target_id"])
     report_file_id = str(payload.get("report_file_id") or "")
     naming_rule_file_id = payload.get("naming_rule_file_id") or None
-    report_id = str(payload.get("report_id") or "") or None
     if not report_file_id:
         _fail_job(job, "audit job missing report_file_id")
         return
@@ -597,7 +590,6 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
             assistant_id=assistant_id,
             report_file_id=report_file_id,
             naming_rule_file_id=naming_rule_file_id,
-            report_id=report_id,
             job_id=str(job.get("id") or "") or None,
             started_at=str(job.get("started_at") or "") or None,
         )

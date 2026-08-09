@@ -53,8 +53,6 @@ class KnowledgeBaseSelection(BaseModel):
 class AssistantRunRequest(BaseModel):
     report_file_id: str = Field(min_length=1)
     naming_rule_file_id: str | None = None
-    # Evaluation-only: set to audit the frozen case pool instead of the full report.
-    report_id: str | None = Field(default=None, max_length=64)
 
 
 class AssistantRouteRequest(BaseModel):
@@ -65,8 +63,6 @@ class AssistantRouteRequest(BaseModel):
 class AssistantRouteAndRunRequest(BaseModel):
     report_file_id: str = Field(min_length=1)
     naming_rule_file_id: str | None = None
-    # Evaluation-only: set to audit the frozen case pool instead of the full report.
-    report_id: str | None = Field(default=None, max_length=64)
     model: str | None = None
 
 
@@ -312,7 +308,6 @@ def route_and_run_assistant(body: AssistantRouteAndRunRequest):
             route["assistant_id"],
             report_file_id=body.report_file_id,
             naming_rule_file_id=body.naming_rule_file_id,
-            report_id=body.report_id,
         )
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -503,7 +498,6 @@ def start_assistant_run(assistant_id: str, body: AssistantRunRequest):
             assistant_id,
             report_file_id=body.report_file_id,
             naming_rule_file_id=body.naming_rule_file_id,
-            report_id=body.report_id,
         )
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc

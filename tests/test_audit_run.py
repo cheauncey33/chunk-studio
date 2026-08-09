@@ -4,6 +4,30 @@ from __future__ import annotations
 import pytest
 
 from app import audit_run, config
+from app.audit_policy import (
+    PRODUCTION_EVIDENCE_COMPRESSION_MODE,
+    PRODUCTION_RECOVERY_MODE,
+    RECOVERY_MAX_SEARCH_CALLS,
+    RECOVERY_MAX_TOOL_CALLS,
+    RECOVERY_MAX_TURNS,
+)
+
+
+def test_production_audit_policy_is_compression_first_and_bounded() -> None:
+    assert PRODUCTION_EVIDENCE_COMPRESSION_MODE == "active"
+    assert PRODUCTION_RECOVERY_MODE == "active"
+    assert RECOVERY_MAX_TURNS == 3
+    assert RECOVERY_MAX_TOOL_CALLS == 4
+    assert RECOVERY_MAX_SEARCH_CALLS == 2
+
+
+def test_in_app_runner_passes_production_runtime_flags_explicitly() -> None:
+    assert audit_run.production_runtime_args() == [
+        "--evidence-compression",
+        "active",
+        "--recovery-mode",
+        "active",
+    ]
 
 
 def test_resolve_naming_rule_falls_back_to_default(tmp_path, monkeypatch):

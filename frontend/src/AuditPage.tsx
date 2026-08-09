@@ -813,7 +813,7 @@ function ReportSummary({ report }: { report: AuditReportDetail }) {
   const summary = asRecord(payload.summary)
   const judgments = asRecord(summary.judgments)
   const statCandidates: Array<[string, unknown]> = [
-    ['mode', summary.mode === 'full_report' ? '全量' : summary.mode === 'case_pool' ? 'case 池' : summary.mode],
+    ['mode', summary.mode === 'full_report' ? '全量' : summary.mode],
     ['cases', summary.cases],
     ['direct gold', summary.direct_gold_recalled == null ? summary.complete_case_recall : summary.direct_gold_recalled],
     ['符合', judgments.supported ?? judgments.correct],

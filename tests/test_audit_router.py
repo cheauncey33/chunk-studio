@@ -214,7 +214,7 @@ def test_list_audit_reports_history_filters_eval_artefacts(monkeypatch, tmp_path
         encoding="utf-8",
     )
     (reports_dir / "hbjc_end_to_end_audit_top20.json").write_text(
-        json.dumps({"audit_mode": "case_pool", "cases": []}, ensure_ascii=False),
+        json.dumps({"cases": []}, ensure_ascii=False),
         encoding="utf-8",
     )
     (reports_dir / "retrieval_candidates_v1.json").write_text(

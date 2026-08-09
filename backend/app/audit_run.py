@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from . import config, db
+from .audit_policy import (
+    PRODUCTION_EVIDENCE_COMPRESSION_MODE,
+    PRODUCTION_RECOVERY_MODE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +22,16 @@ DEFAULT_NAMING_RULE = (
     config.PROJECT_ROOT / "evaluation" / "prompts" / "model_naming_decode_v1.md"
 )
 REPORTS_DIR = config.DATA_DIR / "reports"
+
+
+def production_runtime_args() -> list[str]:
+    """Return explicit flags used by the in-app production audit runner."""
+    return [
+        "--evidence-compression",
+        PRODUCTION_EVIDENCE_COMPRESSION_MODE,
+        "--recovery-mode",
+        PRODUCTION_RECOVERY_MODE,
+    ]
 
 
 def _latest_done_parse(file_id: str) -> dict[str, Any]:
@@ -73,14 +87,12 @@ def run_assistant_audit(
     assistant_id: str,
     report_file_id: str,
     naming_rule_file_id: str | None = None,
-    report_id: str | None = None,
     job_id: str | None = None,
     started_at: str | None = None,
 ) -> dict[str, Any]:
     """Run the end-to-end audit workflow and write a timestamped report JSON.
 
-    Default is full-report mode (audit every extracted requirement). Passing
-    ``report_id`` switches to the legacy frozen case-pool evaluation mode.
+    The workflow audits every extracted requirement in the supplied report.
     """
     if not SCRIPT_PATH.is_file():
         raise RuntimeError(f"audit workflow script missing: {SCRIPT_PATH}")
@@ -116,10 +128,9 @@ def run_assistant_audit(
         "--started-at",
         run_started,
     ]
+    cmd.extend(production_runtime_args())
     if job_id:
         cmd.extend(["--job-id", job_id])
-    if report_id:
-        cmd.extend(["--case-pool", "--report-id", report_id])
     if resolved_naming_id:
         cmd.extend(["--naming-rule-file-id", resolved_naming_id])
     logger.info("starting assistant audit: %s", " ".join(cmd))
