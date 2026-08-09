@@ -5,7 +5,7 @@ import json
 import os
 import time
 from http import HTTPStatus
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -168,6 +168,114 @@ def chat_tools(
         "role": "assistant",
         "content": str(content or ""),
         "tool_calls": message.get("tool_calls") or [],
+    }
+
+
+def chat_tools_stream(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    *,
+    model: str | None = None,
+    temperature: float = 0,
+    timeout: float = 180,
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Stream content/tool-call deltas and return the aggregated message."""
+    if not tools:
+        raise ValueError("tools must not be empty")
+    config = resolve_config(model=model)
+    payload = {
+        "model": config["model"],
+        "messages": messages,
+        "tools": tools,
+        "tool_choice": "auto",
+        "temperature": temperature,
+        "thinking": {"type": "disabled"},
+        "stream": True,
+    }
+    headers = {
+        "Authorization": f"Bearer {config['api_key']}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+    url = f"{config['base_url']}/chat/completions"
+    content_parts: list[str] = []
+    tool_calls: dict[int, dict[str, Any]] = {}
+    finish_reason: str | None = None
+    try:
+        with httpx.stream(url=url, method="POST", headers=headers, json=payload, timeout=timeout) as response:
+            if response.status_code != HTTPStatus.OK:
+                raise RuntimeError(
+                    f"DeepSeek stream failed: status={response.status_code} "
+                    f"body={response.text[:500]}"
+                )
+            for raw_line in response.iter_lines():
+                line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else str(raw_line)
+                if not line or line.startswith(":"):
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(chunk, dict):
+                    continue
+                choices = chunk.get("choices") or []
+                if not choices or not isinstance(choices[0], dict):
+                    continue
+                choice = choices[0]
+                if choice.get("finish_reason"):
+                    finish_reason = str(choice["finish_reason"])
+                delta = choice.get("delta") or {}
+                if not isinstance(delta, dict):
+                    continue
+                content = delta.get("content")
+                if isinstance(content, list):
+                    content = "".join(
+                        str(item.get("text") or "") if isinstance(item, dict) else str(item)
+                        for item in content
+                    )
+                if content:
+                    text = str(content)
+                    content_parts.append(text)
+                    if event_sink:
+                        event_sink({"type": "token", "content": text})
+                for raw_call in delta.get("tool_calls") or []:
+                    if not isinstance(raw_call, dict):
+                        continue
+                    index = int(raw_call.get("index") or 0)
+                    target = tool_calls.setdefault(index, {
+                        "id": "",
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    })
+                    if raw_call.get("id"):
+                        target["id"] = str(raw_call["id"])
+                    function = raw_call.get("function") or {}
+                    if isinstance(function, dict):
+                        if function.get("name"):
+                            target["function"]["name"] += str(function["name"])
+                        if function.get("arguments"):
+                            target["function"]["arguments"] += str(function["arguments"])
+                    if event_sink:
+                        event_sink({
+                            "type": "tool_call_delta",
+                            "index": index,
+                            "id": target["id"],
+                            "name": target["function"]["name"],
+                            "arguments": target["function"]["arguments"],
+                        })
+    except _TRANSIENT_HTTPX_ERRORS as exc:
+        raise RuntimeError(f"DeepSeek streaming connection failed: {exc}") from exc
+    return {
+        "role": "assistant",
+        "content": "".join(content_parts),
+        "tool_calls": [tool_calls[index] for index in sorted(tool_calls)],
+        "finish_reason": finish_reason,
     }
 
 

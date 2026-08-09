@@ -6,7 +6,7 @@ import json
 import time
 from typing import Any, Callable
 
-from . import business_analytics, config, db, llm, retrieval
+from . import business_analytics, config, db, llm, mcp_client, retrieval
 from .agent_runtime.models import ToolDefinition
 from .tool_registry import ToolContext, ToolFactory, ToolRegistry
 
@@ -195,6 +195,7 @@ def _business_tools(context: ToolContext) -> list[ToolDefinition]:
 tool_registry = ToolRegistry()
 tool_registry.register("knowledge_base", _knowledge_base_tools)
 tool_registry.register("business_analytics", _business_tools)
+tool_registry.register("mcp", mcp_client.build_mcp_tools)
 
 
 def register_chat_tool_factory(
@@ -291,6 +292,7 @@ def run_chat_agent(
     max_search_calls: int = 3,
     timeout_seconds: float = 90,
     event_sink: Callable[[dict[str, Any]], None] | None = None,
+    stream_tokens: bool = False,
 ) -> dict[str, Any]:
     """Run model -> native tool call -> tool result until final text."""
     tools = _build_tools(
@@ -326,12 +328,22 @@ def run_chat_agent(
                 "tool_calls": tool_calls,
             }
         _emit(event_sink, {"type": "turn_started", "turn": turn})
-        response = llm.chat_tools(
-            request_messages,
-            [_tool_schema(tool) for tool in tools],
-            model=model,
-            temperature=temperature,
-        )
+        tool_schemas = [_tool_schema(tool) for tool in tools]
+        if stream_tokens:
+            response = llm.chat_tools_stream(
+                request_messages,
+                tool_schemas,
+                model=model,
+                temperature=temperature,
+                event_sink=event_sink,
+            )
+        else:
+            response = llm.chat_tools(
+                request_messages,
+                tool_schemas,
+                model=model,
+                temperature=temperature,
+            )
         assistant_message = {
             "role": "assistant",
             "content": str(response.get("content") or ""),

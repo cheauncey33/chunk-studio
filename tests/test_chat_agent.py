@@ -107,3 +107,27 @@ def test_chat_agent_returns_chart_from_business_tool(monkeypatch) -> None:
 
     assert result["answer"] == "已生成状态分布饼图。"
     assert result["charts"] == [{"type": "pie", "data": [{"label": "supported", "value": 3}]}]
+
+
+def test_chat_agent_forwards_provider_token_events(monkeypatch) -> None:
+    seen = []
+
+    def fake_stream(messages, tools, **kwargs):
+        assert tools
+        kwargs["event_sink"]({"type": "token", "content": "流"})
+        kwargs["event_sink"]({"type": "token", "content": "式"})
+        return {"role": "assistant", "content": "流式", "tool_calls": []}
+
+    monkeypatch.setattr(chat_agent.llm, "chat_tools_stream", fake_stream)
+    result = chat_agent.run_chat_agent(
+        assistant_id="assistant-1",
+        messages=[{"role": "user", "content": "开始"}],
+        file_ids=["f1"],
+        retrieval_config={},
+        model="test-model",
+        stream_tokens=True,
+        event_sink=seen.append,
+    )
+
+    assert result["answer"] == "流式"
+    assert [item["content"] for item in seen if item["type"] == "token"] == ["流", "式"]

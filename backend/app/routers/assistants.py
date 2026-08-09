@@ -885,6 +885,7 @@ def assistant_agent_chat_stream(assistant_id: str, body: AgentChatRequest) -> St
                 model=context["model"],
                 temperature=context["temperature"],
                 event_sink=lambda event: events.put({"kind": "agent", "payload": event}),
+                stream_tokens=True,
             )
             _persist_agent_result(context["conversation_id"], result)
             events.put({
