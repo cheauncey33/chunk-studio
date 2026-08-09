@@ -122,6 +122,55 @@ def chat_text(
     return str(content or "").strip()
 
 
+def chat_tools(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    *,
+    model: str | None = None,
+    temperature: float = 0,
+    timeout: float = 180,
+) -> dict[str, Any]:
+    """Return one OpenAI-compatible assistant message with native tool calls."""
+    if not tools:
+        raise ValueError("tools must not be empty")
+    config = resolve_config(model=model)
+    response = _post_chat_completions(
+        config=config,
+        payload={
+            "model": config["model"],
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": "auto",
+            "temperature": temperature,
+            "thinking": {"type": "disabled"},
+            "stream": False,
+        },
+        timeout=timeout,
+    )
+    if response.status_code != HTTPStatus.OK:
+        raise RuntimeError(
+            f"DeepSeek call failed: status={response.status_code} "
+            f"body={response.text[:500]}"
+        )
+    try:
+        message = response.json()["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("DeepSeek returned an invalid tool chat response") from exc
+    if not isinstance(message, dict):
+        raise RuntimeError("DeepSeek returned an invalid assistant message")
+    content = message.get("content")
+    if isinstance(content, list):
+        content = "".join(
+            str(item.get("text") or "") if isinstance(item, dict) else str(item)
+            for item in content
+        )
+    return {
+        "role": "assistant",
+        "content": str(content or ""),
+        "tool_calls": message.get("tool_calls") or [],
+    }
+
+
 def chat_json(
     messages: list[dict[str, str]],
     *,

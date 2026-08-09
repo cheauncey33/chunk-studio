@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import db, jobs, llm, retrieval
+from .. import chat_agent, chat_sessions, db, jobs, llm, retrieval
 
 
 router = APIRouter(prefix="/assistants", tags=["assistants"])
@@ -84,6 +84,11 @@ class ChatMessage(BaseModel):
 class AssistantChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     history: list[ChatMessage] = Field(default_factory=list, max_length=20)
+
+
+class AgentChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    conversation_id: str | None = Field(default=None, max_length=100)
 
 
 def _loads(value: str | None) -> dict[str, Any]:
@@ -722,4 +727,108 @@ def assistant_chat(assistant_id: str, body: AssistantChatRequest):
             "expand_references": expand_references,
             "degraded": search.get("degraded") or [],
         },
+    }
+
+
+@router.get("/{assistant_id}/conversations")
+def list_agent_conversations(assistant_id: str) -> dict[str, Any]:
+    _assistant_row(assistant_id)
+    return {"items": chat_sessions.list_conversations(assistant_id)}
+
+
+@router.get("/{assistant_id}/conversations/{conversation_id}")
+def get_agent_conversation(assistant_id: str, conversation_id: str) -> dict[str, Any]:
+    _assistant_row(assistant_id)
+    conversation = chat_sessions.get_conversation(conversation_id)
+    if not conversation or conversation["assistant_id"] != assistant_id:
+        raise HTTPException(404, "conversation not found")
+    return {
+        **conversation,
+        "events": chat_sessions.list_events(conversation_id),
+    }
+
+
+@router.post("/{assistant_id}/agent-chat")
+def assistant_agent_chat(assistant_id: str, body: AgentChatRequest) -> dict[str, Any]:
+    """Persistent Agent chat using native model tool calls.
+
+    The existing /chat endpoint remains available as a rollback path while the
+    frontend migrates to server-owned conversations.
+    """
+    assistant = _assistant_row(assistant_id)
+    if not assistant["active_version_id"]:
+        raise HTTPException(400, "assistant has no active version")
+    version = db.get_conn().execute(
+        "SELECT * FROM assistant_versions WHERE id=?",
+        (assistant["active_version_id"],),
+    ).fetchone()
+    if not version:
+        raise HTTPException(404, "active version not found")
+
+    file_ids = db.assistant_scoped_file_ids(assistant_id)
+    if not file_ids:
+        raise HTTPException(400, "请先绑定知识库，并确保库内有已启用的文件")
+
+    conversation = (
+        chat_sessions.get_conversation(body.conversation_id)
+        if body.conversation_id
+        else None
+    )
+    if body.conversation_id and (
+        not conversation or conversation["assistant_id"] != assistant_id
+    ):
+        raise HTTPException(404, "conversation not found")
+    if conversation is None:
+        conversation = chat_sessions.create_conversation(
+            assistant_id,
+            title=body.message.strip()[:120],
+        )
+    conversation_id = str(conversation["id"])
+
+    chat_sessions.append_events(
+        conversation_id,
+        [("user_message", {"content": body.message.strip()})],
+    )
+    model_config = _loads(version["model_config"])
+    retrieval_config = _loads(version["retrieval_config"])
+    model = str(model_config.get("model") or llm.DEFAULT_MODEL)
+    temperature = float(model_config.get("temperature") or 0)
+    try:
+        result = chat_agent.run_chat_agent(
+            assistant_id=assistant_id,
+            messages=chat_sessions.load_messages(conversation_id),
+            file_ids=file_ids,
+            retrieval_config=retrieval_config,
+            model=model,
+            temperature=temperature,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    persisted_events: list[tuple[str, dict[str, Any]]] = []
+    for message in result.get("new_messages") or []:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "assistant":
+            persisted_events.append(("assistant_message", {"message": message}))
+        elif message.get("role") == "tool":
+            persisted_events.append((
+                "tool_result",
+                {
+                    "tool_call_id": message.get("tool_call_id"),
+                    "name": message.get("name"),
+                    "content": message.get("content"),
+                },
+            ))
+    chat_sessions.append_events(conversation_id, persisted_events)
+
+    return {
+        "conversation_id": conversation_id,
+        "answer": result["answer"],
+        "citations": result.get("citations") or [],
+        "charts": result.get("charts") or [],
+        "model": model,
+        "stop_reason": result.get("stop_reason"),
+        "turns": result.get("turns", 0),
+        "tool_calls": result.get("tool_calls", 0),
     }

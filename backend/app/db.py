@@ -249,6 +249,32 @@ CREATE TABLE IF NOT EXISTS audit_case_reviews (
     updated_at       TEXT NOT NULL,
     PRIMARY KEY (report_name, case_id)
 );
+
+CREATE TABLE IF NOT EXISTS chat_conversations (
+    id             TEXT PRIMARY KEY,
+    assistant_id   TEXT NOT NULL,
+    title          TEXT NOT NULL DEFAULT '',
+    summary        TEXT NOT NULL DEFAULT '',
+    summary_version INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    FOREIGN KEY (assistant_id) REFERENCES audit_assistants(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_assistant
+    ON chat_conversations(assistant_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS chat_events (
+    id              TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    sequence        INTEGER NOT NULL,
+    event_type      TEXT NOT NULL,
+    payload         TEXT NOT NULL DEFAULT '{}',
+    created_at      TEXT NOT NULL,
+    UNIQUE (conversation_id, sequence),
+    FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_chat_events_conversation
+    ON chat_events(conversation_id, sequence);
 """
 
 _db_lock = threading.Lock()
