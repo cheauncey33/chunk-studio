@@ -28,7 +28,13 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _rows(sqlite_path: Path, *, model: str, dimension: int) -> list[dict[str, Any]]:
+def _rows(
+    sqlite_path: Path,
+    *,
+    workspace_id: str,
+    model: str,
+    dimension: int,
+) -> list[dict[str, Any]]:
     conn = sqlite3.connect(sqlite_path)
     conn.row_factory = sqlite3.Row
     try:
@@ -42,10 +48,12 @@ def _rows(sqlite_path: Path, *, model: str, dimension: int) -> list[dict[str, An
             FROM chunk_embeddings e
             JOIN chunks c ON c.id=e.chunk_id
             JOIN files f ON f.id=c.file_id
-            WHERE c.status='approved' AND e.model=? AND e.dimension=?
+            WHERE c.status='approved'
+              AND c.workspace_id=? AND f.workspace_id=?
+              AND e.model=? AND e.dimension=?
             ORDER BY c.file_id, c.page, c.id
             """,
-            (model, dimension),
+            (workspace_id, workspace_id, model, dimension),
         ).fetchall()
         result: list[dict[str, Any]] = []
         for row in rows:
@@ -87,7 +95,12 @@ def main() -> int:
     args = _parse_args()
     if not args.workspace_id.strip():
         raise SystemExit("--workspace-id must not be blank")
-    rows = _rows(args.sqlite_path, model=args.model, dimension=args.dimension)
+    rows = _rows(
+        args.sqlite_path,
+        workspace_id=args.workspace_id,
+        model=args.model,
+        dimension=args.dimension,
+    )
     print(json.dumps({
         "sqlite_path": str(args.sqlite_path),
         "workspace_id": args.workspace_id,
