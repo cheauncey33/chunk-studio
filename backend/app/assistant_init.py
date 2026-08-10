@@ -7,6 +7,7 @@ from typing import Any
 
 from . import audit_run, config, db, llm
 from .parameter_schema import resolve_parameter_schema
+from .storage.repositories import get_content_repository, get_content_write_repository
 
 SCHEMA_INDUCTION_PROMPT = (
     config.PROJECT_ROOT
@@ -30,6 +31,10 @@ MAX_TOTAL_STANDARD_CHARS = 24000
 MAX_TOTAL_SAMPLE_CHARS = 18000
 
 
+def _content_repository():
+    return get_content_repository() or get_content_write_repository()
+
+
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -50,7 +55,10 @@ def _loads(value: Any, fallback: Any) -> Any:
 
 
 def _file_excerpt(file_id: str, *, limit: int = MAX_CHARS_PER_FILE) -> dict[str, str]:
-    row = db.get_conn().execute("SELECT id, name FROM files WHERE id=?", (file_id,)).fetchone()
+    repository = _content_repository()
+    row = repository.get_file(file_id) if repository is not None else db.get_conn().execute(
+        "SELECT id, name FROM files WHERE id=?", (file_id,)
+    ).fetchone()
     if not row:
         raise ValueError(f"file not found: {file_id}")
     path = audit_run.resolve_markdown_path(file_id)
@@ -62,6 +70,9 @@ def _file_excerpt(file_id: str, *, limit: int = MAX_CHARS_PER_FILE) -> dict[str,
 
 def list_standard_corpus_file_ids(assistant_id: str) -> list[str]:
     """Enabled KB corpus files with completed markdown parses (prefer standard)."""
+    repository = _content_repository()
+    if repository is not None:
+        return repository.list_standard_corpus_file_ids(assistant_id)
     rows = db.get_conn().execute(
         """SELECT kbf.file_id, kbf.corpus_kind, f.name
            FROM assistant_knowledge_bases akb
@@ -83,6 +94,19 @@ def list_standard_corpus_file_ids(assistant_id: str) -> list[str]:
 
 
 def get_init_draft(assistant_id: str) -> dict[str, Any] | None:
+    repository = _content_repository()
+    if repository is not None:
+        row = repository.get_init_draft(assistant_id)
+        if not row:
+            return None
+        return {
+            "assistant_id": row["assistant_id"],
+            "status": row["status"],
+            "payload": _loads(row.get("payload"), {}),
+            "job_id": row.get("job_id"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
     row = db.get_conn().execute(
         "SELECT * FROM assistant_init_drafts WHERE assistant_id=?",
         (assistant_id,),
@@ -109,6 +133,22 @@ def upsert_init_draft(
     now = _now()
     existing = get_init_draft(assistant_id)
     body = payload if payload is not None else (existing or {}).get("payload") or {}
+    repository = _content_repository()
+    if repository is not None:
+        row = repository.upsert_init_draft(
+            assistant_id,
+            status=status,
+            payload=body,
+            job_id=job_id,
+        )
+        return {
+            "assistant_id": row["assistant_id"],
+            "status": row["status"],
+            "payload": _loads(row.get("payload"), {}),
+            "job_id": row.get("job_id"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
     with db.transaction() as conn:
         if existing:
             conn.execute(
@@ -175,6 +215,12 @@ def _build_excerpts(file_ids: list[str], *, total_limit: int) -> list[dict[str, 
 
 
 def _active_version_row(assistant_id: str) -> Any:
+    repository = _content_repository()
+    if repository is not None:
+        row = repository.get_active_assistant_version(assistant_id)
+        if not row:
+            raise ValueError("assistant has no active version")
+        return row
     assistant = db.get_conn().execute(
         "SELECT active_version_id FROM audit_assistants WHERE id=?",
         (assistant_id,),
@@ -381,6 +427,25 @@ def apply_init_draft(assistant_id: str) -> dict[str, Any]:
     }
 
     now = _now()
+    repository = _content_repository()
+    if repository is not None:
+        applied = repository.apply_init_draft(
+            assistant_id,
+            model_config=model_config,
+            node_prompts=node_prompts,
+            rules=rules,
+            retrieval_config=retrieval_config,
+            parameter_schema=schema,
+            initialization_provenance=initialization_provenance,
+            applied_at=now,
+        )
+        return {
+            "assistant_id": assistant_id,
+            "version_id": applied["version_id"],
+            "version": applied["version"],
+            "parameter_schema": schema,
+            "initialization_provenance": initialization_provenance,
+        }
     with db.transaction() as conn:
         version_id = version["id"] if version else None
         version_no = int(version["version"]) if version else 1

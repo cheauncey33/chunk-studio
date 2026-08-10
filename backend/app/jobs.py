@@ -316,24 +316,41 @@ def enqueue_assistant_audit(
     and also need not appear in knowledge_base_files. Evidence still comes from
     enabled files in the assistant's bound knowledge bases.
     """
-    row = db.get_conn().execute(
-        """SELECT id, workspace_id, active_version_id
-           FROM audit_assistants WHERE id=? AND workspace_id=?""",
-        (assistant_id, workspace_id()),
-    ).fetchone()
+    content = _content_write_repository()
+    if content is not None:
+        active = content.get_active_assistant_version(assistant_id)
+        row = (
+            {
+                "id": assistant_id,
+                "workspace_id": workspace_id(),
+                "active_version_id": active.get("id") if active else None,
+            }
+            if active
+            else None
+        )
+    else:
+        row = db.get_conn().execute(
+            """SELECT id, workspace_id, active_version_id
+               FROM audit_assistants WHERE id=? AND workspace_id=?""",
+            (assistant_id, workspace_id()),
+        ).fetchone()
     if not row:
         raise KeyError("assistant not found")
     if not row["active_version_id"]:
         raise ValueError("assistant has no active version")
 
-    report_row = db.get_conn().execute(
+    report_row = content.get_file(report_file_id) if content is not None else db.get_conn().execute(
         "SELECT id FROM files WHERE id=? AND workspace_id=?",
         (report_file_id, row["workspace_id"]),
     ).fetchone()
     if not report_row:
         raise ValueError("report file not found")
 
-    scoped_file_ids = set(db.assistant_scoped_file_ids(assistant_id))
+    scoped_file_ids = set(
+        content.assistant_scoped_file_ids(assistant_id)
+        if content is not None
+        else db.assistant_scoped_file_ids(assistant_id)
+    )
     if not scoped_file_ids:
         raise ValueError("assistant has no enabled files in its knowledge bases")
 
@@ -343,7 +360,7 @@ def enqueue_assistant_audit(
         assistant_id, naming_rule_file_id
     )
     if resolved_naming_id:
-        naming_row = db.get_conn().execute(
+        naming_row = content.get_file(resolved_naming_id) if content is not None else db.get_conn().execute(
             "SELECT id FROM files WHERE id=? AND workspace_id=?",
             (resolved_naming_id, row["workspace_id"]),
         ).fetchone()
@@ -354,7 +371,10 @@ def enqueue_assistant_audit(
     if resolved_naming_id:
         excluded.add(resolved_naming_id)
     # Fail fast: after excluding runtime inputs, corpus evidence must remain.
-    db.assistant_evidence_file_ids(assistant_id, excluded_file_ids=excluded)
+    if content is not None:
+        content.assistant_evidence_file_ids(assistant_id, excluded_file_ids=excluded)
+    else:
+        db.assistant_evidence_file_ids(assistant_id, excluded_file_ids=excluded)
 
     # Reuse only an in-flight job for the same assistant + report (resume after
     # client disconnect). Different reports must not share one job row.
@@ -448,23 +468,39 @@ def enqueue_assistant_init(
     """Queue category-init draft generation for an assistant."""
     from . import assistant_init
 
-    row = db.get_conn().execute(
-        """SELECT id, workspace_id, active_version_id
-           FROM audit_assistants WHERE id=? AND workspace_id=?""",
-        (assistant_id, workspace_id()),
-    ).fetchone()
+    content = _content_write_repository()
+    if content is not None:
+        active = content.get_active_assistant_version(assistant_id)
+        row = (
+            {
+                "id": assistant_id,
+                "workspace_id": workspace_id(),
+                "active_version_id": active.get("id") if active else None,
+            }
+            if active
+            else None
+        )
+    else:
+        row = db.get_conn().execute(
+            """SELECT id, workspace_id, active_version_id
+               FROM audit_assistants WHERE id=? AND workspace_id=?""",
+            (assistant_id, workspace_id()),
+        ).fetchone()
     if not row:
         raise KeyError("assistant not found")
     if assistant_id == "assistant_audit_template":
         raise ValueError("不能对通用审查模板运行品类初始化")
     if not row["active_version_id"]:
         raise ValueError("assistant has no active version")
-    if not db.knowledge_base_id_for_assistant(assistant_id):
+    if content is not None:
+        if not content.assistant_bound_knowledge_bases(assistant_id):
+            raise ValueError("assistant is not bound to a knowledge base")
+    elif not db.knowledge_base_id_for_assistant(assistant_id):
         raise ValueError("assistant is not bound to a knowledge base")
 
     samples = list(dict.fromkeys(sample_report_file_ids or []))[:3]
     for file_id in samples:
-        file_row = db.get_conn().execute(
+        file_row = content.get_file(file_id) if content is not None else db.get_conn().execute(
             "SELECT id FROM files WHERE id=? AND workspace_id=?",
             (file_id, row["workspace_id"]),
         ).fetchone()
@@ -1041,6 +1077,45 @@ def _write_parse_outputs(
 
 async def ocr_chunk_sync(chunk_id: str) -> tuple[bool, str]:
     """Run MinerU OCR synchronously and update the chunk. Returns (ok, error)."""
+    content = _content_write_repository()
+    if content is not None:
+        row = content.get_chunk(chunk_id)
+        if not row:
+            raise KeyError("chunk not found")
+        result = await ocr_adapter.ocr_chunk(chunk_id)
+        job = _create_job_record(
+            job_id=uuid.uuid4().hex,
+            workspace=workspace_id(),
+            type_="ocr",
+            target_type="chunk",
+            target_id=chunk_id,
+            priority=0,
+            max_attempts=1,
+            result={"sync": True},
+        )
+        if not result.ok:
+            _fail_job(job, result.error or "ocr failed")
+            return False, result.error or "ocr failed"
+        file_row = content.get_file(str(row.get("file_id") or ""))
+        layers = chunk_schema.ensure_layered_chunk(
+            metadata=row.get("metadata"),
+            business_metadata=row.get("business_metadata"),
+        )
+        meta = layers["business_metadata"]
+        extractors.merge_auto_metadata(
+            meta,
+            result.text,
+            str((file_row or {}).get("name") or ""),
+        )
+        if not content.update_chunk_ocr(
+            chunk_id,
+            text=result.text,
+            business_metadata=meta,
+        ):
+            _fail_job(job, "chunk not found")
+            return False, "chunk not found"
+        _mark_job_done(job["id"], {"text_length": len(result.text), "sync": True})
+        return True, ""
     row = db.get_conn().execute("SELECT id FROM chunks WHERE id=?", (chunk_id,)).fetchone()
     if not row:
         raise KeyError("chunk not found")

@@ -92,8 +92,9 @@ OBJECT_STORAGE_SECRET_KEY = (
     or ""
 ).strip()
 # API content writes remain on SQLite during the staged migration. Worker-owned
-# parse/chunk/OCR mutations switch with DATABASE_BACKEND=postgres; audit/init
-# and embedding writes remain on the next migration boundary.
+# parse/chunk/OCR mutations, audit/init paths, and embedding writes switch with
+# DATABASE_BACKEND=postgres; API CRUD and legacy lexical/settings paths remain
+# on the next migration boundary.
 CONTENT_READ_BACKEND = os.environ.get(
     "CHUNK_STUDIO_CONTENT_READ_BACKEND",
     os.environ.get("CONTENT_READ_BACKEND", "sqlite"),

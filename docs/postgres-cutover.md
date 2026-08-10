@@ -41,9 +41,13 @@ enough for switching: the existing top-K comparison must still pass.
 
 ## Worker boundary
 
-When `CHUNK_STUDIO_DATABASE_BACKEND=postgres`, the PostgreSQL queue and the
-parse/chunk/OCR content mutations and incremental Embedding writes use the same
-workspace-scoped PostgreSQL boundary (`chunk_vector_index` for vectors). The
-audit/assistant-init writers are intentionally still on the next migration
-boundary; do not call this a full default cutover until those paths have their
-own Repository adapters and regression checks.
+When `CHUNK_STUDIO_DATABASE_BACKEND=postgres`, the PostgreSQL queue,
+parse/chunk/OCR mutations, incremental Embedding writes, audit configuration
+reads, and assistant-init draft/apply writes use the same workspace-scoped
+PostgreSQL boundary (`chunk_vector_index` for vectors). The audit workflow
+subprocess receives the request workspace identity explicitly, so it does not
+silently fall back to the local default workspace.
+
+The content CRUD routers and a few legacy SQLite-only retrieval/settings paths
+remain outside this boundary. Keep SQLite as the default until those paths are
+migrated and the vector coverage plus top-K comparison gates pass.

@@ -120,6 +120,41 @@ class ContentRepository(Protocol):
         token_count: int = 0,
     ) -> None: ...
 
+    def get_active_assistant_version(self, assistant_id: str) -> dict[str, Any] | None: ...
+
+    def get_assistant_name(self, assistant_id: str) -> str | None: ...
+
+    def assistant_scoped_file_ids(self, assistant_id: str) -> list[str]: ...
+
+    def assistant_bound_knowledge_bases(self, assistant_id: str) -> list[dict[str, Any]]: ...
+
+    def assistant_default_naming_file_id(self, assistant_id: str) -> str | None: ...
+
+    def assistant_evidence_file_ids(
+        self, assistant_id: str, *, excluded_file_ids: set[str] | None = None
+    ) -> list[str]: ...
+
+    def list_standard_corpus_file_ids(self, assistant_id: str) -> list[str]: ...
+
+    def get_init_draft(self, assistant_id: str) -> dict[str, Any] | None: ...
+
+    def upsert_init_draft(
+        self, assistant_id: str, *, status: str, payload: dict[str, Any], job_id: str | None = None
+    ) -> dict[str, Any]: ...
+
+    def apply_init_draft(
+        self,
+        assistant_id: str,
+        *,
+        model_config: dict[str, Any],
+        node_prompts: dict[str, Any],
+        rules: dict[str, Any],
+        retrieval_config: dict[str, Any],
+        parameter_schema: dict[str, Any],
+        initialization_provenance: dict[str, Any],
+        applied_at: str,
+    ) -> dict[str, Any]: ...
+
 
 def _decode(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
@@ -1170,6 +1205,259 @@ class PostgresContentRepository:
                          source_trace=EXCLUDED.source_trace, updated_at=now()""",
                     rows,
                 )
+
+    def get_active_assistant_version(self, assistant_id: str) -> dict[str, Any] | None:
+        workspace = self._scope()
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT v.*
+                   FROM audit_assistants a
+                   JOIN assistant_versions v ON v.id=a.active_version_id
+                   WHERE a.id=%s AND a.workspace_id=%s AND a.status='active'""",
+                (assistant_id, workspace),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_assistant_name(self, assistant_id: str) -> str | None:
+        workspace = self._scope()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT name FROM audit_assistants WHERE id=%s AND workspace_id=%s",
+                (assistant_id, workspace),
+            ).fetchone()
+        return str(row["name"]) if row and row["name"] else None
+
+    def assistant_scoped_file_ids(self, assistant_id: str) -> list[str]:
+        workspace = self._scope()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT DISTINCT kbf.file_id
+                   FROM assistant_knowledge_bases akb
+                   JOIN knowledge_bases kb ON kb.id=akb.knowledge_base_id
+                   JOIN knowledge_base_files kbf
+                     ON kbf.knowledge_base_id=akb.knowledge_base_id
+                    AND kbf.workspace_id=akb.workspace_id
+                   WHERE akb.assistant_id=%s AND akb.workspace_id=%s
+                     AND akb.enabled AND kb.status='active' AND kbf.enabled
+                   ORDER BY kbf.file_id""",
+                (assistant_id, workspace),
+            ).fetchall()
+        return [str(row["file_id"]) for row in rows]
+
+    def assistant_bound_knowledge_bases(self, assistant_id: str) -> list[dict[str, Any]]:
+        workspace = self._scope()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT kb.*, akb.priority AS bind_priority
+                   FROM assistant_knowledge_bases akb
+                   JOIN knowledge_bases kb ON kb.id=akb.knowledge_base_id
+                   WHERE akb.assistant_id=%s AND akb.workspace_id=%s
+                     AND akb.enabled AND kb.status='active'
+                   ORDER BY akb.priority ASC, kb.name ASC""",
+                (assistant_id, workspace),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def assistant_default_naming_file_id(self, assistant_id: str) -> str | None:
+        workspace = self._scope()
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT kb.default_naming_file_id
+                   FROM assistant_knowledge_bases akb
+                   JOIN knowledge_bases kb ON kb.id=akb.knowledge_base_id
+                   WHERE akb.assistant_id=%s AND akb.workspace_id=%s AND akb.enabled
+                     AND kb.status='active' AND kb.default_naming_file_id IS NOT NULL
+                     AND TRIM(kb.default_naming_file_id) <> ''
+                   ORDER BY akb.priority DESC, kb.name ASC
+                   LIMIT 1""",
+                (assistant_id, workspace),
+            ).fetchone()
+        return str(row["default_naming_file_id"]) if row else None
+
+    def assistant_evidence_file_ids(
+        self,
+        assistant_id: str,
+        *,
+        excluded_file_ids: set[str] | None = None,
+    ) -> list[str]:
+        excluded = {str(item) for item in (excluded_file_ids or set())}
+        file_ids = [
+            file_id for file_id in self.assistant_scoped_file_ids(assistant_id)
+            if file_id not in excluded
+        ]
+        if not file_ids:
+            raise ValueError("assistant has no evidence files after excluding runtime inputs")
+        return file_ids
+
+    def list_standard_corpus_file_ids(self, assistant_id: str) -> list[str]:
+        workspace = self._scope()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT kbf.file_id, kbf.corpus_kind, f.name
+                   FROM assistant_knowledge_bases akb
+                   JOIN knowledge_base_files kbf
+                     ON kbf.knowledge_base_id=akb.knowledge_base_id
+                    AND kbf.workspace_id=akb.workspace_id AND kbf.enabled
+                   JOIN files f ON f.id=kbf.file_id AND f.workspace_id=akb.workspace_id
+                   WHERE akb.assistant_id=%s AND akb.workspace_id=%s AND akb.enabled
+                     AND EXISTS (
+                       SELECT 1 FROM document_parses dp
+                       WHERE dp.file_id=f.id AND dp.workspace_id=f.workspace_id
+                         AND dp.status='done'
+                         AND (dp.markdown_path IS NOT NULL AND TRIM(dp.markdown_path) <> ''
+                              OR dp.markdown_object_key IS NOT NULL AND TRIM(dp.markdown_object_key) <> '')
+                     )
+                   ORDER BY CASE WHEN LOWER(COALESCE(kbf.corpus_kind, ''))='standard'
+                                      THEN 0 ELSE 1 END, f.name ASC""",
+                (assistant_id, workspace),
+            ).fetchall()
+        return [str(row["file_id"]) for row in rows]
+
+    def get_init_draft(self, assistant_id: str) -> dict[str, Any] | None:
+        workspace = self._scope()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM assistant_init_drafts WHERE assistant_id=%s AND workspace_id=%s",
+                (assistant_id, workspace),
+            ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["payload"] = _decode(item.get("payload"))
+        return item
+
+    def upsert_init_draft(
+        self,
+        assistant_id: str,
+        *,
+        status: str,
+        payload: dict[str, Any],
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
+        workspace = self._scope()
+        encoded = json.dumps(payload or {}, ensure_ascii=False)
+        with self._connect() as conn:
+            row = conn.execute(
+                """INSERT INTO assistant_init_drafts
+                   (assistant_id, workspace_id, status, payload, job_id)
+                   VALUES (%s,%s,%s,%s::jsonb,%s)
+                   ON CONFLICT (assistant_id) DO UPDATE SET
+                     workspace_id=EXCLUDED.workspace_id, status=EXCLUDED.status,
+                     payload=EXCLUDED.payload, job_id=COALESCE(EXCLUDED.job_id, assistant_init_drafts.job_id),
+                     updated_at=now()
+                   RETURNING *""",
+                (assistant_id, workspace, status, encoded, job_id),
+            ).fetchone()
+        item = dict(row)
+        item["payload"] = _decode(item.get("payload"))
+        return item
+
+    def apply_init_draft(
+        self,
+        assistant_id: str,
+        *,
+        model_config: dict[str, Any],
+        node_prompts: dict[str, Any],
+        rules: dict[str, Any],
+        retrieval_config: dict[str, Any],
+        parameter_schema: dict[str, Any],
+        initialization_provenance: dict[str, Any],
+        applied_at: str,
+    ) -> dict[str, Any]:
+        workspace = self._scope()
+        encoded = {
+            "model_config": json.dumps(model_config or {}, ensure_ascii=False),
+            "node_prompts": json.dumps(node_prompts or {}, ensure_ascii=False),
+            "rules": json.dumps(rules or {}, ensure_ascii=False),
+            "retrieval_config": json.dumps(retrieval_config or {}, ensure_ascii=False),
+            "parameter_schema": json.dumps(parameter_schema or {}, ensure_ascii=False),
+            "initialization_provenance": json.dumps(
+                initialization_provenance or {}, ensure_ascii=False
+            ),
+        }
+        with self._connect() as conn:
+            assistant = conn.execute(
+                """SELECT active_version_id
+                   FROM audit_assistants
+                   WHERE id=%s AND workspace_id=%s
+                   FOR UPDATE""",
+                (assistant_id, workspace),
+            ).fetchone()
+            if not assistant:
+                raise ValueError("assistant not found")
+            version_id = assistant["active_version_id"]
+            version_row = (
+                conn.execute(
+                    "SELECT version FROM assistant_versions WHERE id=%s AND assistant_id=%s",
+                    (version_id, assistant_id),
+                ).fetchone()
+                if version_id
+                else None
+            )
+            version_no = int(version_row["version"] or 1) if version_row else 1
+            if version_id:
+                conn.execute(
+                    """UPDATE assistant_versions
+                       SET status='active', model_config=%s::jsonb,
+                           node_prompts=%s::jsonb, rules=%s::jsonb,
+                           retrieval_config=%s::jsonb, parameter_schema=%s::jsonb,
+                           category_profile='{}'::jsonb,
+                           initialization_provenance=%s::jsonb,
+                           activated_at=%s
+                       WHERE id=%s AND assistant_id=%s""",
+                    (
+                        encoded["model_config"],
+                        encoded["node_prompts"],
+                        encoded["rules"],
+                        encoded["retrieval_config"],
+                        encoded["parameter_schema"],
+                        encoded["initialization_provenance"],
+                        applied_at,
+                        version_id,
+                        assistant_id,
+                    ),
+                )
+                conn.execute(
+                    "DELETE FROM assistant_versions WHERE assistant_id=%s AND id<>%s",
+                    (assistant_id, version_id),
+                )
+            else:
+                version_id = f"{assistant_id}_v1_{uuid.uuid4().hex[:8]}"
+                version_no = 1
+                conn.execute(
+                    """INSERT INTO assistant_versions
+                       (id, assistant_id, version, name, status, model_config,
+                        node_prompts, rules, retrieval_config, parameter_schema,
+                        category_profile, initialization_provenance, created_at, activated_at)
+                       VALUES (%s,%s,%s,'','active',%s::jsonb,%s::jsonb,%s::jsonb,
+                               %s::jsonb,%s::jsonb,'{}'::jsonb,%s::jsonb,%s,%s)""",
+                    (
+                        version_id,
+                        assistant_id,
+                        version_no,
+                        encoded["model_config"],
+                        encoded["node_prompts"],
+                        encoded["rules"],
+                        encoded["retrieval_config"],
+                        encoded["parameter_schema"],
+                        encoded["initialization_provenance"],
+                        applied_at,
+                        applied_at,
+                    ),
+                )
+            conn.execute(
+                """UPDATE audit_assistants
+                   SET active_version_id=%s, status='active', updated_at=%s
+                   WHERE id=%s AND workspace_id=%s""",
+                (version_id, applied_at, assistant_id, workspace),
+            )
+            conn.execute(
+                """UPDATE assistant_init_drafts
+                   SET status='applied', updated_at=%s
+                   WHERE assistant_id=%s AND workspace_id=%s""",
+                (applied_at, assistant_id, workspace),
+            )
+        return {"version_id": version_id, "version": version_no}
 
 def postgres_schema_sql() -> list[str]:
     """DDL for session/job tables; deployment runs it before switching adapters."""

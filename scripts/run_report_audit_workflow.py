@@ -24,6 +24,7 @@ sys.path.insert(0, str(BACKEND))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from app import db, embeddings, llm  # noqa: E402
+from app.storage.repositories import get_content_repository, get_content_write_repository  # noqa: E402
 from app.agent_runtime import AgentPolicy  # noqa: E402
 from app.audit_policy import (  # noqa: E402
     PRODUCTION_EVIDENCE_COMPRESSION_MODE,
@@ -63,6 +64,10 @@ RRF_K = 60
 DEFAULT_OUTPUT = BACKEND / "data" / "reports" / "hbjc_end_to_end_audit_v1.json"
 DEFAULT_JUDGE_CONCURRENCY = 8
 MAX_JUDGE_CONCURRENCY = 500
+
+
+def _content_repository():
+    return get_content_repository() or get_content_write_repository()
 
 
 def _call_model(system_prompt: str, payload: dict[str, Any], *, model: str) -> dict[str, Any]:
@@ -155,14 +160,25 @@ def _filter_evidence_file_ids_by_detection_basis(
     """Keep bound-KB evidence files whose chunk standard number is declared."""
     if not file_ids:
         raise ValueError("助手知识库没有可用标准文件")
-    placeholders = ",".join("?" for _ in file_ids)
-    rows = db.get_conn().execute(
-        f"""SELECT DISTINCT file_id,
-                   json_extract(business_metadata, '$.standard_no') AS standard_no
-            FROM chunks
-            WHERE file_id IN ({placeholders})""",
-        file_ids,
-    ).fetchall()
+    repository = _content_repository()
+    if repository is not None:
+        rows = [
+            {
+                "file_id": file_id,
+                "standard_no": (chunk.get("business_metadata") or {}).get("standard_no"),
+            }
+            for file_id in file_ids
+            for chunk in repository.list_chunks(file_id=file_id, limit=1000)
+        ]
+    else:
+        placeholders = ",".join("?" for _ in file_ids)
+        rows = db.get_conn().execute(
+            f"""SELECT DISTINCT file_id,
+                       json_extract(business_metadata, '$.standard_no') AS standard_no
+                FROM chunks
+                WHERE file_id IN ({placeholders})""",
+            file_ids,
+        ).fetchall()
     declared = {_normalize_standard_no(item) for item in declared_standard_nos}
     standards_by_file: dict[str, set[str]] = {}
     matched_standards: set[str] = set()
@@ -249,13 +265,18 @@ def _resolve_peer_context_rules(
 
 
 def _load_assistant_version(assistant_id: str) -> dict[str, Any]:
-    row = db.get_conn().execute(
-        """SELECT v.*
-           FROM audit_assistants a
-           JOIN assistant_versions v ON v.id=a.active_version_id
-           WHERE a.id=? AND a.status='active'""",
-        (assistant_id,),
-    ).fetchone()
+    repository = _content_repository()
+    row = (
+        repository.get_active_assistant_version(assistant_id)
+        if repository is not None
+        else db.get_conn().execute(
+            """SELECT v.*
+               FROM audit_assistants a
+               JOIN assistant_versions v ON v.id=a.active_version_id
+               WHERE a.id=? AND a.status='active'""",
+            (assistant_id,),
+        ).fetchone()
+    )
     if not row:
         raise ValueError(f"active assistant version not found: {assistant_id}")
     payload = dict(row)
@@ -271,6 +292,8 @@ def _load_assistant_version(assistant_id: str) -> dict[str, Any]:
         raw = payload.get(key)
         if raw is None:
             payload[key] = {}
+        elif isinstance(raw, (dict, list)):
+            payload[key] = raw
         else:
             payload[key] = json.loads(raw or "{}")
     payload["parameter_schema"] = resolve_parameter_schema(payload.get("parameter_schema"))
@@ -284,6 +307,12 @@ def _assistant_evidence_file_ids(
     *,
     excluded_file_ids: set[str] | None = None,
 ) -> list[str]:
+    repository = _content_repository()
+    if repository is not None:
+        return repository.assistant_evidence_file_ids(
+            assistant_id,
+            excluded_file_ids=excluded_file_ids,
+        )
     return db.assistant_evidence_file_ids(
         assistant_id,
         excluded_file_ids=excluded_file_ids,
@@ -312,11 +341,16 @@ def _assistant_prompt_var_context(
     assistant_id: str,
     profile: dict[str, Any],
 ) -> dict[str, str]:
-    bound = db.assistant_bound_knowledge_bases(assistant_id)
+    repository = _content_repository()
+    bound = (
+        repository.assistant_bound_knowledge_bases(assistant_id)
+        if repository is not None
+        else db.assistant_bound_knowledge_bases(assistant_id)
+    )
     # Bound list is priority ASC; last row is highest priority (same as merge_manual_rules).
     primary = bound[-1] if bound else {}
-    manual_rules = db.resolve_assistant_manual_rules(
-        assistant_id,
+    manual_rules = db.merge_manual_rules(
+        bound,
         fallback=profile.get("rules"),
     )
     retrieval_config = profile.get("retrieval_config") or {}
@@ -421,7 +455,8 @@ def _load_manual_knowledge_rules(
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if payload is None:
-        db.init_db()
+        if _content_repository() is None:
+            db.init_db()
         payload = _load_assistant_version(
             "assistant_oil_transformer_audit"
         )["rules"]
@@ -1510,14 +1545,22 @@ def _resolve_report_file_name(file_id: str | None) -> str | None:
     fid = str(file_id or "").strip()
     if not fid:
         return None
-    row = db.get_conn().execute(
-        "SELECT name FROM files WHERE id=?",
-        (fid,),
-    ).fetchone()
+    repository = _content_repository()
+    row = (
+        repository.get_file(fid)
+        if repository is not None
+        else db.get_conn().execute(
+            "SELECT name FROM files WHERE id=?",
+            (fid,),
+        ).fetchone()
+    )
     return str(row["name"]) if row and row["name"] else None
 
 
 def _resolve_assistant_name(assistant_id: str) -> str:
+    repository = _content_repository()
+    if repository is not None:
+        return repository.get_assistant_name(assistant_id) or assistant_id
     row = db.get_conn().execute(
         "SELECT name FROM audit_assistants WHERE id=?",
         (assistant_id,),
@@ -1526,7 +1569,12 @@ def _resolve_assistant_name(assistant_id: str) -> str:
 
 
 def _resolve_bound_knowledge_base(assistant_id: str) -> dict[str, Any]:
-    bound = db.assistant_bound_knowledge_bases(assistant_id)
+    repository = _content_repository()
+    bound = (
+        repository.assistant_bound_knowledge_bases(assistant_id)
+        if repository is not None
+        else db.assistant_bound_knowledge_bases(assistant_id)
+    )
     if not bound:
         return {"knowledge_base_id": None, "knowledge_base_name": None}
     primary = bound[-1]
@@ -2150,7 +2198,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    db.init_db()
+    if _content_repository() is None:
+        db.init_db()
     started_at = str(args.started_at or "").strip() or time.strftime("%Y-%m-%dT%H:%M:%S")
     profile = _load_assistant_version(args.assistant_id)
     excluded_file_ids = {
@@ -2251,13 +2300,19 @@ def main() -> None:
     checkpoint_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
 
     units = _build_full_audit_units(extracted)
+    repository = _content_repository()
+    bound_knowledge_bases = (
+        repository.assistant_bound_knowledge_bases(args.assistant_id)
+        if repository is not None
+        else db.assistant_bound_knowledge_bases(args.assistant_id)
+    )
     manual_knowledge_rules = _load_manual_knowledge_rules(
-        db.resolve_assistant_manual_rules(
-            args.assistant_id,
+        db.merge_manual_rules(
+            bound_knowledge_bases,
             fallback=profile["rules"],
         )
     )
-    few_shot_rules = db.resolve_assistant_few_shot_rules(args.assistant_id)
+    few_shot_rules = db.merge_few_shot_rules(bound_knowledge_bases)
     results = list(checkpoint.get("cases") or [])
     completed_ids = {item["case_id"] for item in results}
     total_units = len(units)

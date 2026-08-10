@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -35,15 +36,16 @@ def production_runtime_args() -> list[str]:
 
 
 def _latest_done_parse(file_id: str) -> dict[str, Any]:
-    from .storage.repositories import get_content_repository
+    from .storage.repositories import get_content_repository, get_content_write_repository
 
-    repository = get_content_repository()
+    repository = get_content_repository() or get_content_write_repository()
     if repository is not None:
         parse = repository.latest_parse(file_id)
         if parse and parse.get("status") == "done" and (
             parse.get("markdown_path") or parse.get("markdown_object_key")
         ):
             return parse
+        raise ValueError(f"file has no completed parse with markdown: {file_id}")
     row = db.get_conn().execute(
         """SELECT * FROM document_parses
            WHERE file_id=? AND status='done'
@@ -77,7 +79,14 @@ def resolve_naming_rule_path(
 ) -> Path:
     resolved_id = file_id
     if not resolved_id and assistant_id:
-        resolved_id = db.assistant_default_naming_file_id(assistant_id)
+        from .storage.repositories import get_content_repository, get_content_write_repository
+
+        repository = get_content_repository() or get_content_write_repository()
+        resolved_id = (
+            repository.assistant_default_naming_file_id(assistant_id)
+            if repository is not None
+            else db.assistant_default_naming_file_id(assistant_id)
+        )
     if resolved_id:
         return resolve_markdown_path(resolved_id)
     if DEFAULT_NAMING_RULE.is_file():
@@ -94,7 +103,14 @@ def resolve_naming_rule_file_id(
     """Explicit run override, else KB default, else None (eval fallback path)."""
     if naming_rule_file_id:
         return naming_rule_file_id
-    return db.assistant_default_naming_file_id(assistant_id)
+    from .storage.repositories import get_content_repository, get_content_write_repository
+
+    repository = get_content_repository() or get_content_write_repository()
+    return (
+        repository.assistant_default_naming_file_id(assistant_id)
+        if repository is not None
+        else db.assistant_default_naming_file_id(assistant_id)
+    )
 
 
 def run_assistant_audit(
@@ -122,11 +138,18 @@ def run_assistant_audit(
     output_path = REPORTS_DIR / report_name
     run_started = (started_at or "").strip() or time.strftime("%Y-%m-%dT%H:%M:%S")
 
-    file_row = db.get_conn().execute(
-        "SELECT name FROM files WHERE id=? AND workspace_id=?",
-        (report_file_id, current_user.get_current_user().workspace_id),
-    ).fetchone()
-    report_file_name = str(file_row["name"]) if file_row and file_row["name"] else None
+    from .storage.repositories import get_content_repository, get_content_write_repository
+
+    repository = get_content_repository() or get_content_write_repository()
+    if repository is not None:
+        file_row = repository.get_file(report_file_id)
+        report_file_name = str(file_row.get("name") or "") or None if file_row else None
+    else:
+        file_row = db.get_conn().execute(
+            "SELECT name FROM files WHERE id=? AND workspace_id=?",
+            (report_file_id, current_user.get_current_user().workspace_id),
+        ).fetchone()
+        report_file_name = str(file_row["name"]) if file_row and file_row["name"] else None
 
     cmd = [
         sys.executable,
@@ -148,10 +171,17 @@ def run_assistant_audit(
         cmd.extend(["--job-id", job_id])
     if resolved_naming_id:
         cmd.extend(["--naming-rule-file-id", resolved_naming_id])
+    run_env = os.environ.copy()
+    identity = current_user.get_current_user()
+    run_env["CHUNK_STUDIO_DEFAULT_WORKSPACE_ID"] = identity.workspace_id
+    run_env["DEFAULT_WORKSPACE_ID"] = identity.workspace_id
+    run_env["CHUNK_STUDIO_DEFAULT_USER_ID"] = identity.user_id
+    run_env["DEFAULT_USER_ID"] = identity.user_id
     logger.info("starting assistant audit: %s", " ".join(cmd))
     completed = subprocess.run(
         cmd,
         cwd=str(config.PROJECT_ROOT),
+        env=run_env,
         capture_output=True,
         text=True,
         encoding="utf-8",
