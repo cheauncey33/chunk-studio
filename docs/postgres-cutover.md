@@ -80,6 +80,9 @@ API to PostgreSQL (`users`, `workspaces`, and `workspace_members`). A trusted
 proxy user is accepted only when that exact user/workspace pair is active in
 PostgreSQL; the client still cannot submit or override `workspace_id`.
 
-The content CRUD routers and a few legacy SQLite-only retrieval/settings paths
-remain outside this boundary. Keep SQLite as the default until those paths are
-migrated and the vector coverage plus top-K comparison gates pass.
+In the `postgres` profile, the KB/file/chunk/assistant/audit-review routers,
+chat sessions, recovery exact search, and Worker mutations use the PostgreSQL
+repositories. The business analytics/SQL source remains a separate read-only
+business-data boundary; evaluation-only maintenance scripts may still target
+the SQLite fixture explicitly. Keep the local profile for rollback and use the
+PostgreSQL profile only after the content/object/vector comparison gates pass.
