@@ -241,6 +241,53 @@ def test_postgres_job_claim_uses_skip_locked_and_leases(monkeypatch) -> None:
     assert "locked_until" in connection.sql[1]
 
 
+def test_postgres_workspace_repository_scopes_active_membership(monkeypatch) -> None:
+    class Result:
+        def fetchone(self):
+            return {
+                "id": "workspace-1",
+                "name": "Workspace 1",
+                "slug": "workspace-1",
+                "status": "active",
+                "role": "member",
+                "member_status": "active",
+            }
+
+        def fetchall(self):
+            return [{"id": "user-1", "display_name": "User 1", "role": "member", "status": "active"}]
+
+    class Connection:
+        def __init__(self):
+            self.sql: list[str] = []
+            self.params: list[tuple] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement, params):
+            self.sql.append(statement)
+            self.params.append(params)
+            return Result()
+
+    connection = Connection()
+    monkeypatch.setattr(
+        repositories.PostgresWorkspaceRepository,
+        "_connect",
+        lambda _self: connection,
+    )
+    repository = repositories.PostgresWorkspaceRepository("postgresql://test")
+
+    assert repository.is_active_member(workspace_id="workspace-1", user_id="user-1")
+    assert repository.list_members(workspace_id="workspace-1")[0]["id"] == "user-1"
+    assert connection.params[0] == ("workspace-1", "user-1")
+    assert "w.status='active'" in connection.sql[0]
+    assert "wm.status='active'" in connection.sql[0]
+    assert "?" not in connection.sql[1]
+
+
 def test_postgres_repository_factory_is_opt_in(monkeypatch) -> None:
     monkeypatch.setattr(config, "DATABASE_BACKEND", "sqlite")
     assert repositories.get_chat_repository() is None
@@ -250,6 +297,7 @@ def test_postgres_repository_factory_is_opt_in(monkeypatch) -> None:
     monkeypatch.setattr(config, "DATABASE_URL", "postgresql://example.invalid/db")
     assert isinstance(repositories.get_chat_repository(), repositories.PostgresChatRepository)
     assert isinstance(repositories.get_job_repository(), repositories.PostgresJobRepository)
+    assert isinstance(repositories.get_workspace_repository(), repositories.PostgresWorkspaceRepository)
 
     monkeypatch.setattr(config, "CONTENT_READ_BACKEND", "postgres")
     assert isinstance(repositories.get_content_repository(), repositories.PostgresContentRepository)

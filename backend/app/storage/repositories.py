@@ -54,6 +54,14 @@ class JobRepository(Protocol):
     def mark_failed(self, job_id: str, error: str, *, retry_delay_seconds: int = 30) -> None: ...
 
 
+class WorkspaceRepository(Protocol):
+    def is_active_member(self, *, workspace_id: str, user_id: str) -> bool: ...
+
+    def current_workspace(self, *, workspace_id: str, user_id: str) -> dict[str, Any] | None: ...
+
+    def list_members(self, *, workspace_id: str) -> list[dict[str, Any]]: ...
+
+
 class ContentRepository(Protocol):
     """Read-side contract for the first business-content migration slice."""
 
@@ -761,6 +769,53 @@ class PostgresJobRepository:
                    WHERE id=%s""",
                 (error[:4000], max(1, int(retry_delay_seconds)), job_id),
             )
+
+
+@dataclass(frozen=True)
+class PostgresWorkspaceRepository:
+    dsn: str
+
+    def _connect(self):
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "PostgreSQL repositories require the optional psycopg dependency"
+            ) from exc
+        return psycopg.connect(self.dsn, row_factory=dict_row)
+
+    def is_active_member(self, *, workspace_id: str, user_id: str) -> bool:
+        return self.current_workspace(workspace_id=workspace_id, user_id=user_id) is not None
+
+    def current_workspace(
+        self, *, workspace_id: str, user_id: str
+    ) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT w.id, w.name, w.slug, w.status,
+                          wm.role, wm.status AS member_status
+                   FROM workspaces w
+                   JOIN workspace_members wm ON wm.workspace_id=w.id
+                   JOIN users u ON u.id=wm.user_id
+                   WHERE w.id=%s AND wm.user_id=%s
+                     AND w.status='active' AND wm.status='active'
+                     AND u.status='active'""",
+                (workspace_id, user_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_members(self, *, workspace_id: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT u.id, u.display_name, wm.role, wm.status
+                   FROM workspace_members wm
+                   JOIN users u ON u.id=wm.user_id
+                   WHERE wm.workspace_id=%s
+                   ORDER BY u.display_name, u.id""",
+                (workspace_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
 
 @dataclass(frozen=True)
@@ -2489,6 +2544,14 @@ def get_job_repository() -> PostgresJobRepository | None:
         if not config.DATABASE_URL:
             raise RuntimeError("DATABASE_URL is required for PostgreSQL repositories")
         return PostgresJobRepository(config.DATABASE_URL)
+    return None
+
+
+def get_workspace_repository() -> PostgresWorkspaceRepository | None:
+    if config.DATABASE_BACKEND in {"postgres", "postgresql"}:
+        if not config.DATABASE_URL:
+            raise RuntimeError("DATABASE_URL is required for PostgreSQL repositories")
+        return PostgresWorkspaceRepository(config.DATABASE_URL)
     return None
 
 

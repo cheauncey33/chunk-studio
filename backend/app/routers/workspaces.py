@@ -8,6 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from .. import current_user, db
+from ..storage.repositories import get_workspace_repository
 
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
@@ -16,6 +17,31 @@ router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 @router.get("/current")
 def current_workspace() -> dict:
     user = current_user.get_current_user()
+    repository = get_workspace_repository()
+    if repository is not None:
+        row = repository.current_workspace(
+            workspace_id=user.workspace_id,
+            user_id=user.user_id,
+        )
+        if not row:
+            raise HTTPException(403, "current user is not an active workspace member")
+        return {
+            "workspace": {
+                "id": row["id"],
+                "name": row["name"],
+                "slug": row["slug"],
+                "status": row["status"],
+            },
+            "user": {
+                "id": user.user_id,
+                "roles": sorted(user.roles),
+                "authenticated": user.authenticated,
+            },
+            "membership": {
+                "role": row["role"],
+                "status": row["member_status"],
+            },
+        }
     row = db.get_conn().execute(
         """SELECT w.id, w.name, w.slug, w.status, wm.role, wm.status AS member_status
            FROM workspaces w
@@ -47,6 +73,14 @@ def current_workspace() -> dict:
 @router.get("/current/members")
 def current_workspace_members() -> dict:
     user = current_user.get_current_user()
+    repository = get_workspace_repository()
+    if repository is not None:
+        if not repository.is_active_member(
+            workspace_id=user.workspace_id,
+            user_id=user.user_id,
+        ):
+            raise HTTPException(403, "current user is not an active workspace member")
+        return {"items": repository.list_members(workspace_id=user.workspace_id)}
     if not db.is_active_workspace_member(
         workspace_id=user.workspace_id,
         user_id=user.user_id,

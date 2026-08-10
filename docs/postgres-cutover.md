@@ -48,6 +48,11 @@ PostgreSQL boundary (`chunk_vector_index` for vectors). The audit workflow
 subprocess receives the request workspace identity explicitly, so it does not
 silently fall back to the local default workspace.
 
+The same setting also moves request membership checks and the current-workspace
+API to PostgreSQL (`users`, `workspaces`, and `workspace_members`). A trusted
+proxy user is accepted only when that exact user/workspace pair is active in
+PostgreSQL; the client still cannot submit or override `workspace_id`.
+
 The content CRUD routers and a few legacy SQLite-only retrieval/settings paths
 remain outside this boundary. Keep SQLite as the default until those paths are
 migrated and the vector coverage plus top-K comparison gates pass.

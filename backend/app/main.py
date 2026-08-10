@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import JSONResponse
 
 from . import config, current_user, db, jobs as job_service, lexical
+from .storage import repositories
 from .routers import (
     assistants,
     analytics,
@@ -70,10 +71,19 @@ async def bind_current_user(request, call_next):
         user = current_user.current_user_for_headers(request.headers)
     except current_user.CurrentUserError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=401)
-    if not db.is_active_workspace_member(
-        workspace_id=user.workspace_id,
-        user_id=user.user_id,
-    ):
+    workspace_repository = repositories.get_workspace_repository()
+    is_active_member = (
+        workspace_repository.is_active_member(
+            workspace_id=user.workspace_id,
+            user_id=user.user_id,
+        )
+        if workspace_repository is not None
+        else db.is_active_workspace_member(
+            workspace_id=user.workspace_id,
+            user_id=user.user_id,
+        )
+    )
+    if not is_active_member:
         return JSONResponse(
             {"detail": "current user is not an active workspace member"},
             status_code=403,
