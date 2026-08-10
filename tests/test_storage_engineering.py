@@ -44,6 +44,30 @@ def test_trusted_proxy_current_user_requires_operator_opt_in(monkeypatch) -> Non
     assert identity.can("analyst")
 
 
+def test_distributed_runtime_requires_shared_services(monkeypatch) -> None:
+    monkeypatch.setattr(config, "DATABASE_BACKEND", "postgres")
+    monkeypatch.setattr(config, "DATABASE_URL", "postgresql://example/db")
+    monkeypatch.setattr(config, "REQUIRE_DISTRIBUTED_RUNTIME", True)
+    monkeypatch.setattr(config, "REDIS_URL", "")
+    monkeypatch.setattr(config, "OBJECT_STORAGE_BACKEND", "local")
+    monkeypatch.setattr(config, "RUN_IN_PROCESS_WORKER", False)
+
+    with pytest.raises(RuntimeError, match="REDIS_URL"):
+        config.validate_deployment_config()
+
+    monkeypatch.setattr(config, "REDIS_URL", "redis://example/0")
+    with pytest.raises(RuntimeError, match="S3/MinIO"):
+        config.validate_deployment_config()
+
+    monkeypatch.setattr(config, "OBJECT_STORAGE_BACKEND", "minio")
+    monkeypatch.setattr(config, "RUN_IN_PROCESS_WORKER", True)
+    with pytest.raises(RuntimeError, match="RUN_IN_PROCESS_WORKER"):
+        config.validate_deployment_config()
+
+    monkeypatch.setattr(config, "RUN_IN_PROCESS_WORKER", False)
+    config.validate_deployment_config()
+
+
 def test_sqlite_vector_store_preserves_legacy_behavior(monkeypatch) -> None:
     seen: dict = {}
 

@@ -9,7 +9,15 @@ $env:CHUNK_STUDIO_CONTENT_READ_BACKEND = 'postgres'
 $env:CHUNK_STUDIO_OBJECT_STORAGE_BACKEND = 'minio'
 $env:CHUNK_STUDIO_OBJECT_STORAGE_BUCKET = 'chunk-studio'
 $env:CHUNK_STUDIO_OBJECT_STORAGE_ENDPOINT_URL = 'http://127.0.0.1:59000'
+$env:CHUNK_STUDIO_REDIS_URL = 'redis://:chunkstudio_dev_only@127.0.0.1:56379/0'
+$env:CHUNK_STUDIO_RUN_IN_PROCESS_WORKER = '0'
 ```
+
+When PostgreSQL or trusted-proxy authentication is enabled, distributed
+runtime guardrails are enabled by default: Redis, shared S3/MinIO storage, and
+an external Worker are required. A local single-process experiment may opt out
+explicitly with `CHUNK_STUDIO_REQUIRE_DISTRIBUTED_RUNTIME=0`; that override is
+not suitable for a multi-instance deployment.
 
 Derived Markdown, layout ZIPs, and crop images are migrated separately. The
 command is dry-run by default and keeps local files as rollback copies:

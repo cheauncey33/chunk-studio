@@ -111,6 +111,16 @@ TRUST_PROXY_AUTH = os.environ.get(
     "CHUNK_STUDIO_TRUST_PROXY_AUTH",
     os.environ.get("TRUST_PROXY_AUTH", "0"),
 ).strip().casefold() in {"1", "true", "yes", "on"}
+_distributed_runtime_override = os.environ.get(
+    "CHUNK_STUDIO_REQUIRE_DISTRIBUTED_RUNTIME",
+    os.environ.get("REQUIRE_DISTRIBUTED_RUNTIME", ""),
+).strip().casefold()
+REQUIRE_DISTRIBUTED_RUNTIME = (
+    _distributed_runtime_override in {"1", "true", "yes", "on"}
+    if _distributed_runtime_override
+    else DATABASE_BACKEND in {"postgres", "postgresql"}
+    or AUTH_MODE in {"trusted_proxy", "proxy"}
+)
 DEFAULT_WORKSPACE_ID = (
     os.environ.get("CHUNK_STUDIO_DEFAULT_WORKSPACE_ID")
     or os.environ.get("DEFAULT_WORKSPACE_ID")
@@ -173,6 +183,18 @@ def validate_deployment_config() -> None:
         raise RuntimeError(
             "TRUST_PROXY_AUTH must be enabled for trusted_proxy authentication"
         )
+    if REQUIRE_DISTRIBUTED_RUNTIME and not REDIS_URL:
+        raise RuntimeError(
+            "REDIS_URL is required when distributed runtime coordination is enabled"
+        )
+    if REQUIRE_DISTRIBUTED_RUNTIME and OBJECT_STORAGE_BACKEND not in {"s3", "minio"}:
+        raise RuntimeError(
+            "shared S3/MinIO object storage is required for distributed runtime"
+        )
+    if REQUIRE_DISTRIBUTED_RUNTIME and RUN_IN_PROCESS_WORKER:
+        raise RuntimeError(
+            "RUN_IN_PROCESS_WORKER must be disabled when distributed runtime is enabled"
+        )
 
 
 def deployment_config() -> dict[str, str | bool]:
@@ -181,6 +203,7 @@ def deployment_config() -> dict[str, str | bool]:
         "database_backend": DATABASE_BACKEND,
         "vector_backend": VECTOR_BACKEND,
         "redis_configured": bool(REDIS_URL),
+        "distributed_runtime_required": REQUIRE_DISTRIBUTED_RUNTIME,
         "object_storage_backend": OBJECT_STORAGE_BACKEND,
         "object_storage_configured": bool(OBJECT_STORAGE_BUCKET),
         "content_read_backend": CONTENT_READ_BACKEND,
