@@ -7,16 +7,26 @@ from fastapi import APIRouter
 
 from .. import current_user, db, embeddings
 from .. import jobs as job_service
+from ..storage.repositories import get_content_repository, get_content_write_repository
 
 router = APIRouter(prefix="/embeddings", tags=["embeddings"])
 
 
 @router.get("/status")
 def embeddings_status() -> dict[str, Any]:
-    approved = db.get_conn().execute(
-        "SELECT COUNT(*) FROM chunks WHERE status='approved' AND workspace_id=?",
-        (current_user.get_current_user().workspace_id,),
-    ).fetchone()[0]
+    repository = get_content_repository() or get_content_write_repository()
+    if repository is not None:
+        approved = len(
+            repository.list_embedding_rows(
+                model=embeddings.DEFAULT_MODEL,
+                dimension=embeddings.DEFAULT_DIMENSION,
+            )
+        )
+    else:
+        approved = db.get_conn().execute(
+            "SELECT COUNT(*) FROM chunks WHERE status='approved' AND workspace_id=?",
+            (current_user.get_current_user().workspace_id,),
+        ).fetchone()[0]
     pending = len(
         embeddings.pending_documents(
             model=embeddings.DEFAULT_MODEL,

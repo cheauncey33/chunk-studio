@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from . import audit_run, config, current_user, db, llm
+from .storage.repositories import get_content_repository, get_content_write_repository
 
 GENERIC_TEMPLATE_ID = "assistant_audit_template"
 DEFAULT_FALLBACK_ID = "assistant_oil_transformer_audit"
@@ -30,6 +31,34 @@ def _router_prompt() -> str:
 
 def list_routable_candidates() -> list[dict[str, Any]]:
     """Assistants with exactly one bound active KB (exclude template)."""
+    repository = get_content_repository() or get_content_write_repository()
+    if repository is not None:
+        out: list[dict[str, Any]] = []
+        for assistant in repository.list_assistants():
+            assistant_id = str(assistant.get("id") or "")
+            if (
+                not assistant_id
+                or assistant_id == GENERIC_TEMPLATE_ID
+                or assistant.get("status") != "active"
+                or not assistant.get("active_version_id")
+            ):
+                continue
+            bound = repository.assistant_bound_knowledge_bases(assistant_id)
+            if len(bound) != 1:
+                continue
+            knowledge_base = bound[0]
+            out.append(
+                {
+                    "assistant_id": assistant_id,
+                    "assistant_name": assistant.get("name") or "",
+                    "assistant_description": assistant.get("description") or "",
+                    "knowledge_base_id": knowledge_base.get("id"),
+                    "knowledge_base_name": knowledge_base.get("name") or "",
+                    "knowledge_base_description": knowledge_base.get("description") or "",
+                }
+            )
+        return sorted(out, key=lambda item: (item["knowledge_base_name"], item["assistant_name"]))
+
     workspace_id = current_user.get_current_user().workspace_id
     rows = db.get_conn().execute(
         """SELECT a.id AS assistant_id, a.name AS assistant_name,
@@ -80,10 +109,15 @@ def route_report_to_assistant(
 ) -> dict[str, Any]:
     """Choose an assistant for the report; fall back when needed."""
     workspace_id = current_user.get_current_user().workspace_id
-    report_row = db.get_conn().execute(
-        "SELECT id FROM files WHERE id=? AND workspace_id=?",
-        (report_file_id, workspace_id),
-    ).fetchone()
+    repository = get_content_repository() or get_content_write_repository()
+    report_row = (
+        repository.get_file(report_file_id)
+        if repository is not None
+        else db.get_conn().execute(
+            "SELECT id FROM files WHERE id=? AND workspace_id=?",
+            (report_file_id, workspace_id),
+        ).fetchone()
+    )
     if not report_row:
         raise ValueError("report file not found in current workspace")
     candidates = list_routable_candidates()
