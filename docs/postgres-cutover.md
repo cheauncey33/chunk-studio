@@ -34,3 +34,11 @@ uv run python scripts/verify_postgres_cutover.py `
 The gate must pass together with the existing pgvector top-K comparison. A
 non-empty `failed` queue count is reported for operations review; it is not
 silently treated as a successful migration.
+
+## Worker boundary
+
+When `CHUNK_STUDIO_DATABASE_BACKEND=postgres`, the PostgreSQL queue and the
+parse/chunk/OCR content mutations use the same workspace-scoped Repository.
+The audit/assistant-init and embedding writers are intentionally still on the
+next migration boundary; do not call this a full default cutover until those
+paths have their own Repository adapters and regression checks.

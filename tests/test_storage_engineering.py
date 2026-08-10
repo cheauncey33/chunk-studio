@@ -253,3 +253,6 @@ def test_postgres_repository_factory_is_opt_in(monkeypatch) -> None:
 
     monkeypatch.setattr(config, "CONTENT_READ_BACKEND", "postgres")
     assert isinstance(repositories.get_content_repository(), repositories.PostgresContentRepository)
+
+    writer = repositories.get_content_write_repository()
+    assert isinstance(writer, repositories.PostgresContentRepository)

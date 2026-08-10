@@ -91,10 +91,9 @@ OBJECT_STORAGE_SECRET_KEY = (
     or os.environ.get("OBJECT_STORAGE_SECRET_KEY")
     or ""
 ).strip()
-# The first PostgreSQL content slice is read-only by design.  Keep writes on
-# SQLite until the corresponding repository methods and dual-backend diff
-# checks are in place; enabling this flag therefore cannot silently create a
-# split-brain write path.
+# API content writes remain on SQLite during the staged migration. Worker-owned
+# parse/chunk/OCR mutations switch with DATABASE_BACKEND=postgres; audit/init
+# and embedding writes remain on the next migration boundary.
 CONTENT_READ_BACKEND = os.environ.get(
     "CHUNK_STUDIO_CONTENT_READ_BACKEND",
     os.environ.get("CONTENT_READ_BACKEND", "sqlite"),

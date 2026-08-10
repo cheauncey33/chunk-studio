@@ -10,7 +10,7 @@ from typing import Any
 
 from . import artifacts, chunk_schema, config, current_user, db, extractors
 from .adapters import ocr as ocr_adapter
-from .storage.repositories import get_job_repository
+from .storage.repositories import get_content_write_repository, get_job_repository
 from .storage.object_store import get_object_store
 
 logger = logging.getLogger(__name__)
@@ -29,6 +29,11 @@ def workspace_id() -> str:
 def _job_repository():
     """Return the opt-in PostgreSQL queue adapter, or the SQLite path."""
     return get_job_repository()
+
+
+def _content_write_repository():
+    """Return the PostgreSQL writer only when the primary DB is PostgreSQL."""
+    return get_content_write_repository()
 
 
 def _create_job_record(
@@ -113,7 +118,8 @@ def _find_active_job(
 
 def enqueue_ocr_chunk(chunk_id: str, *, priority: int = 0, force: bool = False) -> dict[str, Any]:
     """Create or return a queued/running OCR job for a chunk."""
-    row = db.get_conn().execute(
+    content = _content_write_repository()
+    row = content.get_chunk(chunk_id) if content is not None else db.get_conn().execute(
         "SELECT id, workspace_id FROM chunks WHERE id=? AND workspace_id=?",
         (chunk_id, workspace_id()),
     ).fetchone()
@@ -150,6 +156,14 @@ def enqueue_ocr_for_file(
     page: int | None = None,
     pending_only: bool = True,
 ) -> list[dict[str, Any]]:
+    content = _content_write_repository()
+    if content is not None:
+        rows = content.list_chunks(file_id=file_id, limit=1000)
+        if page is not None:
+            rows = [row for row in rows if int(row.get("page") or 0) == page]
+        if pending_only:
+            rows = [row for row in rows if row.get("text_source") == "pending"]
+        return [enqueue_ocr_chunk(str(row["id"])) for row in rows]
     clauses = ["file_id=?", "workspace_id=?"]
     args: list[Any] = [file_id, workspace_id()]
     if page is not None:
@@ -176,7 +190,8 @@ def enqueue_parse_file(
     When delete_chunks=True, remove existing chunks for this file first so the
     post-parse auto-chunk pipeline can rebuild from a clean slate (RAGFlow-like).
     """
-    row = db.get_conn().execute(
+    content = _content_write_repository()
+    row = content.get_file(file_id) if content is not None else db.get_conn().execute(
         "SELECT id, workspace_id FROM files WHERE id=? AND workspace_id=?",
         (file_id, workspace_id()),
     ).fetchone()
@@ -200,13 +215,16 @@ def enqueue_parse_file(
     jid = uuid.uuid4().hex
     parse_id = uuid.uuid4().hex
     created = now_iso()
-    with db.transaction() as conn:
-        conn.execute(
-            """INSERT INTO document_parses
-               (id, workspace_id, file_id, provider, status, result, error, created_at, updated_at)
-               VALUES (?, ?, ?, 'mineru', 'queued', '{}', '', ?, ?)""",
-            (parse_id, row["workspace_id"], file_id, created, created),
-        )
+    if content is not None:
+        content.create_parse(parse_id, file_id)
+    else:
+        with db.transaction() as conn:
+            conn.execute(
+                """INSERT INTO document_parses
+                   (id, workspace_id, file_id, provider, status, result, error, created_at, updated_at)
+                   VALUES (?, ?, ?, 'mineru', 'queued', '{}', '', ?, ?)""",
+                (parse_id, row["workspace_id"], file_id, created, created),
+            )
     return _create_job_record(
         job_id=jid,
         workspace=row["workspace_id"],
@@ -232,7 +250,8 @@ def enqueue_chunk_file(
     skip_existing: bool = True,
 ) -> dict[str, Any]:
     """Queue chunking separately from the document parse job."""
-    row = db.get_conn().execute(
+    content = _content_write_repository()
+    row = content.get_file(file_id) if content is not None else db.get_conn().execute(
         "SELECT id, workspace_id FROM files WHERE id=? AND workspace_id=?",
         (file_id, workspace_id()),
     ).fetchone()
@@ -263,12 +282,16 @@ def enqueue_chunk_file(
 
 def _delete_file_chunks(file_id: str) -> int:
     """Delete all chunks for a file and best-effort remove crop images."""
-    rows = db.get_conn().execute(
-        "SELECT id, crop_path FROM chunks WHERE file_id=?",
-        (file_id,),
-    ).fetchall()
-    with db.transaction() as conn:
-        conn.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
+    content = _content_write_repository()
+    if content is not None:
+        rows = content.delete_file_chunks(file_id)
+    else:
+        rows = db.get_conn().execute(
+            "SELECT id, crop_path FROM chunks WHERE file_id=?",
+            (file_id,),
+        ).fetchall()
+        with db.transaction() as conn:
+            conn.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
     for row in rows:
         crop = (row["crop_path"] or "").strip()
         if not crop:
@@ -730,20 +753,27 @@ async def _run_parse_job(job: dict[str, Any]) -> None:
     file_id = job["target_id"]
     parse_id = (job.get("result") or {}).get("parse_id") or uuid.uuid4().hex
     started = now_iso()
-    with db.transaction() as conn:
-        conn.execute(
-            "UPDATE document_parses SET status='running', error='', updated_at=? WHERE id=?",
-            (started, parse_id),
-        )
+    content = _content_write_repository()
+    if content is not None:
+        content.update_parse(parse_id, status="running", error="")
+    else:
+        with db.transaction() as conn:
+            conn.execute(
+                "UPDATE document_parses SET status='running', error='', updated_at=? WHERE id=?",
+                (started, parse_id),
+            )
 
     result = await ocr_adapter.parse_file(file_id)
     finished = now_iso()
     if not result.ok:
-        with db.transaction() as conn:
-            conn.execute(
-                "UPDATE document_parses SET status='failed', error=?, updated_at=? WHERE id=?",
-                (result.error or "parse failed", finished, parse_id),
-            )
+        if content is not None:
+            content.update_parse(parse_id, status="failed", error=result.error or "parse failed")
+        else:
+            with db.transaction() as conn:
+                conn.execute(
+                    "UPDATE document_parses SET status='failed', error=?, updated_at=? WHERE id=?",
+                    (result.error or "parse failed", finished, parse_id),
+                )
         _fail_job(job, result.error)
         return
 
@@ -756,28 +786,44 @@ async def _run_parse_job(job: dict[str, Any]) -> None:
         "markdown_object_key": outputs["markdown_object_key"],
         "raw_zip_object_key": outputs["raw_zip_object_key"],
     }
-    with db.transaction() as conn:
-        conn.execute(
-            """UPDATE document_parses
-               SET status='done', markdown_path=?, raw_zip_path=?,
-                   markdown_object_key=?, markdown_sha256=?, markdown_size=?,
-                   raw_zip_object_key=?, raw_zip_sha256=?, raw_zip_size=?,
-                   result=?, error='', updated_at=?
-               WHERE id=?""",
-            (
-                markdown_rel,
-                zip_rel,
-                outputs["markdown_object_key"],
-                outputs["markdown_sha256"],
-                outputs["markdown_size"],
-                outputs["raw_zip_object_key"],
-                outputs["raw_zip_sha256"],
-                outputs["raw_zip_size"],
-                json.dumps(parse_result, ensure_ascii=False),
-                finished,
-                parse_id,
-            ),
-        )
+    parse_fields = {
+        "status": "done",
+        "markdown_path": markdown_rel,
+        "raw_zip_path": zip_rel,
+        "markdown_object_key": outputs["markdown_object_key"],
+        "markdown_sha256": outputs["markdown_sha256"],
+        "markdown_size": outputs["markdown_size"],
+        "raw_zip_object_key": outputs["raw_zip_object_key"],
+        "raw_zip_sha256": outputs["raw_zip_sha256"],
+        "raw_zip_size": outputs["raw_zip_size"],
+        "result": parse_result,
+        "error": "",
+    }
+    if content is not None:
+        content.update_parse(parse_id, **parse_fields)
+    else:
+        with db.transaction() as conn:
+            conn.execute(
+                """UPDATE document_parses
+                   SET status='done', markdown_path=?, raw_zip_path=?,
+                       markdown_object_key=?, markdown_sha256=?, markdown_size=?,
+                       raw_zip_object_key=?, raw_zip_sha256=?, raw_zip_size=?,
+                       result=?, error='', updated_at=?
+                   WHERE id=?""",
+                (
+                    markdown_rel,
+                    zip_rel,
+                    outputs["markdown_object_key"],
+                    outputs["markdown_sha256"],
+                    outputs["markdown_size"],
+                    outputs["raw_zip_object_key"],
+                    outputs["raw_zip_sha256"],
+                    outputs["raw_zip_size"],
+                    json.dumps(parse_result, ensure_ascii=False),
+                    finished,
+                    parse_id,
+                ),
+            )
 
     chunk_job: dict[str, Any] | None = None
     try:
@@ -797,13 +843,16 @@ async def _run_parse_job(job: dict[str, Any]) -> None:
         logger.exception("failed to enqueue chunk job for file %s", file_id)
         parse_result["chunk_enqueue_error"] = str(exc)
 
-    with db.transaction() as conn:
-        conn.execute(
-            """UPDATE document_parses
-               SET result=?, updated_at=?
-               WHERE id=?""",
-            (json.dumps(parse_result, ensure_ascii=False), now_iso(), parse_id),
-        )
+    if content is not None:
+        content.update_parse(parse_id, result=parse_result)
+    else:
+        with db.transaction() as conn:
+            conn.execute(
+                """UPDATE document_parses
+                   SET result=?, updated_at=?
+                   WHERE id=?""",
+                (json.dumps(parse_result, ensure_ascii=False), now_iso(), parse_id),
+            )
     _mark_job_done(job["id"], {"parse_id": parse_id, **parse_result})
 
 
@@ -1059,6 +1108,30 @@ async def _run_ocr_job(job: dict[str, Any]) -> None:
             _requeue_job(job, result.error)
         else:
             _fail_job(job, result.error)
+        return
+
+    content = _content_write_repository()
+    if content is not None:
+        row = content.get_chunk(chunk_id)
+        if not row:
+            _fail_job(job, "chunk not found")
+            return
+        file_row = content.get_file(str(row.get("file_id") or ""))
+        fname = str((file_row or {}).get("name") or "")
+        layers = chunk_schema.ensure_layered_chunk(
+            metadata=row.get("metadata"),
+            business_metadata=row.get("business_metadata"),
+        )
+        meta = layers["business_metadata"]
+        extractors.merge_auto_metadata(meta, result.text, fname)
+        if not content.update_chunk_ocr(
+            chunk_id,
+            text=result.text,
+            business_metadata=meta,
+        ):
+            _fail_job(job, "chunk not found")
+            return
+        _mark_job_done(job["id"], {"text_length": len(result.text)})
         return
 
     finished = now_iso()

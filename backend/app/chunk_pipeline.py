@@ -8,6 +8,7 @@ from typing import Any
 
 from . import db
 from .models import AutoImageChunkRequest, AutoSectionChunkRequest, AutoTableChunkRequest
+from .storage.repositories import get_content_write_repository
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,14 @@ def normalize_parser_config(raw: Any) -> dict[str, Any]:
 
 
 def file_chunk_override(file_id: str) -> dict[str, Any]:
+    content = get_content_write_repository()
+    if content is not None:
+        metadata = content.get_file(file_id) or {}
+        payload = metadata.get("metadata") or {}
+        if not isinstance(payload, dict):
+            return {}
+        override = payload.get("chunk_config")
+        return override if isinstance(override, dict) else {}
     row = db.get_conn().execute(
         "SELECT metadata FROM files WHERE id=?",
         (file_id,),
@@ -67,6 +76,9 @@ def file_chunk_override(file_id: str) -> dict[str, Any]:
 
 
 def primary_kb_parser_config(file_id: str) -> dict[str, Any]:
+    content = get_content_write_repository()
+    if content is not None:
+        return content.primary_parser_config(file_id)
     row = db.get_conn().execute(
         """SELECT kb.parser_config
            FROM knowledge_base_files kbf

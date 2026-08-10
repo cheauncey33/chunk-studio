@@ -94,6 +94,20 @@ class ContentRepository(Protocol):
 
     def get_chunk(self, chunk_id: str) -> dict[str, Any] | None: ...
 
+    def primary_parser_config(self, file_id: str) -> dict[str, Any]: ...
+
+    def create_parse(self, parse_id: str, file_id: str, *, provider: str = "mineru") -> dict[str, Any]: ...
+
+    def update_parse(self, parse_id: str, **fields: Any) -> dict[str, Any] | None: ...
+
+    def delete_file_chunks(self, file_id: str) -> list[dict[str, Any]]: ...
+
+    def insert_chunk(self, **fields: Any) -> dict[str, Any]: ...
+
+    def list_chunk_texts(self, file_id: str, page: int) -> list[str]: ...
+
+    def update_chunk_ocr(self, chunk_id: str, *, text: str, business_metadata: dict[str, Any]) -> dict[str, Any] | None: ...
+
 
 def _decode(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
@@ -914,6 +928,154 @@ class PostgresContentRepository:
             ).fetchone()
         return dict(row) if row else None
 
+    def primary_parser_config(self, file_id: str) -> dict[str, Any]:
+        workspace = self._scope()
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT kb.parser_config
+                   FROM knowledge_base_files kbf
+                   JOIN knowledge_bases kb ON kb.id=kbf.knowledge_base_id
+                   WHERE kbf.file_id=%s AND kbf.workspace_id=%s
+                     AND kb.workspace_id=%s AND kb.status='active' AND kbf.enabled
+                   ORDER BY kb.is_default DESC, kbf.created_at ASC
+                   LIMIT 1""",
+                (file_id, workspace, workspace),
+            ).fetchone()
+        return _decode(row["parser_config"]) if row else {}
+
+    def create_parse(
+        self,
+        parse_id: str,
+        file_id: str,
+        *,
+        provider: str = "mineru",
+    ) -> dict[str, Any]:
+        workspace = self._scope()
+        with self._connect() as conn:
+            row = conn.execute(
+                """INSERT INTO document_parses
+                   (id, workspace_id, file_id, provider, status, result, error)
+                   SELECT %s, workspace_id, %s, %s, 'queued', '{}'::jsonb, ''
+                   FROM files WHERE id=%s AND workspace_id=%s
+                   RETURNING *""",
+                (parse_id, file_id, provider, file_id, workspace),
+            ).fetchone()
+            if not row:
+                raise KeyError("file not found")
+        return dict(row)
+
+    def update_parse(self, parse_id: str, **fields: Any) -> dict[str, Any] | None:
+        workspace = self._scope()
+        allowed = {
+            "status", "error", "markdown_path", "raw_zip_path",
+            "markdown_object_key", "markdown_sha256", "markdown_size",
+            "raw_zip_object_key", "raw_zip_sha256", "raw_zip_size", "result",
+        }
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"unsupported parse fields: {sorted(unknown)}")
+        assignments = ["updated_at=now()"]
+        params: list[Any] = []
+        for key, value in fields.items():
+            assignments.append(f"{key}=%s::jsonb" if key == "result" else f"{key}=%s")
+            params.append(json.dumps(value or {}, ensure_ascii=False) if key == "result" else value)
+        params.extend([parse_id, workspace])
+        with self._connect() as conn:
+            row = conn.execute(
+                "UPDATE document_parses SET " + ", ".join(assignments)
+                + " WHERE id=%s AND workspace_id=%s RETURNING *",
+                params,
+            ).fetchone()
+        return dict(row) if row else None
+
+    def delete_file_chunks(self, file_id: str) -> list[dict[str, Any]]:
+        workspace = self._scope()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, crop_path, crop_object_key FROM chunks WHERE file_id=%s AND workspace_id=%s",
+                (file_id, workspace),
+            ).fetchall()
+            conn.execute(
+                "DELETE FROM chunks WHERE file_id=%s AND workspace_id=%s",
+                (file_id, workspace),
+            )
+        return [dict(row) for row in rows]
+
+    def insert_chunk(self, **fields: Any) -> dict[str, Any]:
+        workspace = self._scope(fields.get("workspace_id"))
+        values = {
+            "id": str(fields["id"]),
+            "file_id": str(fields["file_id"]),
+            "page": int(fields["page"]),
+            "bbox": fields.get("bbox") or {},
+            "rotation": int(fields.get("rotation") or 0),
+            "crop_path": fields.get("crop_path"),
+            "crop_object_key": str(fields.get("crop_object_key") or ""),
+            "crop_sha256": str(fields.get("crop_sha256") or ""),
+            "crop_size": int(fields.get("crop_size") or 0),
+            "text": fields.get("text"),
+            "text_source": fields.get("text_source") or "pending",
+            "metadata": fields.get("metadata") or {},
+            "business_metadata": fields.get("business_metadata") or {},
+            "metadata_llm": fields.get("metadata_llm") or {},
+            "source_trace": fields.get("source_trace") or {},
+            "chunk_logic": fields.get("chunk_logic") or {},
+            "relations": fields.get("relations") or {},
+            "status": fields.get("status") or "pending",
+        }
+        with self._connect() as conn:
+            row = conn.execute(
+                """INSERT INTO chunks
+                   (id, workspace_id, file_id, page, bbox, rotation, crop_path,
+                    crop_object_key, crop_sha256, crop_size, text, text_source,
+                    metadata, business_metadata, metadata_llm, source_trace,
+                    chunk_logic, relations, status)
+                   VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,
+                           %s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s)
+                   RETURNING *""",
+                (
+                    values["id"], workspace, values["file_id"], values["page"],
+                    json.dumps(values["bbox"], ensure_ascii=False), values["rotation"],
+                    values["crop_path"], values["crop_object_key"], values["crop_sha256"],
+                    values["crop_size"], values["text"], values["text_source"],
+                    json.dumps(values["metadata"], ensure_ascii=False),
+                    json.dumps(values["business_metadata"], ensure_ascii=False),
+                    json.dumps(values["metadata_llm"], ensure_ascii=False),
+                    json.dumps(values["source_trace"], ensure_ascii=False),
+                    json.dumps(values["chunk_logic"], ensure_ascii=False),
+                    json.dumps(values["relations"], ensure_ascii=False), values["status"],
+                ),
+            ).fetchone()
+        return dict(row)
+
+    def list_chunk_texts(self, file_id: str, page: int) -> list[str]:
+        workspace = self._scope()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT text FROM chunks WHERE file_id=%s AND page=%s AND workspace_id=%s",
+                (file_id, page, workspace),
+            ).fetchall()
+        return [str(row["text"] or "") for row in rows]
+
+    def update_chunk_ocr(
+        self,
+        chunk_id: str,
+        *,
+        text: str,
+        business_metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        workspace = self._scope()
+        with self._connect() as conn:
+            row = conn.execute(
+                """UPDATE chunks
+                   SET text=%s, text_source='ocr', status='pending',
+                       business_metadata=%s::jsonb, updated_at=now()
+                   WHERE id=%s AND workspace_id=%s
+                   RETURNING *""",
+                (text, json.dumps(business_metadata, ensure_ascii=False), chunk_id, workspace),
+            ).fetchone()
+        return dict(row) if row else None
+
 def postgres_schema_sql() -> list[str]:
     """DDL for session/job tables; deployment runs it before switching adapters."""
     return [
@@ -1197,5 +1359,14 @@ def get_content_repository() -> PostgresContentRepository | None:
     if config.CONTENT_READ_BACKEND in {"postgres", "postgresql"}:
         if not config.DATABASE_URL:
             raise RuntimeError("DATABASE_URL is required for PostgreSQL content reads")
+        return PostgresContentRepository(config.DATABASE_URL)
+    return None
+
+
+def get_content_write_repository() -> PostgresContentRepository | None:
+    """Return the PostgreSQL content writer for worker-owned mutations."""
+    if config.DATABASE_BACKEND in {"postgres", "postgresql"}:
+        if not config.DATABASE_URL:
+            raise RuntimeError("DATABASE_URL is required for PostgreSQL content writes")
         return PostgresContentRepository(config.DATABASE_URL)
     return None

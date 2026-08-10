@@ -5,6 +5,7 @@ import asyncio
 import html
 import io
 import json
+from pathlib import Path
 import re
 import time
 import uuid
@@ -18,6 +19,8 @@ from fastapi import APIRouter, HTTPException
 from .. import artifacts, chunk_schema, config, current_user, db, extractors, pdf
 from ..adapters.ocr import _repair_mojibake
 from ..models import AutoImageChunkRequest, AutoSectionChunkRequest, AutoTableChunkRequest
+from ..storage.object_store import get_object_store
+from ..storage.repositories import get_content_write_repository
 from .chunks import _row_to_out
 
 router = APIRouter(prefix="/auto-chunks", tags=["auto-chunks"])
@@ -25,6 +28,40 @@ router = APIRouter(prefix="/auto-chunks", tags=["auto-chunks"])
 
 def _workspace_id() -> str:
     return current_user.get_current_user().workspace_id
+
+
+def _content_writer():
+    return get_content_write_repository()
+
+
+def _materialize_file(row: dict[str, Any]) -> dict[str, Any]:
+    path = artifacts.materialize_artifact(
+        row.get("path"),
+        row.get("object_key"),
+        cache_name=f"file-{row.get('id') or 'source'}",
+        suffix=Path(str(row.get("name") or ".pdf")).suffix or ".pdf",
+    )
+    if path is not None:
+        row["path"] = config.to_rel(path)
+    return row
+
+
+def _store_crop(file_id: str, chunk_id: str, crop_rel: str) -> dict[str, Any]:
+    """Upload a new crop when a shared object store is enabled."""
+    if config.OBJECT_STORAGE_BACKEND == "local":
+        return {"crop_object_key": "", "crop_sha256": "", "crop_size": 0}
+    path = config.from_rel(crop_rel)
+    data = path.read_bytes()
+    info = get_object_store().put_bytes(
+        artifacts.crop_artifact_key(_workspace_id(), file_id, chunk_id),
+        data,
+        content_type="image/png",
+    )
+    return {
+        "crop_object_key": info.key,
+        "crop_sha256": info.sha256,
+        "crop_size": info.size,
+    }
 
 _TABLE_TITLE_RE = re.compile(r"^表\s*0*((?:[A-Za-z]\s*\.\s*)?\d+)\s*(.+)?")
 _TABLE_REF_RE = re.compile(r"表\s*0*(\d+)(?:\s*[～~\-—至]\s*表?\s*0*(\d+))?")
@@ -253,16 +290,31 @@ async def auto_section_chunks(file_id: str, body: AutoSectionChunkRequest):
 
 
 def _get_file(file_id: str) -> dict[str, Any]:
-    row = db.get_conn().execute(
+    content = _content_writer()
+    row = content.get_file(file_id) if content is not None else db.get_conn().execute(
         "SELECT * FROM files WHERE id=? AND workspace_id=?",
         (file_id, _workspace_id()),
     ).fetchone()
     if not row:
         raise HTTPException(404, "file not found")
-    return dict(row)
+    return _materialize_file(dict(row))
 
 
 def _select_parse(file_id: str, parse_id: str | None) -> dict[str, Any]:
+    content = _content_writer()
+    if content is not None:
+        rows = content.list_file_parses(file_id, limit=1000)
+        row = next((item for item in rows if item.get("id") == parse_id), None) if parse_id else next(
+            (
+                item for item in rows
+                if item.get("status") == "done"
+                and (item.get("raw_zip_path") or item.get("raw_zip_object_key"))
+            ),
+            None,
+        )
+        if not row:
+            raise HTTPException(404, "MinerU parse result not found for this file")
+        return row
     if parse_id:
         row = db.get_conn().execute(
             "SELECT * FROM document_parses WHERE id=? AND file_id=? AND workspace_id=?",
@@ -880,13 +932,36 @@ async def _create_section_chunk(f: dict[str, Any], candidate: SectionCandidate):
         pdf.crop_region, f["path"], candidate.page - 1, candidate.bbox
     )
     business_metadata, source_trace, chunk_logic, relations = chunk_schema.split_flat_metadata_for_write(candidate.metadata)
-    with db.transaction() as conn:
-        conn.execute(
+    crop_info = _store_crop(f["id"], cid, crop.crop_rel)
+    content = _content_writer()
+    if content is not None:
+        row = content.insert_chunk(
+            id=cid,
+            file_id=f["id"],
+            page=candidate.page,
+            bbox=candidate.bbox,
+            rotation=0,
+            crop_path=crop.crop_rel,
+            **crop_info,
+            text=candidate.text,
+            text_source="digital",
+            metadata={},
+            business_metadata=business_metadata,
+            metadata_llm={},
+            source_trace=source_trace,
+            chunk_logic=chunk_logic,
+            relations=relations,
+            status="pending",
+        )
+    else:
+        with db.transaction() as conn:
+            conn.execute(
             """INSERT INTO chunks
-               (id, workspace_id, file_id, page, bbox, rotation, crop_path, text, text_source,
+               (id, workspace_id, file_id, page, bbox, rotation, crop_path, crop_object_key,
+                crop_sha256, crop_size, text, text_source,
                 metadata, business_metadata, metadata_llm, source_trace, chunk_logic, relations,
                 status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cid,
                 _workspace_id(),
@@ -895,6 +970,9 @@ async def _create_section_chunk(f: dict[str, Any], candidate: SectionCandidate):
                 json.dumps(candidate.bbox),
                 0,
                 crop.crop_rel,
+                crop_info["crop_object_key"],
+                crop_info["crop_sha256"],
+                crop_info["crop_size"],
                 candidate.text,
                 "digital",
                 "{}",
@@ -906,12 +984,12 @@ async def _create_section_chunk(f: dict[str, Any], candidate: SectionCandidate):
                 "pending",
                 now,
                 now,
-            ),
-        )
-    row = db.get_conn().execute(
-        "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
-        (cid, _workspace_id()),
-    ).fetchone()
+                ),
+            )
+        row = db.get_conn().execute(
+            "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
+            (cid, _workspace_id()),
+        ).fetchone()
     return _row_to_out(row)
 
 
@@ -969,13 +1047,36 @@ async def _create_image_chunk(f: dict[str, Any], candidate: ImageCandidate):
         pdf.crop_region, f["path"], candidate.page - 1, candidate.bbox
     )
     business_metadata, source_trace, chunk_logic, relations = chunk_schema.split_flat_metadata_for_write(candidate.metadata)
-    with db.transaction() as conn:
-        conn.execute(
+    crop_info = _store_crop(f["id"], cid, crop.crop_rel)
+    content = _content_writer()
+    if content is not None:
+        row = content.insert_chunk(
+            id=cid,
+            file_id=f["id"],
+            page=candidate.page,
+            bbox=candidate.bbox,
+            rotation=0,
+            crop_path=crop.crop_rel,
+            **crop_info,
+            text=text,
+            text_source="digital",
+            metadata={},
+            business_metadata=business_metadata,
+            metadata_llm={},
+            source_trace=source_trace,
+            chunk_logic=chunk_logic,
+            relations=relations,
+            status="pending",
+        )
+    else:
+        with db.transaction() as conn:
+            conn.execute(
             """INSERT INTO chunks
-               (id, workspace_id, file_id, page, bbox, rotation, crop_path, text, text_source,
+               (id, workspace_id, file_id, page, bbox, rotation, crop_path, crop_object_key,
+                crop_sha256, crop_size, text, text_source,
                 metadata, business_metadata, metadata_llm, source_trace, chunk_logic, relations,
                 status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cid,
                 _workspace_id(),
@@ -984,6 +1085,9 @@ async def _create_image_chunk(f: dict[str, Any], candidate: ImageCandidate):
                 json.dumps(candidate.bbox),
                 0,
                 crop.crop_rel,
+                crop_info["crop_object_key"],
+                crop_info["crop_sha256"],
+                crop_info["crop_size"],
                 text,
                 "digital",
                 "{}",
@@ -995,12 +1099,12 @@ async def _create_image_chunk(f: dict[str, Any], candidate: ImageCandidate):
                 "pending",
                 now,
                 now,
-            ),
-        )
-    row = db.get_conn().execute(
-        "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
-        (cid, _workspace_id()),
-    ).fetchone()
+                ),
+            )
+        row = db.get_conn().execute(
+            "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
+            (cid, _workspace_id()),
+        ).fetchone()
     return _row_to_out(row)
 
 
@@ -1437,13 +1541,36 @@ async def _create_chunk_from_candidate(
         pdf.crop_region, f["path"], candidate.page - 1, candidate.bbox
     )
     business_metadata, source_trace, chunk_logic, relations = chunk_schema.split_flat_metadata_for_write(candidate.metadata)
-    with db.transaction() as conn:
-        conn.execute(
+    crop_info = _store_crop(f["id"], cid, crop.crop_rel)
+    content = _content_writer()
+    if content is not None:
+        row = content.insert_chunk(
+            id=cid,
+            file_id=f["id"],
+            page=candidate.page,
+            bbox=candidate.bbox,
+            rotation=0,
+            crop_path=crop.crop_rel,
+            **crop_info,
+            text=text,
+            text_source="digital",
+            metadata={},
+            business_metadata=business_metadata,
+            metadata_llm={},
+            source_trace=source_trace,
+            chunk_logic=chunk_logic,
+            relations=relations,
+            status="pending",
+        )
+    else:
+        with db.transaction() as conn:
+            conn.execute(
             """INSERT INTO chunks
-               (id, workspace_id, file_id, page, bbox, rotation, crop_path, text, text_source,
+               (id, workspace_id, file_id, page, bbox, rotation, crop_path, crop_object_key,
+                crop_sha256, crop_size, text, text_source,
                 metadata, business_metadata, metadata_llm, source_trace, chunk_logic, relations,
                 status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cid,
                 _workspace_id(),
@@ -1452,6 +1579,9 @@ async def _create_chunk_from_candidate(
                 json.dumps(candidate.bbox),
                 0,
                 crop.crop_rel,
+                crop_info["crop_object_key"],
+                crop_info["crop_sha256"],
+                crop_info["crop_size"],
                 text,
                 "digital",
                 "{}",
@@ -1463,12 +1593,12 @@ async def _create_chunk_from_candidate(
                 "pending",
                 now,
                 now,
-            ),
-        )
-    row = db.get_conn().execute(
-        "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
-        (cid, _workspace_id()),
-    ).fetchone()
+                ),
+            )
+        row = db.get_conn().execute(
+            "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
+            (cid, _workspace_id()),
+        ).fetchone()
     return _row_to_out(row)
 
 
@@ -1478,12 +1608,19 @@ def _existing_similar_chunk(file_id: str, page: int, text: str) -> bool:
     if not normalized:
         return False
 
-    rows = db.get_conn().execute(
-        "SELECT text FROM chunks WHERE file_id=? AND page=? AND workspace_id=?",
-        (file_id, page, _workspace_id()),
-    ).fetchall()
-    for row in rows:
-        existing = _normalize_for_dedupe(row["text"] or "")
+    content = _content_writer()
+    if content is not None:
+        existing_texts = content.list_chunk_texts(file_id, page)
+    else:
+        existing_texts = [
+            row["text"] or ""
+            for row in db.get_conn().execute(
+                "SELECT text FROM chunks WHERE file_id=? AND page=? AND workspace_id=?",
+                (file_id, page, _workspace_id()),
+            ).fetchall()
+        ]
+    for existing_text in existing_texts:
+        existing = _normalize_for_dedupe(existing_text)
         if not existing:
             continue
         if SequenceMatcher(None, normalized, existing).ratio() >= _DEDUP_SIMILARITY_THRESHOLD:

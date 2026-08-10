@@ -15,12 +15,14 @@ import os
 import time
 import zipfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import fitz
 import httpx
 
-from .. import config, db
+from .. import artifacts, config, db
+from ..storage.repositories import get_content_write_repository
 
 DEFAULT_BASE = "https://mineru.net"
 DEFAULT_MODEL = "vlm"
@@ -81,30 +83,52 @@ async def ocr_chunk(chunk_id: str) -> OCRResult:
     if not s["token"]:
         return OCRResult("", False, "mineru.token is not configured")
 
-    row = db.get_conn().execute(
+    content = get_content_write_repository()
+    row = content.get_chunk(chunk_id) if content is not None else db.get_conn().execute(
         "SELECT crop_path FROM chunks WHERE id=?", (chunk_id,)
     ).fetchone()
-    if not row or not row["crop_path"]:
+    if row is not None and not isinstance(row, dict):
+        row = dict(row)
+    if not row or (not row.get("crop_path") and not row.get("crop_object_key")):
         return OCRResult("", False, "chunk has no crop image")
 
-    crop_abs = str(config.from_rel(row["crop_path"]))
+    crop_path = artifacts.materialize_artifact(
+        row.get("crop_path"),
+        row.get("crop_object_key"),
+        cache_name=f"crop-{chunk_id}",
+        suffix=".png",
+    )
+    if crop_path is None:
+        return OCRResult("", False, "crop image is missing")
+    crop_abs = str(crop_path)
     pdf_bytes = await asyncio.to_thread(_crop_to_pdf_bytes, crop_abs)
     result = await extract_pdf_bytes(pdf_bytes, f"{chunk_id}.pdf", chunk_id)
     return OCRResult(result.text, result.ok, result.error)
 
 
 async def parse_file(file_id: str) -> ExtractResult:
-    row = db.get_conn().execute(
+    content = get_content_write_repository()
+    row = content.get_file(file_id) if content is not None else db.get_conn().execute(
         "SELECT name, path FROM files WHERE id=?", (file_id,)
     ).fetchone()
     if not row:
         return ExtractResult("", False, "file not found")
-    pdf_path = config.from_rel(row["path"])
+    if not isinstance(row, dict):
+        row = dict(row)
+    name = str(row.get("name") or file_id)
+    pdf_path = artifacts.materialize_artifact(
+        row.get("path"),
+        row.get("object_key"),
+        cache_name=f"file-{file_id}",
+        suffix=Path(name).suffix or ".pdf",
+    )
+    if pdf_path is None:
+        return ExtractResult("", False, "read pdf failed: file object is missing")
     try:
         pdf_bytes = await asyncio.to_thread(pdf_path.read_bytes)
     except OSError as exc:
         return ExtractResult("", False, f"read pdf failed: {exc}")
-    return await extract_pdf_bytes(pdf_bytes, row["name"], file_id)
+    return await extract_pdf_bytes(pdf_bytes, name, file_id)
 
 
 async def extract_pdf_bytes(pdf_bytes: bytes, name: str, data_id: str) -> ExtractResult:
