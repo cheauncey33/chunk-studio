@@ -62,6 +62,14 @@ class WorkspaceRepository(Protocol):
     def list_members(self, *, workspace_id: str) -> list[dict[str, Any]]: ...
 
 
+class SettingsRepository(Protocol):
+    def get(self, key: str, default: str = "") -> str: ...
+
+    def set(self, key: str, value: str) -> None: ...
+
+    def all(self) -> dict[str, str]: ...
+
+
 class ContentRepository(Protocol):
     """Read-side contract for the first business-content migration slice."""
 
@@ -816,6 +824,42 @@ class PostgresWorkspaceRepository:
                 (workspace_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+
+@dataclass(frozen=True)
+class PostgresSettingsRepository:
+    dsn: str
+
+    def _connect(self):
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "PostgreSQL repositories require the optional psycopg dependency"
+            ) from exc
+        return psycopg.connect(self.dsn, row_factory=dict_row)
+
+    def get(self, key: str, default: str = "") -> str:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key=%s",
+                (key,),
+            ).fetchone()
+        return str(row["value"]) if row else default
+
+    def set(self, key: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO settings(key, value) VALUES (%s, %s)
+                   ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value""",
+                (key, value),
+            )
+
+    def all(self) -> dict[str, str]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT key, value FROM settings ORDER BY key").fetchall()
+        return {str(row["key"]): str(row["value"]) for row in rows}
 
 
 @dataclass(frozen=True)
@@ -2347,6 +2391,10 @@ def postgres_schema_sql() -> list[str]:
         )""",
         "CREATE INDEX IF NOT EXISTS ix_jobs_claim ON jobs(status, available_at, priority DESC, created_at)",
         "CREATE INDEX IF NOT EXISTS ix_jobs_scope ON jobs(workspace_id, status, created_at DESC)",
+        """CREATE TABLE IF NOT EXISTS settings (
+             key TEXT PRIMARY KEY,
+             value TEXT NOT NULL
+        )""",
     ]
 
 
@@ -2552,6 +2600,14 @@ def get_workspace_repository() -> PostgresWorkspaceRepository | None:
         if not config.DATABASE_URL:
             raise RuntimeError("DATABASE_URL is required for PostgreSQL repositories")
         return PostgresWorkspaceRepository(config.DATABASE_URL)
+    return None
+
+
+def get_settings_repository() -> PostgresSettingsRepository | None:
+    if config.DATABASE_BACKEND in {"postgres", "postgresql"}:
+        if not config.DATABASE_URL:
+            raise RuntimeError("DATABASE_URL is required for PostgreSQL repositories")
+        return PostgresSettingsRepository(config.DATABASE_URL)
     return None
 
 

@@ -28,6 +28,18 @@ uv run python scripts/migrate_derived_artifacts_to_object_storage.py
 uv run python scripts/migrate_derived_artifacts_to_object_storage.py --apply
 ```
 
+Shared LLM/OCR/MCP settings use a separate PostgreSQL key/value boundary:
+
+```powershell
+uv run python scripts/migrate_settings_to_postgres.py `
+  --sqlite-path backend/data/chunkstudio.db `
+  --dsn $env:CHUNK_STUDIO_DATABASE_URL
+uv run python scripts/migrate_settings_to_postgres.py `
+  --sqlite-path backend/data/chunkstudio.db `
+  --dsn $env:CHUNK_STUDIO_DATABASE_URL `
+  --apply
+```
+
 Before changing the default database/vector backend, run the read-only cutover
 gate. It compares workspace-scoped identifiers and key fields, checks object
 metadata coverage, and reports PostgreSQL queue state:

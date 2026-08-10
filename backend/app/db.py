@@ -2309,6 +2309,11 @@ def assistant_evidence_file_ids(
 
 # --- Settings helpers (key/value table) ---
 def get_setting(key: str, default: str = "") -> str:
+    from .storage.repositories import get_settings_repository
+
+    repository = get_settings_repository()
+    if repository is not None:
+        return repository.get(key, default)
     # Serialize with writers: concurrent audit workers call this from LLM config.
     with _db_lock:
         row = get_conn().execute(
@@ -2319,6 +2324,12 @@ def get_setting(key: str, default: str = "") -> str:
 
 
 def set_setting(key: str, value: str) -> None:
+    from .storage.repositories import get_settings_repository
+
+    repository = get_settings_repository()
+    if repository is not None:
+        repository.set(key, value)
+        return
     with transaction() as conn:
         conn.execute(
             "INSERT INTO settings(key,value) VALUES(?,?) "
@@ -2328,6 +2339,11 @@ def set_setting(key: str, value: str) -> None:
 
 
 def get_all_settings() -> dict[str, str]:
+    from .storage.repositories import get_settings_repository
+
+    repository = get_settings_repository()
+    if repository is not None:
+        return repository.all()
     with _db_lock:
         rows = get_conn().execute("SELECT key,value FROM settings").fetchall()
         return {r["key"]: r["value"] for r in rows}

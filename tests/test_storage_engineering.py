@@ -312,6 +312,45 @@ def test_postgres_workspace_repository_scopes_active_membership(monkeypatch) -> 
     assert "?" not in connection.sql[1]
 
 
+def test_postgres_settings_repository_reads_and_writes_shared_values(monkeypatch) -> None:
+    class Result:
+        def fetchone(self):
+            return {"value": "deepseek-v4-flash"}
+
+        def fetchall(self):
+            return [
+                {"key": "llm.model", "value": "deepseek-v4-flash"},
+                {"key": "ocr.mode", "value": "remote"},
+            ]
+
+    class Connection:
+        def __init__(self):
+            self.sql: list[str] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement, _params=None):
+            self.sql.append(statement)
+            return Result()
+
+    connection = Connection()
+    monkeypatch.setattr(
+        repositories.PostgresSettingsRepository,
+        "_connect",
+        lambda _self: connection,
+    )
+    repository = repositories.PostgresSettingsRepository("postgresql://test")
+
+    assert repository.get("llm.model") == "deepseek-v4-flash"
+    repository.set("ocr.mode", "remote")
+    assert repository.all()["ocr.mode"] == "remote"
+    assert "ON CONFLICT(key)" in connection.sql[1]
+
+
 def test_postgres_repository_factory_is_opt_in(monkeypatch) -> None:
     monkeypatch.setattr(config, "DATABASE_BACKEND", "sqlite")
     assert repositories.get_chat_repository() is None
@@ -322,6 +361,7 @@ def test_postgres_repository_factory_is_opt_in(monkeypatch) -> None:
     assert isinstance(repositories.get_chat_repository(), repositories.PostgresChatRepository)
     assert isinstance(repositories.get_job_repository(), repositories.PostgresJobRepository)
     assert isinstance(repositories.get_workspace_repository(), repositories.PostgresWorkspaceRepository)
+    assert isinstance(repositories.get_settings_repository(), repositories.PostgresSettingsRepository)
 
     monkeypatch.setattr(config, "CONTENT_READ_BACKEND", "postgres")
     assert isinstance(repositories.get_content_repository(), repositories.PostgresContentRepository)
