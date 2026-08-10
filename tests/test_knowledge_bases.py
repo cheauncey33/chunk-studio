@@ -474,6 +474,60 @@ def test_delete_knowledge_base_removes_exclusive_files(monkeypatch, tmp_path) ->
     _close_temp_db(monkeypatch)
 
 
+def test_delete_knowledge_base_uses_postgres_writer_and_cleans_artifacts(
+    monkeypatch, tmp_path
+) -> None:
+    from app import config as app_config
+
+    class FakeContent:
+        def delete_knowledge_base(self, knowledge_base_id):
+            assert knowledge_base_id == "kb_pg"
+            return {
+                "deleted_file_count": 1,
+                "deleted_chunk_count": 2,
+                "artifacts": [
+                    {
+                        "path": "files/report.pdf",
+                        "object_key": "workspaces/ws/files/report/content.pdf",
+                        "crop_paths": ["crops/report.png"],
+                        "crop_object_keys": ["workspaces/ws/files/report/crops/1.png"],
+                    }
+                ],
+            }
+
+    class FakeObjectStore:
+        def __init__(self):
+            self.deleted = []
+
+        def delete(self, key):
+            self.deleted.append(key)
+
+    store = FakeObjectStore()
+    files_dir = tmp_path / "files"
+    crops_dir = tmp_path / "crops"
+    files_dir.mkdir()
+    crops_dir.mkdir()
+    (files_dir / "report.pdf").write_bytes(b"pdf")
+    (crops_dir / "report.png").write_bytes(b"png")
+    monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(knowledge_bases, "get_content_write_repository", lambda: FakeContent())
+    monkeypatch.setattr(knowledge_bases, "get_object_store", lambda: store)
+
+    result = knowledge_bases.delete_knowledge_base("kb_pg")
+
+    assert result == {
+        "ok": True,
+        "deleted_file_count": 1,
+        "deleted_chunk_count": 2,
+    }
+    assert not (files_dir / "report.pdf").exists()
+    assert not (crops_dir / "report.png").exists()
+    assert store.deleted == [
+        "workspaces/ws/files/report/content.pdf",
+        "workspaces/ws/files/report/crops/1.png",
+    ]
+
+
 def test_report_upload_does_not_join_knowledge_base(monkeypatch, tmp_path) -> None:
     _init_temp_db(monkeypatch, tmp_path)
     monkeypatch.setattr(files.config, "FILES_DIR", tmp_path / "files")

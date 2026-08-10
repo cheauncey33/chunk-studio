@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from typing import Any, Literal
@@ -10,9 +11,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import chunk_schema, current_user, db, retrieval
+from ..storage.object_store import get_object_store
 from ..storage.repositories import get_content_repository, get_content_write_repository
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"])
 
 
@@ -296,6 +299,42 @@ def delete_knowledge_base(knowledge_base_id: str):
     other knowledge bases keep their PDF/chunks and only lose this membership.
     """
     from .. import config
+
+    content = get_content_write_repository()
+    if content is not None:
+        try:
+            deleted = content.delete_knowledge_base(knowledge_base_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if not deleted:
+            raise HTTPException(404, "knowledge base not found")
+
+        store = get_object_store()
+        for artifact in deleted.get("artifacts") or []:
+            for path_value in [artifact.get("path"), *(artifact.get("crop_paths") or [])]:
+                path = str(path_value or "").strip()
+                if not path:
+                    continue
+                try:
+                    config.from_rel(path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            for object_key in [
+                artifact.get("object_key"),
+                *(artifact.get("crop_object_keys") or []),
+            ]:
+                key = str(object_key or "").strip()
+                if not key:
+                    continue
+                try:
+                    store.delete(key)
+                except Exception:
+                    logger.exception("failed to delete object %s", key)
+        return {
+            "ok": True,
+            "deleted_file_count": int(deleted.get("deleted_file_count") or 0),
+            "deleted_chunk_count": int(deleted.get("deleted_chunk_count") or 0),
+        }
 
     row = _get_kb(knowledge_base_id)
     if bool(row["is_default"]):

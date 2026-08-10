@@ -470,10 +470,14 @@ def search(
 
 
 def shadow_enabled() -> bool:
+    if config.DATABASE_BACKEND in {"postgres", "postgresql"}:
+        return False
     return db.get_setting(SHADOW_ENABLED_SETTING, "true").strip().lower() == "true"
 
 
 def production_enabled() -> bool:
+    if config.DATABASE_BACKEND in {"postgres", "postgresql"}:
+        return True
     return db.get_setting(PRODUCTION_ENABLED_SETTING, "true").strip().lower() == "true"
 
 

@@ -65,6 +65,8 @@ class ContentRepository(Protocol):
         self, knowledge_base_id: str, values: dict[str, Any]
     ) -> dict[str, Any] | None: ...
 
+    def delete_knowledge_base(self, knowledge_base_id: str) -> dict[str, Any] | None: ...
+
     def ensure_assistant_for_knowledge_base(
         self,
         knowledge_base_id: str,
@@ -901,6 +903,68 @@ class PostgresContentRepository:
                     params,
                 )
         return self.get_knowledge_base(knowledge_base_id)
+
+    def delete_knowledge_base(self, knowledge_base_id: str) -> dict[str, Any] | None:
+        workspace = self._scope()
+        with self._connect() as conn:
+            kb = conn.execute(
+                "SELECT id, is_default FROM knowledge_bases WHERE id=%s AND workspace_id=%s",
+                (knowledge_base_id, workspace),
+            ).fetchone()
+            if not kb:
+                return None
+            if kb["is_default"]:
+                raise ValueError("default knowledge base cannot be deleted")
+            owned = conn.execute(
+                """SELECT f.id, f.path, f.object_key,
+                          (SELECT COUNT(*) FROM knowledge_base_files other
+                           WHERE other.file_id=f.id AND other.workspace_id=%s
+                             AND other.knowledge_base_id<>%s) AS other_kbs,
+                          COALESCE((SELECT array_agg(c.crop_path) FROM chunks c
+                                    WHERE c.file_id=f.id AND c.workspace_id=%s), ARRAY[]::TEXT[]) AS crop_paths,
+                          COALESCE((SELECT array_agg(c.crop_object_key) FROM chunks c
+                                    WHERE c.file_id=f.id AND c.workspace_id=%s), ARRAY[]::TEXT[]) AS crop_object_keys,
+                          (SELECT COUNT(*) FROM chunks c WHERE c.file_id=f.id AND c.workspace_id=%s) AS chunk_count
+                   FROM knowledge_base_files kbf
+                   JOIN files f ON f.id=kbf.file_id AND f.workspace_id=kbf.workspace_id
+                   WHERE kbf.knowledge_base_id=%s AND kbf.workspace_id=%s""",
+                (workspace, knowledge_base_id, workspace, workspace, workspace, knowledge_base_id, workspace),
+            ).fetchall()
+            exclusive = [dict(item) for item in owned if int(item["other_kbs"] or 0) == 0]
+            assistant = conn.execute(
+                """SELECT akb.assistant_id FROM assistant_knowledge_bases akb
+                   WHERE akb.knowledge_base_id=%s AND akb.workspace_id=%s AND akb.enabled
+                   LIMIT 1""",
+                (knowledge_base_id, workspace),
+            ).fetchone()
+            for item in exclusive:
+                conn.execute(
+                    "DELETE FROM chunk_vector_index WHERE file_id=%s AND workspace_id=%s",
+                    (item["id"], workspace),
+                )
+                conn.execute(
+                    "DELETE FROM files WHERE id=%s AND workspace_id=%s",
+                    (item["id"], workspace),
+                )
+            conn.execute(
+                "DELETE FROM knowledge_bases WHERE id=%s AND workspace_id=%s",
+                (knowledge_base_id, workspace),
+            )
+            assistant_id = str(assistant["assistant_id"]) if assistant else ""
+            if assistant_id and assistant_id != "assistant_audit_template":
+                conn.execute(
+                    "UPDATE audit_assistants SET active_version_id=NULL WHERE id=%s AND workspace_id=%s",
+                    (assistant_id, workspace),
+                )
+                conn.execute(
+                    "DELETE FROM audit_assistants WHERE id=%s AND workspace_id=%s",
+                    (assistant_id, workspace),
+                )
+        return {
+            "deleted_file_count": len(exclusive),
+            "deleted_chunk_count": sum(int(item["chunk_count"] or 0) for item in exclusive),
+            "artifacts": exclusive,
+        }
 
     def ensure_assistant_for_knowledge_base(
         self,
