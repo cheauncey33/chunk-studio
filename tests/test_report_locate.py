@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import io
+import json
+import zipfile
+
+from app import report_locate
 from app.report_locate import _page_kind, _score_page, compact_locate_text, normalize_locate_text
 
 
@@ -46,3 +51,18 @@ def test_prefers_summary_table_over_body_detail() -> None:
     assert _page_kind(normalize_locate_text("检测结果汇总 检测项目 标准要求 结论")) == "summary"
     assert _page_kind(normalize_locate_text("报告正文 2绕组电阻测量")) == "body"
     assert summary_score > body_score
+
+
+def test_load_model_pages_reads_object_backed_layout_zip(monkeypatch) -> None:
+    payload = [[{"type": "text", "content": "object-backed page"}]]
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("report_model.json", json.dumps(payload))
+
+    monkeypatch.setattr(
+        report_locate.artifacts,
+        "read_artifact",
+        lambda local_rel, object_key: buffer.getvalue() if object_key == "layout-key" else None,
+    )
+
+    assert report_locate._load_model_pages("missing/local.zip", "layout-key") == payload

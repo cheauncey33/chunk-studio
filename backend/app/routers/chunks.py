@@ -162,7 +162,11 @@ def list_chunks(
     if repository is not None:
         return [
             _row_to_out(row)
-            for row in repository.list_chunks(file_id=file_id, page=page)
+            for row in repository.list_chunks(
+                file_id=file_id,
+                page=page,
+                has_llm_suggestions=has_llm_suggestions,
+            )
         ]
     sql = "SELECT * FROM chunks"
     args: list = [_workspace_id()]

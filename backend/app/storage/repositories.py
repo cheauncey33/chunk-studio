@@ -152,6 +152,7 @@ class ContentRepository(Protocol):
         *,
         file_id: str | None = None,
         page: int | None = None,
+        has_llm_suggestions: bool = False,
         limit: int = 500,
     ) -> list[dict[str, Any]]: ...
 
@@ -1330,6 +1331,27 @@ class PostgresContentRepository:
                    WHERE knowledge_base_id=%s AND file_id=%s AND workspace_id=%s""",
                 (knowledge_base_id, file_id, workspace),
             )
+            if result.rowcount:
+                remaining = conn.execute(
+                    """SELECT 1 FROM knowledge_base_files
+                       WHERE file_id=%s AND workspace_id=%s LIMIT 1""",
+                    (file_id, workspace),
+                ).fetchone()
+                fallback = conn.execute(
+                    """SELECT id FROM knowledge_bases
+                       WHERE workspace_id=%s AND is_default AND status='active'
+                       ORDER BY created_at LIMIT 1""",
+                    (workspace,),
+                ).fetchone()
+                if not remaining and fallback:
+                    conn.execute(
+                        """INSERT INTO knowledge_base_files
+                           (knowledge_base_id, file_id, workspace_id, role, corpus_kind,
+                            enabled, created_at)
+                           VALUES (%s,%s,%s,'source','standard',TRUE,now())
+                           ON CONFLICT (knowledge_base_id, file_id) DO UPDATE SET enabled=TRUE""",
+                        (fallback["id"], file_id, workspace),
+                    )
         return result.rowcount > 0
 
     def set_default_naming_file(self, knowledge_base_id: str, file_id: str | None) -> None:
@@ -1541,6 +1563,7 @@ class PostgresContentRepository:
         *,
         file_id: str | None = None,
         page: int | None = None,
+        has_llm_suggestions: bool = False,
         limit: int = 500,
         workspace_id: str | None = None,
     ) -> list[dict[str, Any]]:
@@ -1553,6 +1576,19 @@ class PostgresContentRepository:
         if page is not None:
             clauses.append("page=%s")
             params.append(page)
+        if has_llm_suggestions:
+            clauses.append(
+                """(
+                    (
+                        jsonb_typeof(metadata_llm->'keywords'->'value') = 'array'
+                        AND jsonb_array_length(metadata_llm->'keywords'->'value') > 0
+                    )
+                    OR (
+                        jsonb_typeof(metadata_llm->'questions'->'value') = 'array'
+                        AND jsonb_array_length(metadata_llm->'questions'->'value') > 0
+                    )
+                )"""
+            )
         params.append(max(1, min(int(limit), 1000)))
         with self._connect() as conn:
             rows = conn.execute(

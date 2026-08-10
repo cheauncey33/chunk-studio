@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from .. import config, current_user, db, jobs, pdf
+from .. import artifacts, config, current_user, db, jobs, pdf
 from ..storage.object_store import get_object_store
 from ..storage.repositories import get_content_repository, get_content_write_repository
 
@@ -405,7 +405,20 @@ async def page_image(file_id: str, page_no: int, dpi: int = 150):
         raise HTTPException(404, "page out of range")
     # Clamp: audit preview may request high DPI; keep an upper bound for cache size.
     render_dpi = max(96, min(int(dpi or 150), 400))
-    png = await asyncio.to_thread(pdf.render_page_png, f["path"], page_no - 1, render_dpi)
+    materialized = artifacts.materialize_artifact(
+        f.get("path"),
+        f.get("object_key"),
+        cache_name=f"{file_id}-source",
+        suffix=Path(str(f.get("name") or ".pdf")).suffix or ".pdf",
+    )
+    if materialized is None:
+        raise HTTPException(404, "stored file missing")
+    png = await asyncio.to_thread(
+        pdf.render_page_png,
+        config.to_rel(materialized),
+        page_no - 1,
+        render_dpi,
+    )
     return Response(content=png, media_type="image/png")
 
 

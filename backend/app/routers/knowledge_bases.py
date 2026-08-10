@@ -801,11 +801,18 @@ def list_knowledge_base_chunks(
 @router.post("/{knowledge_base_id}/retrieval-test")
 def retrieval_test(knowledge_base_id: str, body: RetrievalTestRequest):
     _get_kb(knowledge_base_id)
-    membership_rows = db.get_conn().execute(
-        """SELECT file_id, enabled FROM knowledge_base_files
-           WHERE knowledge_base_id=? AND workspace_id=?""",
-        (knowledge_base_id, _workspace_id()),
-    ).fetchall()
+    repository = get_content_repository()
+    if repository is not None:
+        membership_rows = repository.list_knowledge_base_files(
+            knowledge_base_id,
+            limit=1000,
+        )
+    else:
+        membership_rows = db.get_conn().execute(
+            """SELECT file_id, enabled FROM knowledge_base_files
+               WHERE knowledge_base_id=? AND workspace_id=?""",
+            (knowledge_base_id, _workspace_id()),
+        ).fetchall()
     membership = {row["file_id"]: bool(row["enabled"]) for row in membership_rows}
     if body.file_ids is None:
         file_ids = [file_id for file_id, enabled in membership.items() if enabled]

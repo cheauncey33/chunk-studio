@@ -6,11 +6,13 @@ Audit cards refer to values shown in the report's result-summary tables
 from __future__ import annotations
 
 import json
+import io
 import re
 import zipfile
 from typing import Any
 
-from . import config, db
+from . import artifacts, config, current_user, db
+from .storage.repositories import get_content_repository, get_content_write_repository
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _SPACE_RE = re.compile(r"\s+")
@@ -19,23 +21,27 @@ _TOKEN_RE = re.compile(r"[\u4e00-\u9fff]{2,}|[A-Za-z]{2,}|\d+(?:\.\d+)?%?|â‰¤|â‰
 
 
 def _latest_parse(file_id: str) -> dict[str, Any] | None:
+    repository = get_content_repository() or get_content_write_repository()
+    if repository is not None:
+        return repository.latest_parse(file_id)
     row = db.get_conn().execute(
         """SELECT * FROM document_parses
-           WHERE file_id=? AND status='done'
+           WHERE file_id=? AND workspace_id=? AND status='done'
            ORDER BY created_at DESC LIMIT 1""",
-        (file_id,),
+        (file_id, current_user.get_current_user().workspace_id),
     ).fetchone()
     return dict(row) if row else None
 
 
-def _load_model_pages(zip_rel: str | None) -> list[list[dict[str, Any]]] | None:
-    if not zip_rel:
-        return None
-    zip_path = config.from_rel(zip_rel)
-    if not zip_path.is_file():
+def _load_model_pages(
+    zip_rel: str | None,
+    object_key: str | None = None,
+) -> list[list[dict[str, Any]]] | None:
+    zip_bytes = artifacts.read_artifact(zip_rel, object_key)
+    if zip_bytes is None:
         return None
     try:
-        with zipfile.ZipFile(zip_path) as zf:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             model_name = next((n for n in zf.namelist() if n.endswith("_model.json")), None)
             if not model_name:
                 return None
@@ -200,10 +206,15 @@ def locate_text_page(
     requirement: str = "",
 ) -> dict[str, Any]:
     """Return 1-based page for the best MinerU page match, or null page."""
-    file_row = db.get_conn().execute(
-        "SELECT id, page_count FROM files WHERE id=?",
-        (file_id,),
-    ).fetchone()
+    repository = get_content_repository() or get_content_write_repository()
+    file_row = (
+        repository.get_file(file_id)
+        if repository is not None
+        else db.get_conn().execute(
+            "SELECT id, page_count FROM files WHERE id=? AND workspace_id=?",
+            (file_id, current_user.get_current_user().workspace_id),
+        ).fetchone()
+    )
     if not file_row:
         raise KeyError("file not found")
     page_count = int(file_row["page_count"] or 0)
@@ -223,7 +234,10 @@ def locate_text_page(
     if not parse:
         empty["reason"] = "no_parse"
         return empty
-    pages = _load_model_pages(parse.get("raw_zip_path"))
+    pages = _load_model_pages(
+        parse.get("raw_zip_path"),
+        parse.get("raw_zip_object_key"),
+    )
     if not pages:
         empty["reason"] = "no_parse_layout"
         return empty
