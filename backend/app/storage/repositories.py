@@ -174,6 +174,24 @@ class ContentRepository(Protocol):
 
     def list_embedding_rows(self, *, model: str, dimension: int) -> list[dict[str, Any]]: ...
 
+    def list_case_reviews(self, report_name: str) -> list[dict[str, Any]]: ...
+
+    def delete_case_reviews(self, report_name: str) -> int: ...
+
+    def upsert_case_review(
+        self,
+        report_name: str,
+        case_id: str,
+        *,
+        status: str,
+        corrected_status: str,
+        note: str,
+        reviewer: str,
+        updated_at: str,
+    ) -> dict[str, Any]: ...
+
+    def delete_case_review(self, report_name: str, case_id: str) -> bool: ...
+
     def list_lexical_rows(
         self,
         *,
@@ -1781,6 +1799,73 @@ class PostgresContentRepository:
                 (model, dimension, workspace),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_case_reviews(self, report_name: str) -> list[dict[str, Any]]:
+        workspace = self._scope()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM audit_case_reviews WHERE report_name=%s AND workspace_id=%s",
+                (report_name, workspace),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_case_reviews(self, report_name: str) -> int:
+        workspace = self._scope()
+        with self._connect() as conn:
+            result = conn.execute(
+                "DELETE FROM audit_case_reviews WHERE report_name=%s AND workspace_id=%s",
+                (report_name, workspace),
+            )
+        return int(result.rowcount)
+
+    def upsert_case_review(
+        self,
+        report_name: str,
+        case_id: str,
+        *,
+        status: str,
+        corrected_status: str,
+        note: str,
+        reviewer: str,
+        updated_at: str,
+    ) -> dict[str, Any]:
+        workspace = self._scope()
+        with self._connect() as conn:
+            row = conn.execute(
+                """INSERT INTO audit_case_reviews
+                   (report_name, case_id, workspace_id, status, corrected_status,
+                    note, reviewer, created_at, updated_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (workspace_id, report_name, case_id) DO UPDATE SET
+                     status=EXCLUDED.status,
+                     corrected_status=EXCLUDED.corrected_status,
+                     note=EXCLUDED.note,
+                     reviewer=EXCLUDED.reviewer,
+                     updated_at=EXCLUDED.updated_at
+                   RETURNING *""",
+                (
+                    report_name,
+                    case_id,
+                    workspace,
+                    status,
+                    corrected_status,
+                    note,
+                    reviewer,
+                    updated_at,
+                    updated_at,
+                ),
+            ).fetchone()
+        return dict(row)
+
+    def delete_case_review(self, report_name: str, case_id: str) -> bool:
+        workspace = self._scope()
+        with self._connect() as conn:
+            result = conn.execute(
+                "DELETE FROM audit_case_reviews "
+                "WHERE report_name=%s AND case_id=%s AND workspace_id=%s",
+                (report_name, case_id, workspace),
+            )
+        return result.rowcount > 0
 
     def list_lexical_rows(
         self,

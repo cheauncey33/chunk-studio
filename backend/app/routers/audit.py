@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import config, current_user, db, lexical, llm
+from ..storage.repositories import get_content_repository, get_content_write_repository
 
 
 router = APIRouter(prefix="/audit", tags=["audit"])
@@ -479,11 +480,15 @@ def delete_audit_report(name: str) -> dict[str, Any]:
     if checkpoint.is_file():
         checkpoint.unlink()
         removed.append(checkpoint.name)
-    with db.transaction() as conn:
-        conn.execute(
-            "DELETE FROM audit_case_reviews WHERE report_name=? AND workspace_id=?",
-            (path.name, _workspace_id()),
-        )
+    repository = get_content_write_repository()
+    if repository is not None:
+        repository.delete_case_reviews(path.name)
+    else:
+        with db.transaction() as conn:
+            conn.execute(
+                "DELETE FROM audit_case_reviews WHERE report_name=? AND workspace_id=?",
+                (path.name, _workspace_id()),
+            )
     return {"ok": True, "removed": removed}
 
 
@@ -495,10 +500,18 @@ class CaseReviewRequest(BaseModel):
 
 
 def _case_reviews(report_name: str) -> dict[str, dict[str, Any]]:
-    rows = db.get_conn().execute(
-        "SELECT * FROM audit_case_reviews WHERE report_name=? AND workspace_id=?",
-        (report_name, _workspace_id()),
-    ).fetchall()
+    repository = get_content_repository() or get_content_write_repository()
+    rows = (
+        repository.list_case_reviews(report_name)
+        if repository is not None
+        else [
+            dict(row)
+            for row in db.get_conn().execute(
+                "SELECT * FROM audit_case_reviews WHERE report_name=? AND workspace_id=?",
+                (report_name, _workspace_id()),
+            ).fetchall()
+        ]
+    )
     return {row["case_id"]: dict(row) for row in rows}
 
 
@@ -529,6 +542,17 @@ def upsert_case_review(name: str, case_id: str, body: CaseReviewRequest) -> dict
         corrected_status = ""
 
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    repository = get_content_write_repository()
+    if repository is not None:
+        return repository.upsert_case_review(
+            path.name,
+            case_id,
+            status=body.status,
+            corrected_status=corrected_status,
+            note=body.note.strip(),
+            reviewer=body.reviewer.strip(),
+            updated_at=now,
+        )
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO audit_case_reviews
@@ -557,12 +581,17 @@ def upsert_case_review(name: str, case_id: str, body: CaseReviewRequest) -> dict
 def delete_case_review(name: str, case_id: str) -> dict[str, Any]:
     path = _safe_report_path(name)
     _assert_report_visible(_load_json(path))
-    with db.transaction() as conn:
-        cursor = conn.execute(
-            "DELETE FROM audit_case_reviews WHERE report_name=? AND case_id=? AND workspace_id=?",
-            (path.name, case_id, _workspace_id()),
-        )
-    if cursor.rowcount == 0:
+    repository = get_content_write_repository()
+    if repository is not None:
+        deleted = repository.delete_case_review(path.name, case_id)
+    else:
+        with db.transaction() as conn:
+            cursor = conn.execute(
+                "DELETE FROM audit_case_reviews WHERE report_name=? AND case_id=? AND workspace_id=?",
+                (path.name, case_id, _workspace_id()),
+            )
+        deleted = cursor.rowcount > 0
+    if not deleted:
         raise HTTPException(status_code=404, detail="Review not found")
     return {"ok": True}
 
