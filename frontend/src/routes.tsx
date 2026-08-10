@@ -1,8 +1,7 @@
 import { Suspense, type ReactNode, lazy } from 'react'
-import { createBrowserRouter, Navigate } from 'react-router-dom'
+import { createBrowserRouter, Navigate, useParams } from 'react-router-dom'
 import { RootLayout } from '@/layouts/root-layout'
 import { KnowledgeLayout } from '@/layouts/kb-layout'
-import DatasetChatPage from '@/pages/dataset/chat'
 import DatasetWorkflowPage from '@/pages/dataset/workflow'
 import SettingsPage from '@/pages/settings'
 import FieldsSettingsPage from '@/pages/settings/fields'
@@ -30,6 +29,11 @@ function withSuspense(element: ReactNode) {
   return <Suspense fallback={<RouteFallback />}>{element}</Suspense>
 }
 
+function LegacyDatasetChatRedirect() {
+  const { id = '' } = useParams()
+  return <Navigate to={`/analytics?knowledge_base_id=${encodeURIComponent(id)}`} replace />
+}
+
 export const router = createBrowserRouter([
   {
     path: '/',
@@ -50,7 +54,8 @@ export const router = createBrowserRouter([
           { path: 'overview', element: <Navigate to="../files" replace /> },
           { path: 'settings', element: withSuspense(<DatasetSettingsPage />) },
           { path: 'rules', element: <Navigate to="../settings" replace /> },
-          { path: 'chat', element: withSuspense(<DatasetChatPage />) },
+          // The unified Agent chat now owns this entry point. Keep old bookmarks working.
+          { path: 'chat', element: <LegacyDatasetChatRedirect /> },
           { path: 'workflow', element: withSuspense(<DatasetWorkflowPage />) },
           // Not in the sidebar; kept routeable for deep links and file-row overflow actions.
           { path: 'chunks', element: withSuspense(<DatasetChunksPage />) },

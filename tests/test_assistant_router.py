@@ -14,6 +14,12 @@ def _init_temp_db(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(db.config, "DB_PATH", tmp_path / "chunkstudio.db")
     monkeypatch.setattr(db, "_conn", None)
     db.init_db()
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO files(id,workspace_id,name,path,metadata,created_at)
+               VALUES ('report1', ?, 'report.md', 'files/report.md', '{}', 'now')""",
+            (db.config.DEFAULT_WORKSPACE_ID,),
+        )
 
 
 def _close_temp_db(monkeypatch) -> None:

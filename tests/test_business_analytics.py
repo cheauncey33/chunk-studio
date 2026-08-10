@@ -83,6 +83,15 @@ def test_snapshot_and_overview_use_curated_business_rows(tmp_path) -> None:
     }
 
 
+def test_schema_explains_curated_read_only_source() -> None:
+    schema = business_analytics.describe_business_schema()
+
+    assert schema["read_only"] is True
+    assert "持久化 SQLite" in schema["source"]
+    assert schema["table_descriptions"]["audit_cases"]
+    assert schema["column_descriptions"]["audit_cases.status"]
+
+
 def test_overview_keeps_legacy_statuses_in_denominator(tmp_path) -> None:
     source = _source()
     _write_report(tmp_path)

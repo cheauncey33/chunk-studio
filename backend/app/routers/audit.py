@@ -8,7 +8,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import config, db, lexical, llm
+from .. import config, current_user, db, lexical, llm
 
 
 router = APIRouter(prefix="/audit", tags=["audit"])
@@ -67,13 +67,50 @@ def _report_kind(name: str) -> str:
     return "report"
 
 
+def _workspace_id() -> str:
+    return current_user.get_current_user().workspace_id
+
+
+def _report_visible(payload: Any) -> bool:
+    """Resolve report ownership from recorded IDs before exposing a file."""
+    if not isinstance(payload, dict):
+        return _workspace_id() == config.DEFAULT_WORKSPACE_ID
+    explicit = str(payload.get("workspace_id") or "").strip()
+    if explicit:
+        return explicit == _workspace_id()
+    checks = (
+        ("assistant_id", "audit_assistants"),
+        ("knowledge_base_id", "knowledge_bases"),
+        ("report_file_id", "files"),
+        ("job_id", "jobs"),
+    )
+    for field, table in checks:
+        value = str(payload.get(field) or "").strip()
+        if not value:
+            continue
+        row = db.get_conn().execute(
+            f"SELECT workspace_id FROM {table} WHERE id=?",
+            (value,),
+        ).fetchone()
+        if row:
+            return str(row["workspace_id"]) == _workspace_id()
+    # Legacy reports had no ownership metadata. They remain visible only in
+    # the explicitly seeded local workspace until a migration assigns them.
+    return _workspace_id() == config.DEFAULT_WORKSPACE_ID
+
+
+def _assert_report_visible(payload: Any) -> None:
+    if not _report_visible(payload):
+        raise HTTPException(status_code=404, detail="Report not found")
+
+
 def _assistant_name(assistant_id: str | None) -> str | None:
     aid = str(assistant_id or "").strip()
     if not aid:
         return None
     row = db.get_conn().execute(
-        "SELECT name FROM audit_assistants WHERE id=?",
-        (aid,),
+        "SELECT name FROM audit_assistants WHERE id=? AND workspace_id=?",
+        (aid, _workspace_id()),
     ).fetchone()
     return str(row["name"]) if row and row["name"] else aid
 
@@ -81,17 +118,17 @@ def _assistant_name(assistant_id: str | None) -> str | None:
 def _job_status_for_report(report_name: str, job_id: str | None) -> str | None:
     if job_id:
         row = db.get_conn().execute(
-            "SELECT status FROM jobs WHERE id=?",
-            (job_id,),
+            "SELECT status FROM jobs WHERE id=? AND workspace_id=?",
+            (job_id, _workspace_id()),
         ).fetchone()
         if row:
             return str(row["status"] or "") or None
     row = db.get_conn().execute(
         """SELECT status FROM jobs
-           WHERE type='audit' AND json_extract(result, '$.report_name')=?
+           WHERE workspace_id=? AND type='audit' AND json_extract(result, '$.report_name')=?
            ORDER BY COALESCE(finished_at, started_at, created_at) DESC
            LIMIT 1""",
-        (report_name,),
+        (_workspace_id(), report_name),
     ).fetchone()
     return str(row["status"]) if row else None
 
@@ -382,11 +419,17 @@ def list_audit_reports(
     """
     if not REPORTS_DIR.exists():
         return {"reports": []}
-    reports = [
-        _report_list_item(path)
-        for path in REPORTS_DIR.glob("*.json")
-        if path.is_file() and not path.name.endswith(".checkpoint.json")
-    ]
+    reports = []
+    for path in REPORTS_DIR.glob("*.json"):
+        if not path.is_file() or path.name.endswith(".checkpoint.json"):
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = None
+        if not _report_visible(payload):
+            continue
+        reports.append(_report_list_item(path))
     want_history = history or (str(scope or "").strip().lower() == "full_report")
     if want_history:
         filtered: list[dict[str, Any]] = []
@@ -412,8 +455,9 @@ def list_audit_reports(
 @router.get("/reports/{name}")
 def get_audit_report(name: str) -> dict[str, Any]:
     path = _safe_report_path(name)
-    meta = _report_list_item(path)
     payload = _load_json(path)
+    _assert_report_visible(payload)
+    meta = _report_list_item(path)
     return {
         **meta,
         "payload": payload,
@@ -428,6 +472,7 @@ def delete_audit_report(name: str) -> dict[str, Any]:
     Does not delete the source report PDF.
     """
     path = _safe_report_path(name)
+    _assert_report_visible(_load_json(path))
     checkpoint = path.with_suffix(".checkpoint.json")
     removed = [path.name]
     path.unlink()
@@ -436,8 +481,8 @@ def delete_audit_report(name: str) -> dict[str, Any]:
         removed.append(checkpoint.name)
     with db.transaction() as conn:
         conn.execute(
-            "DELETE FROM audit_case_reviews WHERE report_name=?",
-            (path.name,),
+            "DELETE FROM audit_case_reviews WHERE report_name=? AND workspace_id=?",
+            (path.name, _workspace_id()),
         )
     return {"ok": True, "removed": removed}
 
@@ -451,8 +496,8 @@ class CaseReviewRequest(BaseModel):
 
 def _case_reviews(report_name: str) -> dict[str, dict[str, Any]]:
     rows = db.get_conn().execute(
-        "SELECT * FROM audit_case_reviews WHERE report_name=?",
-        (report_name,),
+        "SELECT * FROM audit_case_reviews WHERE report_name=? AND workspace_id=?",
+        (report_name, _workspace_id()),
     ).fetchall()
     return {row["case_id"]: dict(row) for row in rows}
 
@@ -460,6 +505,7 @@ def _case_reviews(report_name: str) -> dict[str, dict[str, Any]]:
 @router.get("/reports/{name}/reviews")
 def list_case_reviews(name: str) -> dict[str, Any]:
     path = _safe_report_path(name)
+    _assert_report_visible(_load_json(path))
     return {"report_name": path.name, "reviews": _case_reviews(path.name)}
 
 
@@ -467,6 +513,7 @@ def list_case_reviews(name: str) -> dict[str, Any]:
 def upsert_case_review(name: str, case_id: str, body: CaseReviewRequest) -> dict[str, Any]:
     path = _safe_report_path(name)
     payload = _load_json(path)
+    _assert_report_visible(payload)
     if not isinstance(payload, dict):
         raise HTTPException(status_code=422, detail="Report payload must be an object")
     _find_case(payload, case_id)
@@ -485,23 +532,23 @@ def upsert_case_review(name: str, case_id: str, body: CaseReviewRequest) -> dict
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO audit_case_reviews
-               (report_name, case_id, status, corrected_status, note, reviewer,
+               (report_name, case_id, workspace_id, status, corrected_status, note, reviewer,
                 created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?)
-               ON CONFLICT(report_name, case_id) DO UPDATE SET
+               VALUES (?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(workspace_id, report_name, case_id) DO UPDATE SET
                  status=excluded.status,
                  corrected_status=excluded.corrected_status,
                  note=excluded.note,
                  reviewer=excluded.reviewer,
                  updated_at=excluded.updated_at""",
             (
-                path.name, case_id, body.status, corrected_status,
+                path.name, case_id, _workspace_id(), body.status, corrected_status,
                 body.note.strip(), body.reviewer.strip(), now, now,
             ),
         )
     row = db.get_conn().execute(
-        "SELECT * FROM audit_case_reviews WHERE report_name=? AND case_id=?",
-        (path.name, case_id),
+        "SELECT * FROM audit_case_reviews WHERE report_name=? AND case_id=? AND workspace_id=?",
+        (path.name, case_id, _workspace_id()),
     ).fetchone()
     return dict(row)
 
@@ -509,10 +556,11 @@ def upsert_case_review(name: str, case_id: str, body: CaseReviewRequest) -> dict
 @router.delete("/reports/{name}/reviews/{case_id}")
 def delete_case_review(name: str, case_id: str) -> dict[str, Any]:
     path = _safe_report_path(name)
+    _assert_report_visible(_load_json(path))
     with db.transaction() as conn:
         cursor = conn.execute(
-            "DELETE FROM audit_case_reviews WHERE report_name=? AND case_id=?",
-            (path.name, case_id),
+            "DELETE FROM audit_case_reviews WHERE report_name=? AND case_id=? AND workspace_id=?",
+            (path.name, case_id, _workspace_id()),
         )
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Review not found")
@@ -541,7 +589,8 @@ def get_manual_rules(assistant_id: str = "assistant_oil_transformer_audit") -> d
     ``evaluation/manual_knowledge_rules_v1.json`` remains a versioned seed only.
     """
     row = db.get_conn().execute(
-        "SELECT id FROM audit_assistants WHERE id=?", (assistant_id,)
+        "SELECT id FROM audit_assistants WHERE id=? AND workspace_id=?",
+        (assistant_id, _workspace_id()),
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Assistant not found")

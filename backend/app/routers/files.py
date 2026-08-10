@@ -14,7 +14,8 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from .. import config, db, jobs, pdf
+from .. import config, current_user, db, jobs, pdf
+from ..storage.object_store import get_object_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/files", tags=["files"])
@@ -22,6 +23,10 @@ router = APIRouter(prefix="/files", tags=["files"])
 _PDF_MAGIC = b"%PDF-"
 _CORPUS_KINDS = frozenset({"standard", "spec"})
 _NON_CORPUS_ROLES = frozenset({"report", "naming", "sample_report"})
+
+
+def _workspace_id() -> str:
+    return current_user.get_current_user().workspace_id
 
 
 class FileUpdate(BaseModel):
@@ -61,8 +66,9 @@ async def upload(
     target_kb = None
     if knowledge_base_id:
         target_kb = db.get_conn().execute(
-            "SELECT id FROM knowledge_bases WHERE id=? AND status='active'",
-            (knowledge_base_id,),
+            """SELECT id FROM knowledge_bases
+               WHERE id=? AND workspace_id=? AND status='active'""",
+            (knowledge_base_id, _workspace_id()),
         ).fetchone()
         if not target_kb:
             raise HTTPException(404, "knowledge base not found")
@@ -94,14 +100,22 @@ async def upload(
     if not dest.exists():
         dest.write_bytes(raw)
     file_id = uuid.uuid4().hex
+    object_key = f"workspaces/{_workspace_id()}/files/{file_id}/content.pdf"
+    object_info = get_object_store().put_bytes(
+        object_key,
+        raw,
+        content_type="application/pdf",
+    )
     file_rel = config.to_rel(dest)
     n_pages = await asyncio.to_thread(pdf.page_count, file_rel)
     created = time.strftime("%Y-%m-%dT%H:%M:%S")
     with db.transaction() as conn:
         conn.execute(
-            "INSERT INTO files(id,name,path,sha,page_count,metadata,created_at) VALUES(?,?,?,?,?,?,?)",
+            """INSERT INTO files
+               (id,workspace_id,name,path,sha,object_key,page_count,metadata,created_at)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
             (
-                file_id, safe_name, file_rel, sha, n_pages,
+                file_id, _workspace_id(), safe_name, file_rel, sha, object_info.key, n_pages,
                 json.dumps(file_meta, ensure_ascii=False), created,
             ),
         )
@@ -111,23 +125,26 @@ async def upload(
             conn.execute(
                 """UPDATE knowledge_bases
                    SET default_naming_file_id=?, updated_at=?
-                   WHERE id=?""",
-                (file_id, created, target_kb["id"]),
+                   WHERE id=? AND workspace_id=?""",
+                (file_id, created, target_kb["id"], _workspace_id()),
             )
         elif doc_role in {"report", "sample_report"}:
             # Audit / init inputs only; do not attach to a knowledge base.
             pass
         else:
             relation_kb = target_kb or conn.execute(
-                "SELECT id FROM knowledge_bases WHERE is_default=1 ORDER BY created_at LIMIT 1"
+                """SELECT id FROM knowledge_bases
+                   WHERE is_default=1 AND workspace_id=? ORDER BY created_at LIMIT 1""",
+                (_workspace_id(),),
             ).fetchone()
             if relation_kb:
                 corpus_kind = _resolve_corpus_kind(file_meta)
                 conn.execute(
                     """INSERT OR IGNORE INTO knowledge_base_files
-                       (knowledge_base_id, file_id, role, corpus_kind, enabled, created_at)
-                       VALUES (?,?, 'source', ?, 1, ?)""",
-                    (relation_kb["id"], file_id, corpus_kind, created),
+                       (knowledge_base_id, file_id, workspace_id, role, corpus_kind,
+                        enabled, created_at)
+                       VALUES (?,?,?, 'source', ?, 1, ?)""",
+                    (relation_kb["id"], file_id, _workspace_id(), corpus_kind, created),
                 )
     try:
         jobs.enqueue_parse_file(file_id)
@@ -141,21 +158,22 @@ async def upload(
         "page_count": n_pages,
         "metadata": json.dumps(file_meta, ensure_ascii=False),
         "created_at": created,
+        "object_key": object_info.key,
     })
 
 
 @router.get("")
 def list_files():
-    rows = db.get_conn().execute("SELECT * FROM files ORDER BY created_at DESC").fetchall()
+    rows = db.get_conn().execute(
+        "SELECT * FROM files WHERE workspace_id=? ORDER BY created_at DESC",
+        (_workspace_id(),),
+    ).fetchall()
     return [_file_out(dict(r), include_parse=True) for r in rows]
 
 
 @router.get("/{file_id}")
 def get_file(file_id: str):
-    row = db.get_conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
-    if not row:
-        raise HTTPException(404, "file not found")
-    return _file_out(dict(row), include_parse=True)
+    return _file_out(_get_file(file_id), include_parse=True)
 
 
 @router.get("/{file_id}/content")
@@ -163,21 +181,30 @@ def get_file_content(file_id: str):
     """Serve the stored PDF for inline viewing in a new browser tab."""
     row = _get_file(file_id)
     path = config.from_rel(row["path"])
-    if not path.is_file():
-        raise HTTPException(404, "stored file missing")
-    return FileResponse(
-        path,
-        media_type="application/pdf",
-        filename=row["name"],
-        content_disposition_type="inline",
-    )
+    if path.is_file():
+        return FileResponse(
+            path,
+            media_type="application/pdf",
+            filename=row["name"],
+            content_disposition_type="inline",
+        )
+    object_key = str(row.get("object_key") or "").strip()
+    if object_key:
+        try:
+            content = get_object_store().get_bytes(object_key)
+        except (FileNotFoundError, OSError) as exc:
+            raise HTTPException(404, "stored file missing") from exc
+        return Response(
+            content=content,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{row["name"]}"'},
+        )
+    raise HTTPException(404, "stored file missing")
 
 
 @router.patch("/{file_id}")
 def update_file(file_id: str, body: FileUpdate):
-    row = db.get_conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
-    if not row:
-        raise HTTPException(404, "file not found")
+    row = _get_file(file_id)
     updates: list[str] = []
     params: list[Any] = []
     if body.name is not None:
@@ -193,14 +220,13 @@ def update_file(file_id: str, body: FileUpdate):
         updates.append("metadata=?")
         params.append(json.dumps(metadata, ensure_ascii=False))
     if updates:
-        params.append(file_id)
+        params.extend([file_id, _workspace_id()])
         with db.transaction() as conn:
             conn.execute(
-                f"UPDATE files SET {', '.join(updates)} WHERE id=?",
+                f"UPDATE files SET {', '.join(updates)} WHERE id=? AND workspace_id=?",
                 params,
             )
-    updated = db.get_conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
-    return _file_out(dict(updated), include_parse=True)
+    return _file_out(_get_file(file_id), include_parse=True)
 
 
 @router.get("/{file_id}/parses")
@@ -208,9 +234,9 @@ def list_file_parses(file_id: str):
     _get_file(file_id)
     rows = db.get_conn().execute(
         """SELECT * FROM document_parses
-           WHERE file_id=?
+           WHERE file_id=? AND workspace_id=?
            ORDER BY created_at DESC""",
-        (file_id,),
+        (file_id, _workspace_id()),
     ).fetchall()
     out = []
     for row in rows:
@@ -257,18 +283,18 @@ async def auto_chunk_file(file_id: str, body: AutoChunkBody | None = None):
     body = body or AutoChunkBody()
     parse = db.get_conn().execute(
         """SELECT id FROM document_parses
-           WHERE file_id=? AND status='done' AND raw_zip_path IS NOT NULL
+           WHERE file_id=? AND workspace_id=? AND status='done' AND raw_zip_path IS NOT NULL
              AND TRIM(raw_zip_path) != ''
            ORDER BY created_at DESC LIMIT 1""",
-        (file_id,),
+        (file_id, _workspace_id()),
     ).fetchone()
     if not parse:
         raise HTTPException(400, "file has no completed parse with layout zip")
 
     if body.persist_override and body.chunk_config is not None:
         row = db.get_conn().execute(
-            "SELECT metadata FROM files WHERE id=?",
-            (file_id,),
+            "SELECT metadata FROM files WHERE id=? AND workspace_id=?",
+            (file_id, _workspace_id()),
         ).fetchone()
         try:
             metadata = json.loads((row["metadata"] if row else None) or "{}")
@@ -279,8 +305,8 @@ async def auto_chunk_file(file_id: str, body: AutoChunkBody | None = None):
         metadata["chunk_config"] = body.chunk_config
         with db.transaction() as conn:
             conn.execute(
-                "UPDATE files SET metadata=? WHERE id=?",
-                (json.dumps(metadata, ensure_ascii=False), file_id),
+                "UPDATE files SET metadata=? WHERE id=? AND workspace_id=?",
+                (json.dumps(metadata, ensure_ascii=False), file_id, _workspace_id()),
             )
 
     config = (
@@ -347,20 +373,34 @@ def delete_file(file_id: str):
         conn.execute(
             """UPDATE knowledge_bases
                SET default_naming_file_id=NULL, updated_at=?
-               WHERE default_naming_file_id=?""",
-            (time.strftime("%Y-%m-%dT%H:%M:%S"), file_id),
+               WHERE default_naming_file_id=? AND workspace_id=?""",
+            (time.strftime("%Y-%m-%dT%H:%M:%S"), file_id, _workspace_id()),
         )
-        conn.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
-        conn.execute("DELETE FROM files WHERE id=?", (file_id,))
+        conn.execute(
+            "DELETE FROM chunks WHERE file_id=? AND workspace_id=?",
+            (file_id, _workspace_id()),
+        )
+        conn.execute(
+            "DELETE FROM files WHERE id=? AND workspace_id=?",
+            (file_id, _workspace_id()),
+        )
     try:
         config.from_rel(f["path"]).unlink(missing_ok=True)
     except Exception:
         pass
+    if f.get("object_key"):
+        try:
+            get_object_store().delete(f["object_key"])
+        except Exception:
+            logger.exception("failed to delete object %s", f["object_key"])
     return {"ok": True}
 
 
 def _get_file(file_id: str):
-    row = db.get_conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
+    row = db.get_conn().execute(
+        "SELECT * FROM files WHERE id=? AND workspace_id=?",
+        (file_id, _workspace_id()),
+    ).fetchone()
     if not row:
         raise HTTPException(404, "file not found")
     return dict(row)
@@ -369,9 +409,9 @@ def _get_file(file_id: str):
 def _latest_parse(file_id: str) -> dict[str, Any] | None:
     row = db.get_conn().execute(
         """SELECT status, error, markdown_path, result FROM document_parses
-           WHERE file_id=?
+           WHERE file_id=? AND workspace_id=?
            ORDER BY created_at DESC LIMIT 1""",
-        (file_id,),
+        (file_id, _workspace_id()),
     ).fetchone()
     return dict(row) if row else None
 
@@ -395,6 +435,7 @@ def _file_out(row: dict, *, include_parse: bool = False):
         "page_count": row["page_count"],
         "metadata": metadata,
         "created_at": row["created_at"],
+        "object_key": row.get("object_key") or None,
     }
     if include_parse:
         parse = _latest_parse(row["id"])

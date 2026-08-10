@@ -129,6 +129,7 @@ def chat_tools(
     model: str | None = None,
     temperature: float = 0,
     timeout: float = 180,
+    tool_choice: str = "auto",
 ) -> dict[str, Any]:
     """Return one OpenAI-compatible assistant message with native tool calls."""
     if not tools:
@@ -140,7 +141,7 @@ def chat_tools(
             "model": config["model"],
             "messages": messages,
             "tools": tools,
-            "tool_choice": "auto",
+            "tool_choice": tool_choice,
             "temperature": temperature,
             "thinking": {"type": "disabled"},
             "stream": False,
@@ -179,6 +180,7 @@ def chat_tools_stream(
     temperature: float = 0,
     timeout: float = 180,
     event_sink: Callable[[dict[str, Any]], None] | None = None,
+    tool_choice: str = "auto",
 ) -> dict[str, Any]:
     """Stream content/tool-call deltas and return the aggregated message."""
     if not tools:
@@ -188,7 +190,7 @@ def chat_tools_stream(
         "model": config["model"],
         "messages": messages,
         "tools": tools,
-        "tool_choice": "auto",
+        "tool_choice": tool_choice,
         "temperature": temperature,
         "thinking": {"type": "disabled"},
         "stream": True,
@@ -205,6 +207,10 @@ def chat_tools_stream(
     try:
         with httpx.stream(url=url, method="POST", headers=headers, json=payload, timeout=timeout) as response:
             if response.status_code != HTTPStatus.OK:
+                # httpx.stream() keeps the response body unread. Accessing
+                # response.text before read() raises another exception and
+                # hides the provider's actual error body from the Agent UI.
+                response.read()
                 raise RuntimeError(
                     f"DeepSeek stream failed: status={response.status_code} "
                     f"body={response.text[:500]}"

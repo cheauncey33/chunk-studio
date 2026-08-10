@@ -18,7 +18,8 @@ export default function DatasetRetrievalPage() {
   const { data: files = [], isLoading: filesLoading } = useKbFiles(id)
   const [query, setQuery] = useState('变压器的空载损耗限值是什么？')
   const [topK, setTopK] = useState(10)
-  const [threshold, setThreshold] = useState(0.2)
+  const [denseThreshold, setDenseThreshold] = useState(0)
+  const [rerankThreshold, setRerankThreshold] = useState(0.2)
   const [routeTopK, setRouteTopK] = useState(30)
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set())
   const [selectionReady, setSelectionReady] = useState(false)
@@ -74,7 +75,8 @@ export default function DatasetRetrievalPage() {
       const result = await api.testKnowledgeBaseRetrieval(id, {
         query: query.trim(),
         top_k: topK,
-        similarity_threshold: threshold,
+        dense_threshold: denseThreshold,
+        rerank_threshold: rerankThreshold,
         route_top_k: routeTopK,
         file_ids: [...selectedFileIds],
       })
@@ -166,16 +168,29 @@ export default function DatasetRetrievalPage() {
               <Input type="number" min={1} max={50} value={topK} onChange={e => setTopK(Number(e.target.value))} />
             </div>
             <div className="space-y-2">
-              <Explain text={helpText.retrieval.threshold} title="相似度门槛">
-                <Label>相似度门槛</Label>
+              <Explain text="向量召回阶段的最低分数；0 表示不做 Dense 预过滤。" title="Dense 召回阈值">
+                <Label>Dense 召回阈值</Label>
               </Explain>
               <Input
                 type="number"
-                min={-1}
+                min={0}
                 max={1}
                 step={0.05}
-                value={threshold}
-                onChange={e => setThreshold(Number(e.target.value))}
+                value={denseThreshold}
+                onChange={e => setDenseThreshold(Number(e.target.value))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Explain text="重排完成后的最低相关性分数；0 表示不做 Rerank 结果过滤。" title="Rerank 结果阈值">
+                <Label>Rerank 结果阈值</Label>
+              </Explain>
+              <Input
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                value={rerankThreshold}
+                onChange={e => setRerankThreshold(Number(e.target.value))}
               />
             </div>
             <div className="col-span-2 space-y-2">

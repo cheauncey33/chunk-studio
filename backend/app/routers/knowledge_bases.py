@@ -9,7 +9,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import chunk_schema, db, retrieval
+from .. import chunk_schema, current_user, db, retrieval
 
 
 router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"])
@@ -40,7 +40,10 @@ class KnowledgeBaseFileUpdate(BaseModel):
 class RetrievalTestRequest(BaseModel):
     query: str = Field(min_length=1, max_length=8192)
     top_k: int = Field(default=10, ge=1, le=50)
-    similarity_threshold: float = Field(default=0.2, ge=-1, le=1)
+    dense_threshold: float = Field(default=0.0, ge=0, le=1)
+    rerank_threshold: float | None = Field(default=None, ge=0, le=1)
+    # Compatibility for older clients; new responses never expose this name.
+    similarity_threshold: float | None = Field(default=None, ge=-1, le=1)
     route_top_k: int = Field(default=30, ge=1, le=100)
     candidates_per_type: int = Field(default=20, ge=1, le=100)
     rrf_k: int = Field(default=60, ge=1, le=200)
@@ -48,6 +51,10 @@ class RetrievalTestRequest(BaseModel):
 
 
 _NON_CORPUS_ROLES = frozenset({"report", "naming", "sample_report"})
+
+
+def _workspace_id() -> str:
+    return current_user.get_current_user().workspace_id
 
 
 def _loads(value: str | None, fallback: Any) -> Any:
@@ -81,8 +88,8 @@ def _kb_out(row: Any) -> dict[str, Any]:
         naming_file_name = row["default_naming_file_name"]
     elif naming_file_id:
         name_row = db.get_conn().execute(
-            "SELECT name FROM files WHERE id=?",
-            (naming_file_id,),
+            "SELECT name FROM files WHERE id=? AND workspace_id=?",
+            (naming_file_id, _workspace_id()),
         ).fetchone()
         naming_file_name = name_row["name"] if name_row else None
     assistant_id = None
@@ -97,7 +104,9 @@ def _kb_out(row: Any) -> dict[str, Any]:
         "status": row["status"],
         "is_default": bool(row["is_default"]),
         "parser_config": _loads(row["parser_config"], {}),
-        "retrieval_config": _loads(row["retrieval_config"], {}),
+        "retrieval_config": retrieval.normalize_retrieval_config(
+            _loads(row["retrieval_config"], {})
+        ),
         "manual_rules": _loads(row["manual_rules"] if "manual_rules" in keys else "{}", {}),
         "few_shot_rules": _loads(row["few_shot_rules"] if "few_shot_rules" in keys else "{}", {}),
         "default_naming_file_id": naming_file_id,
@@ -117,7 +126,8 @@ def _get_kb(knowledge_base_id: str) -> Any:
                   (
                     SELECT akb.assistant_id
                     FROM assistant_knowledge_bases akb
-                    WHERE akb.knowledge_base_id=kb.id AND akb.enabled=1
+                    WHERE akb.knowledge_base_id=kb.id
+                      AND akb.workspace_id=kb.workspace_id AND akb.enabled=1
                     ORDER BY akb.priority ASC, akb.assistant_id ASC
                     LIMIT 1
                   ) AS assistant_id,
@@ -125,12 +135,15 @@ def _get_kb(knowledge_base_id: str) -> Any:
                   COUNT(DISTINCT c.id) AS chunk_count
            FROM knowledge_bases kb
            LEFT JOIN files nf ON nf.id=kb.default_naming_file_id
+                            AND nf.workspace_id=kb.workspace_id
            LEFT JOIN knowledge_base_files kbf
-             ON kbf.knowledge_base_id=kb.id AND kbf.enabled=1
+             ON kbf.knowledge_base_id=kb.id
+            AND kbf.workspace_id=kb.workspace_id AND kbf.enabled=1
            LEFT JOIN chunks c ON c.file_id=kbf.file_id
-           WHERE kb.id=?
+                            AND c.workspace_id=kb.workspace_id
+           WHERE kb.id=? AND kb.workspace_id=?
            GROUP BY kb.id""",
-        (knowledge_base_id,),
+        (knowledge_base_id, _workspace_id()),
     ).fetchone()
     if not row:
         raise HTTPException(404, "knowledge base not found")
@@ -145,7 +158,8 @@ def list_knowledge_bases():
                   (
                     SELECT akb.assistant_id
                     FROM assistant_knowledge_bases akb
-                    WHERE akb.knowledge_base_id=kb.id AND akb.enabled=1
+                    WHERE akb.knowledge_base_id=kb.id
+                      AND akb.workspace_id=kb.workspace_id AND akb.enabled=1
                     ORDER BY akb.priority ASC, akb.assistant_id ASC
                     LIMIT 1
                   ) AS assistant_id,
@@ -153,12 +167,16 @@ def list_knowledge_bases():
                   COUNT(DISTINCT c.id) AS chunk_count
            FROM knowledge_bases kb
            LEFT JOIN files nf ON nf.id=kb.default_naming_file_id
+                            AND nf.workspace_id=kb.workspace_id
            LEFT JOIN knowledge_base_files kbf
-             ON kbf.knowledge_base_id=kb.id AND kbf.enabled=1
+             ON kbf.knowledge_base_id=kb.id
+            AND kbf.workspace_id=kb.workspace_id AND kbf.enabled=1
            LEFT JOIN chunks c ON c.file_id=kbf.file_id
-           WHERE kb.status!='archived'
+                            AND c.workspace_id=kb.workspace_id
+           WHERE kb.status!='archived' AND kb.workspace_id=?
            GROUP BY kb.id
-           ORDER BY kb.is_default DESC, kb.updated_at DESC, kb.name"""
+            ORDER BY kb.is_default DESC, kb.updated_at DESC, kb.name""",
+        (_workspace_id(),),
     ).fetchall()
     return [_kb_out(row) for row in rows]
 
@@ -173,21 +191,25 @@ def create_knowledge_base(body: KnowledgeBaseCreate):
         with db.transaction() as conn:
             conn.execute(
                 """INSERT INTO knowledge_bases
-                   (id,name,description,status,is_default,parser_config,
+                   (id,workspace_id,name,description,status,is_default,parser_config,
                     retrieval_config,manual_rules,few_shot_rules,
                     default_naming_file_id,created_at,updated_at)
-                   VALUES (?,?,?,'active',0,?,?,'{}','{}',NULL,?,?)""",
+                   VALUES (?,?,?,?,'active',0,?,?,'{}','{}',NULL,?,?)""",
                 (
                     knowledge_base_id,
+                    _workspace_id(),
                     body.name.strip(),
                     body.description.strip(),
                     json.dumps(chunk_pipeline.DEFAULT_PARSER_CONFIG, ensure_ascii=False),
                     json.dumps(
                         {
                             "top_k": 10,
-                            "similarity_threshold": 0.2,
-                            "keyword_weight": 0.3,
-                            "vector_weight": 0.7,
+                            "dense_threshold": 0.0,
+                            "rerank_threshold": 0.2,
+                            "agentic_rag_enabled": True,
+                            "agentic_rag_max_rounds": 3,
+                            "agentic_rag_max_search_calls": 3,
+                            "agentic_rag_timeout_seconds": 30.0,
                             "content_type": "all",
                         },
                         ensure_ascii=False,
@@ -235,12 +257,12 @@ def delete_knowledge_base(knowledge_base_id: str):
     owned = db.get_conn().execute(
         """SELECT f.id, f.path,
                   (SELECT COUNT(*) FROM knowledge_base_files o
-                   WHERE o.file_id=f.id AND o.knowledge_base_id!=?) AS other_kbs,
+                   WHERE o.file_id=f.id AND o.workspace_id=? AND o.knowledge_base_id!=?) AS other_kbs,
                   (SELECT COUNT(*) FROM chunks c WHERE c.file_id=f.id) AS chunk_count
            FROM knowledge_base_files kbf
            JOIN files f ON f.id=kbf.file_id
-           WHERE kbf.knowledge_base_id=?""",
-        (knowledge_base_id, knowledge_base_id),
+           WHERE kbf.knowledge_base_id=? AND kbf.workspace_id=? AND f.workspace_id=?""",
+        (_workspace_id(), knowledge_base_id, knowledge_base_id, _workspace_id(), _workspace_id()),
     ).fetchall()
 
     exclusive = [dict(item) for item in owned if int(item["other_kbs"] or 0) == 0]
@@ -256,29 +278,34 @@ def delete_knowledge_base(knowledge_base_id: str):
         if exclusive_ids:
             placeholders = ",".join("?" for _ in exclusive_ids)
             conn.execute(
-                f"DELETE FROM chunks WHERE file_id IN ({placeholders})",
-                exclusive_ids,
+                f"DELETE FROM chunks WHERE workspace_id=? AND file_id IN ({placeholders})",
+                [_workspace_id(), *exclusive_ids],
             )
             conn.execute(
-                f"DELETE FROM files WHERE id IN ({placeholders})",
-                exclusive_ids,
+                f"DELETE FROM files WHERE workspace_id=? AND id IN ({placeholders})",
+                [_workspace_id(), *exclusive_ids],
             )
         conn.execute(
-            "DELETE FROM knowledge_bases WHERE id=?",
-            (knowledge_base_id,),
+            "DELETE FROM knowledge_bases WHERE id=? AND workspace_id=?",
+            (knowledge_base_id, _workspace_id()),
         )
         if paired_assistant_id:
             conn.execute(
-                "UPDATE audit_assistants SET active_version_id=NULL WHERE id=?",
-                (paired_assistant_id,),
+                "UPDATE audit_assistants SET active_version_id=NULL WHERE id=? AND workspace_id=?",
+                (paired_assistant_id, _workspace_id()),
             )
             conn.execute(
-                "DELETE FROM assistant_versions WHERE assistant_id=?",
-                (paired_assistant_id,),
+                """DELETE FROM assistant_versions
+                   WHERE assistant_id=? AND EXISTS (
+                     SELECT 1 FROM audit_assistants a
+                      WHERE a.id=assistant_versions.assistant_id
+                        AND a.workspace_id=?
+                   )""",
+                (paired_assistant_id, _workspace_id()),
             )
             conn.execute(
-                "DELETE FROM audit_assistants WHERE id=?",
-                (paired_assistant_id,),
+                "DELETE FROM audit_assistants WHERE id=? AND workspace_id=?",
+                (paired_assistant_id, _workspace_id()),
             )
 
     for item in exclusive:
@@ -310,6 +337,8 @@ def update_knowledge_base(knowledge_base_id: str, body: KnowledgeBaseUpdate):
     for key in ("retrieval_config", "parser_config", "manual_rules", "few_shot_rules"):
         value = getattr(body, key)
         if value is not None:
+            if key == "retrieval_config":
+                value = retrieval.normalize_retrieval_config(value)
             updates.append(f"{key}=?")
             params.append(json.dumps(value, ensure_ascii=False))
     naming_file_to_detach: str | None = None
@@ -320,8 +349,8 @@ def update_knowledge_base(knowledge_base_id: str, body: KnowledgeBaseUpdate):
         file_id = body.default_naming_file_id.strip()
         if file_id:
             exists = db.get_conn().execute(
-                "SELECT 1 FROM files WHERE id=?",
-                (file_id,),
+                "SELECT 1 FROM files WHERE id=? AND workspace_id=?",
+                (file_id, _workspace_id()),
             ).fetchone()
             if not exists:
                 raise HTTPException(400, "naming-rule file not found")
@@ -336,15 +365,15 @@ def update_knowledge_base(knowledge_base_id: str, body: KnowledgeBaseUpdate):
         with db.transaction() as conn:
             if naming_file_to_detach:
                 conn.execute(
-                    "DELETE FROM knowledge_base_files WHERE file_id=?",
-                    (naming_file_to_detach,),
+                    "DELETE FROM knowledge_base_files WHERE file_id=? AND workspace_id=?",
+                    (naming_file_to_detach, _workspace_id()),
                 )
             if updates:
                 updates.append("updated_at=?")
                 params.append(now)
-                params.append(knowledge_base_id)
+                params.extend([knowledge_base_id, _workspace_id()])
                 conn.execute(
-                    f"UPDATE knowledge_bases SET {', '.join(updates)} WHERE id=?",
+                    f"UPDATE knowledge_bases SET {', '.join(updates)} WHERE id=? AND workspace_id=?",
                     params,
                 )
     return _kb_out(_get_kb(knowledge_base_id))
@@ -379,6 +408,7 @@ _KB_FILE_SELECT = """SELECT f.id, f.name, f.page_count, f.metadata, f.created_at
                        JOIN files f ON f.id=kbf.file_id
                        LEFT JOIN chunks c ON c.file_id=f.id
                        WHERE kbf.knowledge_base_id=?
+                         AND kbf.workspace_id=? AND f.workspace_id=?
                          AND (
                            SELECT kb.default_naming_file_id
                            FROM knowledge_bases kb
@@ -430,7 +460,7 @@ def _get_kb_file(knowledge_base_id: str, file_id: str) -> dict[str, Any]:
         f"""{_KB_FILE_SELECT}
             AND kbf.file_id=?
             GROUP BY f.id""",
-        (knowledge_base_id, file_id),
+        (knowledge_base_id, _workspace_id(), _workspace_id(), file_id),
     ).fetchone()
     if not row:
         raise HTTPException(404, "knowledge base file not found")
@@ -444,7 +474,7 @@ def list_knowledge_base_files(knowledge_base_id: str):
         f"""{_KB_FILE_SELECT}
             GROUP BY f.id
             ORDER BY f.created_at DESC""",
-        (knowledge_base_id,),
+        (knowledge_base_id, _workspace_id(), _workspace_id()),
     ).fetchall()
     return [_kb_file_out(row) for row in rows]
 
@@ -453,8 +483,8 @@ def list_knowledge_base_files(knowledge_base_id: str):
 def add_file_to_knowledge_base(knowledge_base_id: str, file_id: str):
     _get_kb(knowledge_base_id)
     file_row = db.get_conn().execute(
-        "SELECT metadata FROM files WHERE id=?",
-        (file_id,),
+        "SELECT metadata FROM files WHERE id=? AND workspace_id=?",
+        (file_id, _workspace_id()),
     ).fetchone()
     if not file_row:
         raise HTTPException(404, "file not found")
@@ -468,15 +498,15 @@ def add_file_to_knowledge_base(knowledge_base_id: str, file_id: str):
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO knowledge_base_files
-               (knowledge_base_id,file_id,role,corpus_kind,enabled,created_at)
-               VALUES (?,?,'source',?,1,?)
+               (knowledge_base_id,file_id,workspace_id,role,corpus_kind,enabled,created_at)
+               VALUES (?,?,?,'source',?,1,?)
                ON CONFLICT(knowledge_base_id,file_id)
                DO UPDATE SET enabled=1, corpus_kind=excluded.corpus_kind""",
-            (knowledge_base_id, file_id, corpus_kind, now),
+            (knowledge_base_id, file_id, _workspace_id(), corpus_kind, now),
         )
         conn.execute(
-            "UPDATE knowledge_bases SET updated_at=? WHERE id=?",
-            (now, knowledge_base_id),
+            "UPDATE knowledge_bases SET updated_at=? WHERE id=? AND workspace_id=?",
+            (now, knowledge_base_id, _workspace_id()),
         )
     return {"ok": True}
 
@@ -490,8 +520,8 @@ def update_knowledge_base_file(
     _get_kb(knowledge_base_id)
     if not db.get_conn().execute(
         """SELECT 1 FROM knowledge_base_files
-           WHERE knowledge_base_id=? AND file_id=?""",
-        (knowledge_base_id, file_id),
+           WHERE knowledge_base_id=? AND file_id=? AND workspace_id=?""",
+        (knowledge_base_id, file_id, _workspace_id()),
     ).fetchone():
         raise HTTPException(404, "knowledge base file not found")
     updates: list[str] = []
@@ -511,16 +541,16 @@ def update_knowledge_base_file(
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     with db.transaction() as conn:
         if updates:
-            params.extend([knowledge_base_id, file_id])
+            params.extend([knowledge_base_id, file_id, _workspace_id()])
             conn.execute(
                 f"""UPDATE knowledge_base_files
                     SET {', '.join(updates)}
-                    WHERE knowledge_base_id=? AND file_id=?""",
+                    WHERE knowledge_base_id=? AND file_id=? AND workspace_id=?""",
                 params,
             )
         conn.execute(
-            "UPDATE knowledge_bases SET updated_at=? WHERE id=?",
-            (now, knowledge_base_id),
+            "UPDATE knowledge_bases SET updated_at=? WHERE id=? AND workspace_id=?",
+            (now, knowledge_base_id, _workspace_id()),
         )
     return _get_kb_file(knowledge_base_id, file_id)
 
@@ -532,20 +562,22 @@ def remove_file_from_knowledge_base(knowledge_base_id: str, file_id: str):
         raise HTTPException(409, "move the file to another knowledge base before removing it")
     with db.transaction() as conn:
         conn.execute(
-            "DELETE FROM knowledge_base_files WHERE knowledge_base_id=? AND file_id=?",
-            (knowledge_base_id, file_id),
+            "DELETE FROM knowledge_base_files WHERE knowledge_base_id=? AND file_id=? AND workspace_id=?",
+            (knowledge_base_id, file_id, _workspace_id()),
         )
         fallback = conn.execute(
-            "SELECT id FROM knowledge_bases WHERE is_default=1 LIMIT 1"
+            "SELECT id FROM knowledge_bases WHERE is_default=1 AND workspace_id=? LIMIT 1",
+            (_workspace_id(),),
         ).fetchone()
         if fallback and not conn.execute(
-            "SELECT 1 FROM knowledge_base_files WHERE file_id=?", (file_id,)
+            "SELECT 1 FROM knowledge_base_files WHERE file_id=? AND workspace_id=?",
+            (file_id, _workspace_id()),
         ).fetchone():
             conn.execute(
                 """INSERT INTO knowledge_base_files
-                   (knowledge_base_id,file_id,role,corpus_kind,enabled,created_at)
-                   VALUES (?,?,'source','standard',1,?)""",
-                (fallback["id"], file_id, time.strftime("%Y-%m-%dT%H:%M:%S")),
+                   (knowledge_base_id,file_id,workspace_id,role,corpus_kind,enabled,created_at)
+                   VALUES (?,?,?,'source','standard',1,?)""",
+                (fallback["id"], file_id, _workspace_id(), time.strftime("%Y-%m-%dT%H:%M:%S")),
             )
     return {"ok": True}
 
@@ -565,10 +597,11 @@ def list_knowledge_base_chunks(
            FROM knowledge_base_files kbf
            JOIN chunks c ON c.file_id=kbf.file_id
            JOIN files f ON f.id=c.file_id
-           WHERE kbf.knowledge_base_id=? AND kbf.enabled=1
+           WHERE kbf.knowledge_base_id=? AND kbf.workspace_id=?
+             AND c.workspace_id=? AND f.workspace_id=? AND kbf.enabled=1
            ORDER BY c.updated_at DESC, c.id
            LIMIT ? OFFSET ?""",
-        (knowledge_base_id, limit, offset),
+        (knowledge_base_id, _workspace_id(), _workspace_id(), _workspace_id(), limit, offset),
     ).fetchall()
     return [
         {
@@ -591,8 +624,8 @@ def retrieval_test(knowledge_base_id: str, body: RetrievalTestRequest):
     _get_kb(knowledge_base_id)
     membership_rows = db.get_conn().execute(
         """SELECT file_id, enabled FROM knowledge_base_files
-           WHERE knowledge_base_id=?""",
-        (knowledge_base_id,),
+           WHERE knowledge_base_id=? AND workspace_id=?""",
+        (knowledge_base_id, _workspace_id()),
     ).fetchall()
     membership = {row["file_id"]: bool(row["enabled"]) for row in membership_rows}
     if body.file_ids is None:
@@ -612,6 +645,15 @@ def retrieval_test(knowledge_base_id: str, body: RetrievalTestRequest):
                 continue
             seen.add(file_id)
             file_ids.append(file_id)
+    rerank_threshold = (
+        body.rerank_threshold
+        if body.rerank_threshold is not None
+        else (
+            body.similarity_threshold
+            if body.similarity_threshold is not None and body.similarity_threshold >= 0
+            else retrieval.DEFAULT_RERANK_THRESHOLD
+        )
+    )
     try:
         result = retrieval.hybrid_search(
             body.query,
@@ -619,7 +661,8 @@ def retrieval_test(knowledge_base_id: str, body: RetrievalTestRequest):
             route_top_k=body.route_top_k,
             candidates_per_type=body.candidates_per_type,
             rrf_k=body.rrf_k,
-            similarity_threshold=body.similarity_threshold,
+            dense_threshold=body.dense_threshold,
+            rerank_threshold=rerank_threshold,
             file_ids=file_ids,
         )
     except ValueError as exc:
@@ -634,6 +677,7 @@ def retrieval_test(knowledge_base_id: str, body: RetrievalTestRequest):
         "route_top_k": body.route_top_k,
         "candidates_per_type": body.candidates_per_type,
         "rrf_k": body.rrf_k,
-        "similarity_threshold": body.similarity_threshold,
+        "dense_threshold": body.dense_threshold,
+        "rerank_threshold": rerank_threshold,
     }
     return result

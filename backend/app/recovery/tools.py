@@ -6,7 +6,7 @@ import re
 import uuid
 from typing import Any, Callable
 
-from app import db, llm, retrieval
+from app import current_user, db, llm, retrieval
 from app.agent_runtime.models import ToolDefinition
 
 
@@ -105,8 +105,13 @@ def _default_exact_search(
 ) -> dict[str, Any]:
     if not file_ids:
         return {"hits": [], "candidate_count": 0, "degraded": []}
-    clauses = [f"c.file_id IN ({','.join('?' for _ in file_ids)})"]
-    params: list[Any] = list(file_ids)
+    workspace_id = current_user.get_current_user().workspace_id
+    clauses = [
+        "c.workspace_id=?",
+        "f.workspace_id=?",
+        f"c.file_id IN ({','.join('?' for _ in file_ids)})",
+    ]
+    params: list[Any] = [workspace_id, workspace_id, *file_ids]
     term_clauses = []
     for term in terms:
         term_clauses.append("(c.text LIKE ? OR c.business_metadata LIKE ?)")
@@ -160,6 +165,7 @@ class RecoveryToolEnvironment:
     allowed_file_ids: list[str]
     requirement_text: str
     original_query: str
+    workspace_id: str | None = None
     model: str = llm.DEFAULT_MODEL
     retrieval_config: dict[str, Any] = field(default_factory=dict)
     candidate_search: CandidateSearch = retrieval.retrieve_candidate_pool
@@ -254,17 +260,23 @@ def _search_kb_candidates(env: RecoveryToolEnvironment, arguments: dict[str, Any
     routes = arguments.get("query_routes")
     if routes is not None and not isinstance(routes, dict):
         raise ValueError("query_routes must be an object")
-    config = env.retrieval_config
-    pool = env.candidate_search(
-        query,
-        query_routes=routes,
-        route_top_k=int(config.get("route_top_k") or retrieval.ROUTE_TOP_K),
-        candidates_per_type=int(
+    config = retrieval.normalize_retrieval_config(env.retrieval_config)
+    search_kwargs: dict[str, Any] = {
+        "query_routes": routes,
+        "route_top_k": int(config.get("route_top_k") or retrieval.ROUTE_TOP_K),
+        "candidates_per_type": int(
             config.get("candidate_count_per_type") or retrieval.CANDIDATES_PER_TYPE
         ),
-        rrf_k=int(config.get("rrf_k") or retrieval.RRF_K),
-        special_route_reserve=int(config.get("special_route_reserve") or 0),
-        file_ids=env.allowed_file_ids,
+        "rrf_k": int(config.get("rrf_k") or retrieval.RRF_K),
+        "dense_threshold": float(config.get("dense_threshold") or 0.0),
+        "special_route_reserve": int(config.get("special_route_reserve") or 0),
+        "file_ids": env.allowed_file_ids,
+    }
+    if env.workspace_id:
+        search_kwargs["workspace_id"] = env.workspace_id
+    pool = env.candidate_search(
+        query,
+        **search_kwargs,
     )
     pool_id, compact = env.store_pool(pool)
     return {

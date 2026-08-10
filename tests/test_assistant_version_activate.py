@@ -84,6 +84,82 @@ def test_update_active_overwrites_without_inserting_versions(monkeypatch, tmp_pa
     _close_temp_db(monkeypatch)
 
 
+def test_update_active_migrates_legacy_retrieval_settings(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    created = knowledge_bases.create_knowledge_base(
+        knowledge_bases.KnowledgeBaseCreate(name="旧阈值迁移库", description="")
+    )
+    assistant_id = created["assistant_id"]
+    active = assistants.get_active_version(assistant_id)
+
+    legacy = {
+        **active["retrieval_config"],
+        "similarity_threshold": 0.46,
+        "vector_weight": 0.7,
+        "keyword_weight": 0.3,
+    }
+    legacy.pop("dense_threshold", None)
+    legacy.pop("rerank_threshold", None)
+    updated = assistants.update_active_version(
+        assistant_id,
+        assistants.AssistantVersionConfigUpdate.model_validate({
+            "model_config": active["model_config"],
+            "node_prompts": active["node_prompts"],
+            "rules": active["rules"],
+            "retrieval_config": legacy,
+            "parameter_schema": active["parameter_schema"],
+        }),
+    )
+
+    assert updated["retrieval_config"]["dense_threshold"] == 0.0
+    assert updated["retrieval_config"]["rerank_threshold"] == 0.46
+    assert not {"similarity_threshold", "vector_weight", "keyword_weight"} & set(
+        updated["retrieval_config"]
+    )
+    _close_temp_db(monkeypatch)
+
+
+def test_agent_conversation_uses_the_original_config_snapshot(
+    monkeypatch, tmp_path
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    created = knowledge_bases.create_knowledge_base(
+        knowledge_bases.KnowledgeBaseCreate(name="会话快照库", description="")
+    )
+    assistant_id = created["assistant_id"]
+    active = assistants.get_active_version(assistant_id)
+
+    first = assistants._prepare_agent_context(
+        assistant_id,
+        assistants.AgentChatRequest(message="第一问"),
+    )
+    original_threshold = first["retrieval_config"]["rerank_threshold"]
+    changed_config = {
+        **first["retrieval_config"],
+        "rerank_threshold": 0.91,
+    }
+    assistants.update_active_version(
+        assistant_id,
+        assistants.AssistantVersionConfigUpdate.model_validate({
+            "model_config": active["model_config"],
+            "node_prompts": active["node_prompts"],
+            "rules": active["rules"],
+            "retrieval_config": changed_config,
+            "parameter_schema": active["parameter_schema"],
+        }),
+    )
+
+    second = assistants._prepare_agent_context(
+        assistant_id,
+        assistants.AgentChatRequest(
+            message="第二问",
+            conversation_id=first["conversation_id"],
+        ),
+    )
+    assert second["retrieval_config"]["rerank_threshold"] == original_threshold
+    _close_temp_db(monkeypatch)
+
+
 def test_update_active_rejects_non_deepseek_provider(monkeypatch, tmp_path) -> None:
     _init_temp_db(monkeypatch, tmp_path)
     created = knowledge_bases.create_knowledge_base(

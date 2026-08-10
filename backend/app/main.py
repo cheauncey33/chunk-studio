@@ -22,8 +22,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import JSONResponse
 
-from . import config, db, jobs as job_service, lexical
+from . import config, current_user, db, jobs as job_service, lexical
 from .routers import (
     assistants,
     analytics,
@@ -40,6 +41,7 @@ from .routers import (
     ocr,
     search,
     settings,
+    workspaces,
 )
 
 # Ensure data dirs exist before StaticFiles mounts reference them (mounts happen
@@ -59,17 +61,45 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def bind_current_user(request, call_next):
+    """Resolve identity once so every router/repository sees one request user."""
+    if request.url.path in {"/api/health", "/docs", "/openapi.json"}:
+        return await call_next(request)
+    try:
+        user = current_user.current_user_for_headers(request.headers)
+    except current_user.CurrentUserError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=401)
+    if not db.is_active_workspace_member(
+        workspace_id=user.workspace_id,
+        user_id=user.user_id,
+    ):
+        return JSONResponse(
+            {"detail": "current user is not an active workspace member"},
+            status_code=403,
+        )
+    token = current_user.set_current_user(user)
+    try:
+        request.state.current_user = user
+        return await call_next(request)
+    finally:
+        current_user.reset_current_user(token)
+
+
 @app.on_event("startup")
 async def _startup() -> None:
+    config.validate_deployment_config()
     config.ensure_dirs()
     db.init_db()
     lexical.ensure_schema()
-    app.state.job_worker = asyncio.create_task(job_service.worker_loop())
+    app.state.job_worker = None
+    if config.RUN_IN_PROCESS_WORKER:
+        app.state.job_worker = asyncio.create_task(job_service.worker_loop())
 
 
 @app.get("/api/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "deployment": config.deployment_config()}
 
 
 # API routers (mounted under /api for clarity)
@@ -77,7 +107,7 @@ api_prefix = "/api"
 for r in (files.router, chunks.router, auto_chunks.router, fields.router, settings.router,
           knowledge_bases.router, assistants.router, audit.router, analytics.router,
           jobs.router, extract.router, ocr.router, export.router, search.router,
-          embeddings.router):
+          embeddings.router, workspaces.router):
     app.include_router(r, prefix=api_prefix)
 
 

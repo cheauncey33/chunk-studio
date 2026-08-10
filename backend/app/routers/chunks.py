@@ -9,7 +9,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException
 
-from .. import chunk_schema, config, db, extractors, jobs, pdf
+from .. import chunk_schema, config, current_user, db, extractors, jobs, pdf
 from ..models import BBox, ChunkCreate, ChunkOut, ChunkUpdate
 
 logger = logging.getLogger(__name__)
@@ -35,10 +35,17 @@ _REVIEW_SENSITIVE_JSON_FIELDS = (
 )
 
 
+def _workspace_id() -> str:
+    return current_user.get_current_user().workspace_id
+
+
 @router.post("")
 async def create_chunk(body: ChunkCreate):
     """Box-select endpoint: crop region at 300DPI, extract embedded text, store chunk."""
-    f = db.get_conn().execute("SELECT * FROM files WHERE id=?", (body.file_id,)).fetchone()
+    f = db.get_conn().execute(
+        "SELECT * FROM files WHERE id=? AND workspace_id=?",
+        (body.file_id, _workspace_id()),
+    ).fetchone()
     if not f:
         raise HTTPException(404, "file not found")
     f = dict(f)
@@ -66,12 +73,12 @@ async def create_chunk(body: ChunkCreate):
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO chunks
-               (id, file_id, page, bbox, rotation, crop_path, text, text_source,
+               (id, workspace_id, file_id, page, bbox, rotation, crop_path, text, text_source,
                 metadata, business_metadata, metadata_llm, source_trace, chunk_logic, relations,
                 status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                cid, body.file_id, body.page,
+                cid, _workspace_id(), body.file_id, body.page,
                 json.dumps(body.bbox.model_dump()),
                 0, result.crop_rel, result.text, result.text_source,
                 "{}", json.dumps(meta, ensure_ascii=False), "{}",
@@ -97,8 +104,8 @@ def list_chunks(
     has_llm_suggestions: bool = False,
 ):
     sql = "SELECT * FROM chunks"
-    args: list = []
-    clauses = []
+    args: list = [_workspace_id()]
+    clauses = ["workspace_id=?"]
     if file_id:
         clauses.append("file_id=?")
         args.append(file_id)
@@ -126,7 +133,10 @@ def get_chunk(chunk_id: str):
 
 @router.patch("/{chunk_id}")
 def update_chunk(chunk_id: str, body: ChunkUpdate):
-    cur = db.get_conn().execute("SELECT * FROM chunks WHERE id=?", (chunk_id,)).fetchone()
+    cur = db.get_conn().execute(
+        "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
+        (chunk_id, _workspace_id()),
+    ).fetchone()
     if not cur:
         raise HTTPException(404, "chunk not found")
     cur = dict(cur)
@@ -140,15 +150,15 @@ def update_chunk(chunk_id: str, body: ChunkUpdate):
         if body.text is not None and body.text != cur.get("text"):
             # manual text edit switches source to 'manual'
             conn.execute(
-                "UPDATE chunks SET text=?, text_source='manual', updated_at=? WHERE id=?",
-                (body.text, now, chunk_id),
+                "UPDATE chunks SET text=?, text_source='manual', updated_at=? WHERE id=? AND workspace_id=?",
+                (body.text, now, chunk_id, _workspace_id()),
             )
         if body.metadata is not None:
             business_metadata, source_trace, chunk_logic, relations = chunk_schema.split_flat_metadata_for_write(body.metadata)
             conn.execute(
                 """UPDATE chunks
                    SET metadata=?, business_metadata=?, source_trace=?, chunk_logic=?, relations=?, updated_at=?
-                   WHERE id=?""",
+                   WHERE id=? AND workspace_id=?""",
                 (
                     json.dumps(body.metadata, ensure_ascii=False),
                     json.dumps(business_metadata, ensure_ascii=False),
@@ -157,57 +167,58 @@ def update_chunk(chunk_id: str, body: ChunkUpdate):
                     json.dumps(relations, ensure_ascii=False),
                     now,
                     chunk_id,
+                    _workspace_id(),
                 ),
             )
         if body.business_metadata is not None:
             conn.execute(
-                "UPDATE chunks SET business_metadata=?, updated_at=? WHERE id=?",
-                (json.dumps(body.business_metadata, ensure_ascii=False), now, chunk_id),
+                "UPDATE chunks SET business_metadata=?, updated_at=? WHERE id=? AND workspace_id=?",
+                (json.dumps(body.business_metadata, ensure_ascii=False), now, chunk_id, _workspace_id()),
             )
         if body.metadata_llm is not None:
             conn.execute(
-                "UPDATE chunks SET metadata_llm=?, updated_at=? WHERE id=?",
-                (json.dumps(body.metadata_llm, ensure_ascii=False), now, chunk_id),
+                "UPDATE chunks SET metadata_llm=?, updated_at=? WHERE id=? AND workspace_id=?",
+                (json.dumps(body.metadata_llm, ensure_ascii=False), now, chunk_id, _workspace_id()),
             )
         if body.source_trace is not None:
             conn.execute(
-                "UPDATE chunks SET source_trace=?, updated_at=? WHERE id=?",
-                (json.dumps(body.source_trace, ensure_ascii=False), now, chunk_id),
+                "UPDATE chunks SET source_trace=?, updated_at=? WHERE id=? AND workspace_id=?",
+                (json.dumps(body.source_trace, ensure_ascii=False), now, chunk_id, _workspace_id()),
             )
         if body.chunk_logic is not None:
             conn.execute(
-                "UPDATE chunks SET chunk_logic=?, updated_at=? WHERE id=?",
-                (json.dumps(body.chunk_logic, ensure_ascii=False), now, chunk_id),
+                "UPDATE chunks SET chunk_logic=?, updated_at=? WHERE id=? AND workspace_id=?",
+                (json.dumps(body.chunk_logic, ensure_ascii=False), now, chunk_id, _workspace_id()),
             )
         if body.relations is not None:
             conn.execute(
-                "UPDATE chunks SET relations=?, updated_at=? WHERE id=?",
-                (json.dumps(body.relations, ensure_ascii=False), now, chunk_id),
+                "UPDATE chunks SET relations=?, updated_at=? WHERE id=? AND workspace_id=?",
+                (json.dumps(body.relations, ensure_ascii=False), now, chunk_id, _workspace_id()),
             )
         if body.ui_state is not None:
             conn.execute(
-                "UPDATE chunks SET ui_state=?, updated_at=? WHERE id=?",
-                (json.dumps(body.ui_state, ensure_ascii=False), now, chunk_id),
+                "UPDATE chunks SET ui_state=?, updated_at=? WHERE id=? AND workspace_id=?",
+                (json.dumps(body.ui_state, ensure_ascii=False), now, chunk_id, _workspace_id()),
             )
         if body.indexing is not None:
             conn.execute(
-                "UPDATE chunks SET indexing=?, updated_at=? WHERE id=?",
-                (json.dumps(body.indexing, ensure_ascii=False), now, chunk_id),
+                "UPDATE chunks SET indexing=?, updated_at=? WHERE id=? AND workspace_id=?",
+                (json.dumps(body.indexing, ensure_ascii=False), now, chunk_id, _workspace_id()),
             )
         if body.text_source is not None:
             conn.execute(
-                "UPDATE chunks SET text_source=?, updated_at=? WHERE id=?",
-                (body.text_source, now, chunk_id),
+                "UPDATE chunks SET text_source=?, updated_at=? WHERE id=? AND workspace_id=?",
+                (body.text_source, now, chunk_id, _workspace_id()),
             )
         if body.status is not None:
             conn.execute(
-                "UPDATE chunks SET status=?, updated_at=? WHERE id=?",
-                (body.status, now, chunk_id),
+                "UPDATE chunks SET status=?, updated_at=? WHERE id=? AND workspace_id=?",
+                (body.status, now, chunk_id, _workspace_id()),
             )
         elif content_changed and cur["status"] != "pending":
             conn.execute(
-                "UPDATE chunks SET status='pending', updated_at=? WHERE id=?",
-                (now, chunk_id),
+                "UPDATE chunks SET status='pending', updated_at=? WHERE id=? AND workspace_id=?",
+                (now, chunk_id, _workspace_id()),
             )
     if body.status == "approved":
         # Approved chunks should become retrievable without a manual CLI step.
@@ -221,11 +232,17 @@ def update_chunk(chunk_id: str, body: ChunkUpdate):
 
 @router.delete("/{chunk_id}")
 def delete_chunk(chunk_id: str):
-    cur = db.get_conn().execute("SELECT crop_path FROM chunks WHERE id=?", (chunk_id,)).fetchone()
+    cur = db.get_conn().execute(
+        "SELECT crop_path FROM chunks WHERE id=? AND workspace_id=?",
+        (chunk_id, _workspace_id()),
+    ).fetchone()
     if not cur:
         raise HTTPException(404, "chunk not found")
     with db.transaction() as conn:
-        conn.execute("DELETE FROM chunks WHERE id=?", (chunk_id,))
+        conn.execute(
+            "DELETE FROM chunks WHERE id=? AND workspace_id=?",
+            (chunk_id, _workspace_id()),
+        )
     if cur["crop_path"]:
         try:
             config.from_rel(cur["crop_path"]).unlink(missing_ok=True)
@@ -264,7 +281,10 @@ def _review_sensitive_change(current: dict, body: ChunkUpdate) -> bool:
 
 
 def _get_chunk(cid: str) -> ChunkOut:
-    row = db.get_conn().execute("SELECT * FROM chunks WHERE id=?", (cid,)).fetchone()
+    row = db.get_conn().execute(
+        "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
+        (cid, _workspace_id()),
+    ).fetchone()
     if not row:
         raise HTTPException(404, "chunk not found")
     return _row_to_out(row)

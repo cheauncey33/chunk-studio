@@ -6,7 +6,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from . import db
+from . import config, db
+from .storage.repositories import get_chat_repository
 
 
 def _now() -> str:
@@ -21,45 +22,150 @@ def _decode(value: str | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def create_conversation(assistant_id: str, *, title: str = "") -> dict[str, Any]:
+def _repository():
+    return get_chat_repository()
+
+
+def create_conversation(
+    assistant_id: str,
+    *,
+    title: str = "",
+    config_snapshot: dict[str, Any] | None = None,
+    workspace_id: str = config.DEFAULT_WORKSPACE_ID,
+    user_id: str = config.DEFAULT_USER_ID,
+) -> dict[str, Any]:
+    repository = _repository()
+    if repository is not None:
+        return repository.create_conversation(
+            assistant_id,
+            title=title,
+            config_snapshot=config_snapshot,
+            workspace_id=workspace_id,
+            user_id=user_id,
+        )
     conversation_id = f"chat_{uuid.uuid4().hex}"
     timestamp = _now()
+    encoded_snapshot = json.dumps(
+        config_snapshot if isinstance(config_snapshot, dict) else {},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO chat_conversations
-               (id, assistant_id, title, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (conversation_id, assistant_id, title.strip()[:120], timestamp, timestamp),
+               (id, assistant_id, workspace_id, user_id, title, config_snapshot,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                conversation_id,
+                assistant_id,
+                workspace_id.strip() or config.DEFAULT_WORKSPACE_ID,
+                user_id.strip() or config.DEFAULT_USER_ID,
+                title.strip()[:120],
+                encoded_snapshot,
+                timestamp,
+                timestamp,
+            ),
         )
     return get_conversation(conversation_id) or {
         "id": conversation_id,
         "assistant_id": assistant_id,
+        "workspace_id": workspace_id.strip() or config.DEFAULT_WORKSPACE_ID,
+        "user_id": user_id.strip() or config.DEFAULT_USER_ID,
         "title": title.strip()[:120],
         "summary": "",
         "summary_version": 0,
+        "summary_sequence": 0,
+        "config_snapshot": encoded_snapshot,
         "created_at": timestamp,
         "updated_at": timestamp,
     }
 
 
-def get_conversation(conversation_id: str) -> dict[str, Any] | None:
+def get_conversation(
+    conversation_id: str,
+    *,
+    workspace_id: str | None = None,
+    user_id: str | None = None,
+) -> dict[str, Any] | None:
+    repository = _repository()
+    if repository is not None:
+        return repository.get_conversation(
+            conversation_id,
+            workspace_id=workspace_id,
+            user_id=user_id,
+        )
+    clauses = ["id=?"]
+    params: list[Any] = [conversation_id]
+    if workspace_id is not None:
+        clauses.append("workspace_id=?")
+        params.append(workspace_id)
+    if user_id is not None:
+        clauses.append("user_id=?")
+        params.append(user_id)
     row = db.get_conn().execute(
-        "SELECT * FROM chat_conversations WHERE id=?",
-        (conversation_id,),
+        "SELECT * FROM chat_conversations WHERE " + " AND ".join(clauses),
+        params,
     ).fetchone()
     return dict(row) if row else None
 
 
-def list_conversations(assistant_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+def list_conversations(
+    assistant_id: str,
+    *,
+    limit: int = 50,
+    workspace_id: str | None = None,
+    user_id: str | None = None,
+) -> list[dict[str, Any]]:
+    repository = _repository()
+    if repository is not None:
+        return repository.list_conversations(
+            assistant_id,
+            limit=limit,
+            workspace_id=workspace_id,
+            user_id=user_id,
+        )
     bounded_limit = max(1, min(int(limit), 100))
+    clauses = ["assistant_id=?"]
+    params: list[Any] = [assistant_id]
+    if workspace_id is not None:
+        clauses.append("workspace_id=?")
+        params.append(workspace_id)
+    if user_id is not None:
+        clauses.append("user_id=?")
+        params.append(user_id)
+    params.append(bounded_limit)
     rows = db.get_conn().execute(
         """SELECT * FROM chat_conversations
-           WHERE assistant_id=?
+           WHERE """ + " AND ".join(clauses) + """
            ORDER BY updated_at DESC
            LIMIT ?""",
-        (assistant_id, bounded_limit),
+        params,
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def set_config_snapshot_if_empty(
+    conversation_id: str,
+    config_snapshot: dict[str, Any],
+) -> bool:
+    """Backfill snapshots for legacy conversations without overwriting them."""
+    repository = _repository()
+    if repository is not None:
+        return repository.set_config_snapshot_if_empty(conversation_id, config_snapshot)
+    encoded_snapshot = json.dumps(
+        config_snapshot,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    with db.transaction() as conn:
+        cursor = conn.execute(
+            """UPDATE chat_conversations
+               SET config_snapshot=?
+               WHERE id=? AND (config_snapshot IS NULL OR config_snapshot IN ('', '{}'))""",
+            (encoded_snapshot, conversation_id),
+        )
+    return cursor.rowcount > 0
 
 
 def append_events(
@@ -67,6 +173,9 @@ def append_events(
     events: list[tuple[str, dict[str, Any]]],
 ) -> list[dict[str, Any]]:
     """Append events in order and return their persisted representations."""
+    repository = _repository()
+    if repository is not None:
+        return repository.append_events(conversation_id, events)
     if not events:
         return []
     timestamp = _now()
@@ -110,6 +219,9 @@ def append_events(
 
 
 def list_events(conversation_id: str, *, limit: int | None = None) -> list[dict[str, Any]]:
+    repository = _repository()
+    if repository is not None:
+        return repository.list_events(conversation_id, limit=limit)
     if limit is None:
         rows = db.get_conn().execute(
             """SELECT * FROM chat_events
@@ -141,6 +253,14 @@ def list_events_since(
     through_sequence: int | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
+    repository = _repository()
+    if repository is not None:
+        return repository.list_events_since(
+            conversation_id,
+            sequence,
+            through_sequence=through_sequence,
+            limit=limit,
+        )
     clauses = ["conversation_id=?", "sequence>?"]
     params: list[Any] = [conversation_id, int(sequence)]
     if through_sequence is not None:
@@ -175,7 +295,13 @@ def _messages_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         elif event_type == "assistant_message":
             message = payload.get("message")
             if isinstance(message, dict):
-                messages.append(message)
+                # Older sessions may contain `tool_calls: []` from the
+                # streaming Agent. DeepSeek rejects that empty field when the
+                # session is sent again, so normalize it at the load boundary.
+                normalized = dict(message)
+                if not normalized.get("tool_calls"):
+                    normalized.pop("tool_calls", None)
+                messages.append(normalized)
         elif event_type == "tool_result":
             tool_call_id = str(payload.get("tool_call_id") or "")
             if tool_call_id:
@@ -196,6 +322,14 @@ def compact_conversation(
     keep_recent_events: int = 24,
 ) -> bool:
     """Summarize an old event prefix while retaining the append-only log."""
+    repository = _repository()
+    if repository is not None:
+        return repository.compact_conversation(
+            conversation_id,
+            summarize=summarize,
+            min_events=min_events,
+            keep_recent_events=keep_recent_events,
+        )
     conversation = get_conversation(conversation_id)
     if not conversation:
         raise ValueError("conversation not found")
@@ -245,6 +379,9 @@ def compact_conversation(
 
 def load_messages(conversation_id: str, *, max_messages: int = 40) -> list[dict[str, Any]]:
     """Translate persisted events into native chat-completion messages."""
+    repository = _repository()
+    if repository is not None:
+        return repository.load_messages(conversation_id, max_messages=max_messages)
     conversation = get_conversation(conversation_id)
     if not conversation:
         raise ValueError("conversation not found")

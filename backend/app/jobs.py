@@ -8,45 +8,139 @@ import time
 import uuid
 from typing import Any
 
-from . import chunk_schema, config, db, extractors
+from . import chunk_schema, config, current_user, db, extractors
 from .adapters import ocr as ocr_adapter
+from .storage.repositories import get_job_repository
 
 logger = logging.getLogger(__name__)
 JOB_POLL_SECONDS = 1.0
+JOB_TIMEOUT_SECONDS = 15 * 60
 
 
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def workspace_id() -> str:
+    return current_user.get_current_user().workspace_id
+
+
+def _job_repository():
+    """Return the opt-in PostgreSQL queue adapter, or the SQLite path."""
+    return get_job_repository()
+
+
+def _create_job_record(
+    *,
+    job_id: str,
+    workspace: str,
+    type_: str,
+    target_type: str,
+    target_id: str,
+    priority: int,
+    max_attempts: int,
+    result: dict[str, Any] | None = None,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    repository = _job_repository()
+    if repository is not None:
+        return repository.create_job(
+            job_id=job_id,
+            workspace_id=workspace,
+            type_=type_,
+            target_type=target_type,
+            target_id=target_id,
+            priority=priority,
+            max_attempts=max_attempts,
+            result=result,
+        )
+    timestamp = created_at or now_iso()
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO jobs
+               (id, workspace_id, type, target_type, target_id, status, priority,
+                attempts, max_attempts, error, result, created_at)
+               VALUES (?, ?, ?, ?, ?, 'queued', ?, 0, ?, '', ?, ?)""",
+            (
+                job_id,
+                workspace,
+                type_,
+                target_type,
+                target_id,
+                priority,
+                max_attempts,
+                json.dumps(result or {}, ensure_ascii=False),
+                timestamp,
+            ),
+        )
+    return get_job(job_id, workspace_id_value=workspace)
+
+
+def _find_active_job(
+    *,
+    workspace: str,
+    type_: str,
+    target_type: str,
+    target_id: str,
+) -> dict[str, Any] | None:
+    repository = _job_repository()
+    if repository is not None:
+        rows = repository.list_jobs(
+            workspace_id=workspace,
+            target_id=target_id,
+            type_=type_,
+            limit=100,
+        )
+        return next(
+            (
+                item
+                for item in rows
+                if item.get("target_type") == target_type
+                and item.get("status") in {"queued", "running"}
+            ),
+            None,
+        )
+    row = db.get_conn().execute(
+        """SELECT * FROM jobs
+           WHERE workspace_id=? AND type=? AND target_type=? AND target_id=?
+             AND status IN ('queued','running')
+           ORDER BY created_at DESC LIMIT 1""",
+        (workspace, type_, target_type, target_id),
+    ).fetchone()
+    return _row_to_job(row) if row else None
+
+
 def enqueue_ocr_chunk(chunk_id: str, *, priority: int = 0, force: bool = False) -> dict[str, Any]:
     """Create or return a queued/running OCR job for a chunk."""
-    row = db.get_conn().execute("SELECT id FROM chunks WHERE id=?", (chunk_id,)).fetchone()
+    row = db.get_conn().execute(
+        "SELECT id, workspace_id FROM chunks WHERE id=? AND workspace_id=?",
+        (chunk_id, workspace_id()),
+    ).fetchone()
     if not row:
         raise KeyError("chunk not found")
 
     if not force:
-        existing = db.get_conn().execute(
-            """SELECT * FROM jobs
-               WHERE type='ocr' AND target_type='chunk' AND target_id=?
-                 AND status IN ('queued','running')
-               ORDER BY created_at DESC LIMIT 1""",
-            (chunk_id,),
-        ).fetchone()
+        existing = _find_active_job(
+            workspace=workspace_id(),
+            type_="ocr",
+            target_type="chunk",
+            target_id=chunk_id,
+        )
         if existing:
-            return dict(existing)
+            return existing
 
     jid = uuid.uuid4().hex
     created = now_iso()
-    with db.transaction() as conn:
-        conn.execute(
-            """INSERT INTO jobs
-               (id, type, target_type, target_id, status, priority, attempts,
-                max_attempts, error, result, created_at)
-               VALUES (?, 'ocr', 'chunk', ?, 'queued', ?, 0, 2, '', '{}', ?)""",
-            (jid, chunk_id, priority, created),
-        )
-    return get_job(jid)
+    return _create_job_record(
+        job_id=jid,
+        workspace=row["workspace_id"],
+        type_="ocr",
+        target_type="chunk",
+        target_id=chunk_id,
+        priority=priority,
+        max_attempts=2,
+        created_at=created,
+    )
 
 
 def enqueue_ocr_for_file(
@@ -55,8 +149,8 @@ def enqueue_ocr_for_file(
     page: int | None = None,
     pending_only: bool = True,
 ) -> list[dict[str, Any]]:
-    clauses = ["file_id=?"]
-    args: list[Any] = [file_id]
+    clauses = ["file_id=?", "workspace_id=?"]
+    args: list[Any] = [file_id, workspace_id()]
     if page is not None:
         clauses.append("page=?")
         args.append(page)
@@ -81,20 +175,22 @@ def enqueue_parse_file(
     When delete_chunks=True, remove existing chunks for this file first so the
     post-parse auto-chunk pipeline can rebuild from a clean slate (RAGFlow-like).
     """
-    row = db.get_conn().execute("SELECT id FROM files WHERE id=?", (file_id,)).fetchone()
+    row = db.get_conn().execute(
+        "SELECT id, workspace_id FROM files WHERE id=? AND workspace_id=?",
+        (file_id, workspace_id()),
+    ).fetchone()
     if not row:
         raise KeyError("file not found")
 
     if not force:
-        existing = db.get_conn().execute(
-            """SELECT * FROM jobs
-               WHERE type='parse' AND target_type='file' AND target_id=?
-                 AND status IN ('queued','running')
-               ORDER BY created_at DESC LIMIT 1""",
-            (file_id,),
-        ).fetchone()
+        existing = _find_active_job(
+            workspace=workspace_id(),
+            type_="parse",
+            target_type="file",
+            target_id=file_id,
+        )
         if existing:
-            return dict(existing)
+            return existing
 
     deleted = 0
     if delete_chunks:
@@ -106,31 +202,62 @@ def enqueue_parse_file(
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO document_parses
-               (id, file_id, provider, status, result, error, created_at, updated_at)
-               VALUES (?, ?, 'mineru', 'queued', '{}', '', ?, ?)""",
-            (parse_id, file_id, created, created),
+               (id, workspace_id, file_id, provider, status, result, error, created_at, updated_at)
+               VALUES (?, ?, ?, 'mineru', 'queued', '{}', '', ?, ?)""",
+            (parse_id, row["workspace_id"], file_id, created, created),
         )
-        conn.execute(
-            """INSERT INTO jobs
-               (id, type, target_type, target_id, status, priority, attempts,
-                max_attempts, error, result, created_at)
-               VALUES (?, 'parse', 'file', ?, 'queued', ?, 0, 1, '', ?, ?)""",
-            (
-                jid,
-                file_id,
-                priority,
-                json.dumps(
-                    {
-                        "parse_id": parse_id,
-                        "delete_chunks": bool(delete_chunks),
-                        "deleted_chunk_count": deleted,
-                    },
-                    ensure_ascii=False,
-                ),
-                created,
-            ),
-        )
-    return get_job(jid)
+    return _create_job_record(
+        job_id=jid,
+        workspace=row["workspace_id"],
+        type_="parse",
+        target_type="file",
+        target_id=file_id,
+        priority=priority,
+        max_attempts=1,
+        result={
+            "parse_id": parse_id,
+            "delete_chunks": bool(delete_chunks),
+            "deleted_chunk_count": deleted,
+        },
+        created_at=created,
+    )
+
+
+def enqueue_chunk_file(
+    file_id: str,
+    parse_id: str,
+    *,
+    priority: int = 0,
+    skip_existing: bool = True,
+) -> dict[str, Any]:
+    """Queue chunking separately from the document parse job."""
+    row = db.get_conn().execute(
+        "SELECT id, workspace_id FROM files WHERE id=? AND workspace_id=?",
+        (file_id, workspace_id()),
+    ).fetchone()
+    if not row:
+        raise KeyError("file not found")
+    existing = _find_active_job(
+        workspace=row["workspace_id"],
+        type_="chunk",
+        target_type="file",
+        target_id=file_id,
+    )
+    if existing:
+        return existing
+    return _create_job_record(
+        job_id=uuid.uuid4().hex,
+        workspace=row["workspace_id"],
+        type_="chunk",
+        target_type="file",
+        target_id=file_id,
+        priority=priority,
+        max_attempts=2,
+        result={
+            "parse_id": parse_id,
+            "skip_existing": bool(skip_existing),
+        },
+    )
 
 
 def _delete_file_chunks(file_id: str) -> int:
@@ -166,8 +293,9 @@ def enqueue_assistant_audit(
     enabled files in the assistant's bound knowledge bases.
     """
     row = db.get_conn().execute(
-        "SELECT id, active_version_id FROM audit_assistants WHERE id=?",
-        (assistant_id,),
+        """SELECT id, workspace_id, active_version_id
+           FROM audit_assistants WHERE id=? AND workspace_id=?""",
+        (assistant_id, workspace_id()),
     ).fetchone()
     if not row:
         raise KeyError("assistant not found")
@@ -175,8 +303,8 @@ def enqueue_assistant_audit(
         raise ValueError("assistant has no active version")
 
     report_row = db.get_conn().execute(
-        "SELECT id FROM files WHERE id=?",
-        (report_file_id,),
+        "SELECT id FROM files WHERE id=? AND workspace_id=?",
+        (report_file_id, row["workspace_id"]),
     ).fetchone()
     if not report_row:
         raise ValueError("report file not found")
@@ -192,8 +320,8 @@ def enqueue_assistant_audit(
     )
     if resolved_naming_id:
         naming_row = db.get_conn().execute(
-            "SELECT id FROM files WHERE id=?",
-            (resolved_naming_id,),
+            "SELECT id FROM files WHERE id=? AND workspace_id=?",
+            (resolved_naming_id, row["workspace_id"]),
         ).fetchone()
         if not naming_row:
             raise ValueError("naming-rule file not found")
@@ -206,15 +334,28 @@ def enqueue_assistant_audit(
 
     # Reuse only an in-flight job for the same assistant + report (resume after
     # client disconnect). Different reports must not share one job row.
-    existing_rows = db.get_conn().execute(
-        """SELECT * FROM jobs
-           WHERE type='audit' AND target_type='assistant' AND target_id=?
-             AND status IN ('queued','running')
-           ORDER BY created_at DESC""",
-        (assistant_id,),
-    ).fetchall()
-    for row in existing_rows:
-        existing_job = _row_to_job(row)
+    repository = _job_repository()
+    if repository is not None:
+        existing_rows = repository.list_jobs(
+            workspace_id=row["workspace_id"],
+            target_id=assistant_id,
+            type_="audit",
+            limit=100,
+        )
+    else:
+        existing_rows = [
+            _row_to_job(item)
+            for item in db.get_conn().execute(
+                """SELECT * FROM jobs
+                   WHERE workspace_id=? AND type='audit' AND target_type='assistant' AND target_id=?
+                     AND status IN ('queued','running')
+                   ORDER BY created_at DESC""",
+                (row["workspace_id"], assistant_id),
+            ).fetchall()
+        ]
+    for existing_job in existing_rows:
+        if existing_job.get("target_type") != "assistant":
+            continue
         existing_report = str((existing_job.get("result") or {}).get("report_file_id") or "")
         if existing_report == report_file_id:
             return existing_job
@@ -230,15 +371,17 @@ def enqueue_assistant_audit(
         "report_file_id": report_file_id,
         "naming_rule_file_id": resolved_naming_id,
     }
-    with db.transaction() as conn:
-        conn.execute(
-            """INSERT INTO jobs
-               (id, type, target_type, target_id, status, priority, attempts,
-                max_attempts, error, result, created_at)
-               VALUES (?, 'audit', 'assistant', ?, 'queued', ?, 0, 1, '', ?, ?)""",
-            (jid, assistant_id, priority, json.dumps(payload, ensure_ascii=False), created),
-        )
-    return get_job(jid)
+    return _create_job_record(
+        job_id=jid,
+        workspace=row["workspace_id"],
+        type_="audit",
+        target_type="assistant",
+        target_id=assistant_id,
+        priority=priority,
+        max_attempts=1,
+        result=payload,
+        created_at=created,
+    )
 
 
 def enqueue_build_embeddings(*, priority: int = 3) -> dict[str, Any]:
@@ -248,26 +391,27 @@ def enqueue_build_embeddings(*, priority: int = 3) -> dict[str, Any]:
     stored vector), so a single queued/running job is reused for any number of
     approvals that happen in the meantime.
     """
-    existing = db.get_conn().execute(
-        """SELECT * FROM jobs
-           WHERE type='embed' AND target_type='corpus' AND target_id='approved_chunks'
-             AND status IN ('queued','running')
-           ORDER BY created_at DESC LIMIT 1"""
-    ).fetchone()
+    existing = _find_active_job(
+        workspace=workspace_id(),
+        type_="embed",
+        target_type="corpus",
+        target_id="approved_chunks",
+    )
     if existing:
-        return get_job(existing["id"])
+        return existing
 
     jid = uuid.uuid4().hex
     created = now_iso()
-    with db.transaction() as conn:
-        conn.execute(
-            """INSERT INTO jobs
-               (id, type, target_type, target_id, status, priority, attempts,
-                max_attempts, error, result, created_at)
-               VALUES (?, 'embed', 'corpus', 'approved_chunks', 'queued', ?, 0, 1, '', '{}', ?)""",
-            (jid, priority, created),
-        )
-    return get_job(jid)
+    return _create_job_record(
+        job_id=jid,
+        workspace=workspace_id(),
+        type_="embed",
+        target_type="corpus",
+        target_id="approved_chunks",
+        priority=priority,
+        max_attempts=1,
+        created_at=created,
+    )
 
 
 def enqueue_assistant_init(
@@ -281,8 +425,9 @@ def enqueue_assistant_init(
     from . import assistant_init
 
     row = db.get_conn().execute(
-        "SELECT id, active_version_id FROM audit_assistants WHERE id=?",
-        (assistant_id,),
+        """SELECT id, workspace_id, active_version_id
+           FROM audit_assistants WHERE id=? AND workspace_id=?""",
+        (assistant_id, workspace_id()),
     ).fetchone()
     if not row:
         raise KeyError("assistant not found")
@@ -296,8 +441,8 @@ def enqueue_assistant_init(
     samples = list(dict.fromkeys(sample_report_file_ids or []))[:3]
     for file_id in samples:
         file_row = db.get_conn().execute(
-            "SELECT id FROM files WHERE id=?",
-            (file_id,),
+            "SELECT id FROM files WHERE id=? AND workspace_id=?",
+            (file_id, row["workspace_id"]),
         ).fetchone()
         if not file_row:
             raise ValueError(f"sample report file not found: {file_id}")
@@ -306,15 +451,14 @@ def enqueue_assistant_init(
     if not standard_ids and not samples:
         raise ValueError("需要至少一个已解析的标准语料或样例报告")
 
-    existing = db.get_conn().execute(
-        """SELECT * FROM jobs
-           WHERE type='assistant_init' AND target_type='assistant' AND target_id=?
-             AND status IN ('queued','running')
-           ORDER BY created_at DESC LIMIT 1""",
-        (assistant_id,),
-    ).fetchone()
+    existing = _find_active_job(
+        workspace=row["workspace_id"],
+        type_="assistant_init",
+        target_type="assistant",
+        target_id=assistant_id,
+    )
     if existing:
-        return get_job(existing["id"])
+        return existing
 
     jid = uuid.uuid4().hex
     created = now_iso()
@@ -339,19 +483,39 @@ def enqueue_assistant_init(
         },
         job_id=jid,
     )
-    with db.transaction() as conn:
-        conn.execute(
-            """INSERT INTO jobs
-               (id, type, target_type, target_id, status, priority, attempts,
-                max_attempts, error, result, created_at)
-               VALUES (?, 'assistant_init', 'assistant', ?, 'queued', ?, 0, 1, '', ?, ?)""",
-            (jid, assistant_id, priority, json.dumps(payload, ensure_ascii=False), created),
-        )
-    return get_job(jid)
+    return _create_job_record(
+        job_id=jid,
+        workspace=row["workspace_id"],
+        type_="assistant_init",
+        target_type="assistant",
+        target_id=assistant_id,
+        priority=priority,
+        max_attempts=1,
+        result=payload,
+        created_at=created,
+    )
 
 
-def get_job(job_id: str) -> dict[str, Any]:
-    row = db.get_conn().execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+def get_job(
+    job_id: str,
+    *,
+    workspace_id_value: str | None = None,
+) -> dict[str, Any]:
+    repository = _job_repository()
+    if repository is not None:
+        row = repository.get_job(job_id, workspace_id=workspace_id_value)
+        if not row:
+            raise KeyError("job not found")
+        return row
+    clauses = ["id=?"]
+    args: list[Any] = [job_id]
+    if workspace_id_value is not None:
+        clauses.append("workspace_id=?")
+        args.append(workspace_id_value)
+    row = db.get_conn().execute(
+        "SELECT * FROM jobs WHERE " + " AND ".join(clauses),
+        args,
+    ).fetchone()
     if not row:
         raise KeyError("job not found")
     return _row_to_job(row)
@@ -366,6 +530,9 @@ def merge_job_result(job_id: str, patch: dict[str, Any]) -> dict[str, Any] | Non
     jid = str(job_id or "").strip()
     if not jid or not isinstance(patch, dict) or not patch:
         return None
+    repository = _job_repository()
+    if repository is not None:
+        return repository.merge_result(jid, patch)
     # Read+write under one lock so concurrent audit progress updates are safe.
     with db.transaction() as conn:
         row = conn.execute(
@@ -400,6 +567,21 @@ def merge_job_result(job_id: str, patch: dict[str, Any]) -> dict[str, Any] | Non
         return None
 
 
+def _mark_job_done(job_id: str, result: dict[str, Any] | None = None) -> None:
+    repository = _job_repository()
+    if repository is not None:
+        repository.mark_done(job_id, result)
+        return
+    with db.transaction() as conn:
+        conn.execute(
+            """UPDATE jobs
+               SET status='done', error='', result=?, finished_at=?,
+                   locked_by=NULL, locked_until=NULL
+               WHERE id=?""",
+            (json.dumps(result or {}, ensure_ascii=False), now_iso(), job_id),
+        )
+
+
 def list_jobs(
     *,
     target_id: str | None = None,
@@ -407,8 +589,17 @@ def list_jobs(
     type_: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    clauses = []
-    args: list[Any] = []
+    repository = _job_repository()
+    if repository is not None:
+        return repository.list_jobs(
+            workspace_id=workspace_id(),
+            target_id=target_id,
+            status=status,
+            type_=type_,
+            limit=limit,
+        )
+    clauses = ["workspace_id=?"]
+    args: list[Any] = [workspace_id()]
     if target_id:
         clauses.append("target_id=?")
         args.append(target_id)
@@ -427,25 +618,60 @@ def list_jobs(
 
 
 def latest_job_for_target(target_id: str, type_: str = "ocr") -> dict[str, Any] | None:
+    repository = _job_repository()
+    if repository is not None:
+        rows = repository.list_jobs(
+            workspace_id=workspace_id(),
+            target_id=target_id,
+            type_=type_,
+            limit=100,
+        )
+        return next(
+            (item for item in rows if item.get("target_type") == "chunk"),
+            None,
+        )
     row = db.get_conn().execute(
         """SELECT * FROM jobs
-           WHERE target_type='chunk' AND target_id=? AND type=?
+           WHERE workspace_id=? AND target_type='chunk' AND target_id=? AND type=?
            ORDER BY created_at DESC LIMIT 1""",
-        (target_id, type_),
+        (workspace_id(), target_id, type_),
     ).fetchone()
     return _row_to_job(row) if row else None
 
 
-async def worker_loop() -> None:
+async def worker_loop(job_types: set[str] | None = None) -> None:
     while True:
-        job = _claim_next_job()
+        job = _claim_next_job(job_types)
         if not job:
             await asyncio.sleep(JOB_POLL_SECONDS)
             continue
+        try:
+            await asyncio.wait_for(_dispatch_job(job), timeout=JOB_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            _fail_job(job, f"job timed out after {JOB_TIMEOUT_SECONDS} seconds")
+        except Exception as exc:
+            logger.exception("job %s failed outside handler", job.get("id"))
+            _fail_job(job, str(exc))
+
+
+async def _dispatch_job(job: dict[str, Any]) -> None:
+    # A worker handles jobs from all workspaces; bind the job scope while its
+    # handler calls shared scoped helpers.
+    base = current_user.get_current_user()
+    identity = current_user.CurrentUser(
+        user_id=base.user_id,
+        workspace_id=str(job.get("workspace_id") or base.workspace_id),
+        roles=base.roles,
+        authenticated=base.authenticated,
+    )
+    token = current_user.set_current_user(identity)
+    try:
         if job["type"] == "ocr" and job["target_type"] == "chunk":
             await _run_ocr_job(job)
         elif job["type"] == "parse" and job["target_type"] == "file":
             await _run_parse_job(job)
+        elif job["type"] == "chunk" and job["target_type"] == "file":
+            await _run_chunk_job(job)
         elif job["type"] == "audit" and job["target_type"] == "assistant":
             await _run_audit_job(job)
         elif job["type"] == "assistant_init" and job["target_type"] == "assistant":
@@ -454,24 +680,47 @@ async def worker_loop() -> None:
             await _run_embed_job(job)
         else:
             _fail_job(job, f"unknown job type {job['type']}")
+    finally:
+        current_user.reset_current_user(token)
 
 
-def _claim_next_job() -> dict[str, Any] | None:
+def _claim_next_job(job_types: set[str] | None = None) -> dict[str, Any] | None:
+    repository = _job_repository()
+    if repository is not None:
+        worker_id = f"worker-{uuid.uuid4().hex[:12]}"
+        claimed = repository.claim_pending(
+            worker_id,
+            limit=1,
+            lease_seconds=JOB_TIMEOUT_SECONDS,
+            job_types=job_types,
+        )
+        return claimed[0] if claimed else None
+    type_clause = ""
+    params: list[Any] = [now_iso()]
+    if job_types:
+        ordered = sorted(job_types)
+        type_clause = " AND type IN (" + ",".join("?" for _ in ordered) + ")"
+        params.extend(ordered)
     with db.transaction() as conn:
         row = conn.execute(
             """SELECT * FROM jobs
                WHERE status='queued'
-               ORDER BY priority DESC, created_at
-               LIMIT 1"""
+                 AND (available_at IS NULL OR available_at<=?)"""
+            + type_clause
+            + " ORDER BY priority DESC, created_at LIMIT 1",
+            params,
         ).fetchone()
         if not row:
             return None
         started = now_iso()
         conn.execute(
             """UPDATE jobs
-               SET status='running', attempts=attempts+1, started_at=?, error=''
+               SET status='running', attempts=attempts+1, started_at=?,
+                   locked_by=?, locked_until=?, error='', available_at=NULL
                WHERE id=?""",
-            (started, row["id"]),
+            (started, f"local-worker-{uuid.uuid4().hex[:8]}",
+             time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + JOB_TIMEOUT_SECONDS)),
+             row["id"]),
         )
     return get_job(row["id"])
 
@@ -516,30 +765,23 @@ async def _run_parse_job(job: dict[str, Any]) -> None:
             ),
         )
 
-    chunk_summary: dict[str, Any] = {}
+    chunk_job: dict[str, Any] | None = None
     try:
         from . import chunk_pipeline
 
         chunk_config = chunk_pipeline.resolve_file_chunk_config(file_id)
         if chunk_config.get("auto_chunk_after_parse", True):
-            # Fresh rebuild after delete_chunks; otherwise skip near-duplicates.
             job_payload = job.get("result") or {}
             skip_existing = not bool(job_payload.get("delete_chunks"))
-            chunk_summary = await chunk_pipeline.run_auto_chunk_pipeline(
+            chunk_job = enqueue_chunk_file(
                 file_id,
                 parse_id,
-                chunk_config=chunk_config,
                 skip_existing=skip_existing,
             )
-            parse_result["auto_chunk"] = {
-                "total": chunk_summary.get("total", 0),
-                "sections": chunk_summary.get("sections", 0),
-                "tables": chunk_summary.get("tables", 0),
-                "images": chunk_summary.get("images", 0),
-            }
+            parse_result["chunk_job_id"] = chunk_job["id"]
     except Exception as exc:
-        logger.exception("auto-chunk after parse failed for file %s", file_id)
-        parse_result["auto_chunk_error"] = str(exc)
+        logger.exception("failed to enqueue chunk job for file %s", file_id)
+        parse_result["chunk_enqueue_error"] = str(exc)
 
     with db.transaction() as conn:
         conn.execute(
@@ -548,16 +790,37 @@ async def _run_parse_job(job: dict[str, Any]) -> None:
                WHERE id=?""",
             (json.dumps(parse_result, ensure_ascii=False), now_iso(), parse_id),
         )
-        conn.execute(
-            """UPDATE jobs
-               SET status='done', error='', result=?, finished_at=?
-               WHERE id=?""",
-            (
-                json.dumps({"parse_id": parse_id, **parse_result}, ensure_ascii=False),
-                now_iso(),
-                job["id"],
-            ),
-        )
+    _mark_job_done(job["id"], {"parse_id": parse_id, **parse_result})
+
+
+async def _run_chunk_job(job: dict[str, Any]) -> None:
+    """Build chunks in a separately scalable worker stage."""
+    from . import chunk_pipeline
+
+    file_id = str(job["target_id"])
+    payload = job.get("result") or {}
+    parse_id = str(payload.get("parse_id") or "")
+    if not parse_id:
+        _fail_job(job, "chunk job missing parse_id")
+        return
+    chunk_config = chunk_pipeline.resolve_file_chunk_config(file_id)
+    summary = await chunk_pipeline.run_auto_chunk_pipeline(
+        file_id,
+        parse_id,
+        chunk_config=chunk_config,
+        skip_existing=bool(payload.get("skip_existing", True)),
+    )
+    _mark_job_done(
+        job["id"],
+        {
+            "file_id": file_id,
+            "parse_id": parse_id,
+            "total": summary.get("total", 0),
+            "sections": summary.get("sections", 0),
+            "tables": summary.get("tables", 0),
+            "images": summary.get("images", 0),
+        },
+    )
 
 
 async def _run_audit_job(job: dict[str, Any]) -> None:
@@ -610,32 +873,23 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
             "updated_at": finished,
         },
     }
-    with db.transaction() as conn:
-        conn.execute(
-            """UPDATE jobs
-               SET status='done', error='', result=?, finished_at=?
-               WHERE id=?""",
-            (json.dumps(result, ensure_ascii=False), finished, job["id"]),
-        )
+    _mark_job_done(job["id"], result)
 
 
 async def _run_embed_job(job: dict[str, Any]) -> None:
     from . import embeddings
 
     try:
-        summary = await asyncio.to_thread(embeddings.build_embeddings)
+        summary = await asyncio.to_thread(
+            embeddings.build_embeddings,
+            workspace_id=str(job.get("workspace_id") or workspace_id()),
+        )
     except Exception as exc:
         logger.exception("embedding build failed")
         _fail_job(job, str(exc))
         return
 
-    with db.transaction() as conn:
-        conn.execute(
-            """UPDATE jobs
-               SET status='done', error='', result=?, finished_at=?
-               WHERE id=?""",
-            (json.dumps(summary, ensure_ascii=False), now_iso(), job["id"]),
-        )
+    _mark_job_done(job["id"], summary)
 
 
 async def _run_assistant_init_job(job: dict[str, Any]) -> None:
@@ -682,17 +936,7 @@ async def _run_assistant_init_job(job: dict[str, Any]) -> None:
         job_id=job["id"],
     )
     finished = now_iso()
-    with db.transaction() as conn:
-        conn.execute(
-            """UPDATE jobs
-               SET status='done', error='', result=?, finished_at=?
-               WHERE id=?""",
-            (
-                json.dumps({**payload, "draft_status": "ready"}, ensure_ascii=False),
-                finished,
-                job["id"],
-            ),
-        )
+    _mark_job_done(job["id"], {**payload, "draft_status": "ready"})
 
 
 def _write_parse_outputs(
@@ -806,28 +1050,60 @@ async def _run_ocr_job(job: dict[str, Any]) -> None:
             "UPDATE chunks SET business_metadata=? WHERE id=?",
             (json.dumps(meta, ensure_ascii=False), chunk_id),
         )
-        conn.execute(
-            """UPDATE jobs
-               SET status='done', error='', result=?, finished_at=?
-               WHERE id=?""",
-            (json.dumps({"text_length": len(result.text)}, ensure_ascii=False), finished, job["id"]),
-        )
+    _mark_job_done(job["id"], {"text_length": len(result.text)})
 
 
 def _requeue_job(job: dict[str, Any], error: str) -> None:
+    retry_delay = min(300, 2 ** max(0, int(job.get("attempts") or 1)) * 5)
+    repository = _job_repository()
+    if repository is not None:
+        repository.requeue(job["id"], error or "retrying", retry_delay)
+        return
+    available = time.strftime(
+        "%Y-%m-%d %H:%M:%S",
+        time.localtime(time.time() + retry_delay),
+    )
     with db.transaction() as conn:
         conn.execute(
-            "UPDATE jobs SET status='queued', error=? WHERE id=?",
-            (error or "retrying", job["id"]),
+            """UPDATE jobs SET status='queued', error=?, available_at=?,
+               locked_by=NULL, locked_until=NULL WHERE id=?""",
+            (error or "retrying", available, job["id"]),
         )
 
 
 def _fail_job(job: dict[str, Any], error: str) -> None:
     finished = now_iso()
+    attempts = int(job.get("attempts") or 0)
+    max_attempts = int(job.get("max_attempts") or 1)
+    retry = attempts < max_attempts
+    available = None
+    if retry:
+        retry_delay = min(300, 2 ** max(0, attempts - 1) * 5)
+        available = time.strftime(
+            "%Y-%m-%d %H:%M:%S",
+            time.localtime(time.time() + retry_delay),
+        )
+    repository = _job_repository()
+    if repository is not None:
+        repository.mark_failed(
+            job["id"],
+            error or "job failed",
+            retry_delay_seconds=(retry_delay if retry else 30),
+        )
+        return
     with db.transaction() as conn:
         conn.execute(
-            "UPDATE jobs SET status='failed', error=?, finished_at=? WHERE id=?",
-            (error or "job failed", finished, job["id"]),
+            """UPDATE jobs SET status=?, error=?, finished_at=?,
+               available_at=?, locked_by=NULL, locked_until=NULL, dead_letter=?
+               WHERE id=?""",
+            (
+                "queued" if retry else "failed",
+                error or "job failed",
+                None if retry else finished,
+                available,
+                0 if retry else 1,
+                job["id"],
+            ),
         )
 
 

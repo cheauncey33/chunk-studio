@@ -3,17 +3,21 @@ import { Link, useBlocker, useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
+  BarChart3,
   Bot,
   CheckCircle2,
   ChevronRight,
   CircleHelp,
   FileText,
+  History,
   Loader2,
   Pencil,
   Plus,
   Send,
   Trash2,
 } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { toast } from 'sonner'
 import {
   api,
@@ -83,6 +87,35 @@ type AssistantChatMessage = {
   charts?: BusinessChart[]
 }
 
+const AGENT_FLOW_STEPS = {
+  understand: '理解问题',
+  retrieve: '检索知识库',
+  business: '查询业务数据',
+  evidence: '整理证据',
+  data: '整理数据',
+  chart: '生成数据视图',
+  answer: '生成回答',
+} as const
+
+function appendAgentFlow(current: string[], step: string): string[] {
+  if (!step || current.includes(step)) return current
+  return [...current, step]
+}
+
+function agentFlowStepForTool(name: unknown): string {
+  switch (String(name || '')) {
+    case 'search_knowledge_base':
+      return AGENT_FLOW_STEPS.retrieve
+    case 'query_business_data':
+      return AGENT_FLOW_STEPS.business
+    case 'get_business_schema':
+    case 'get_business_overview':
+      return AGENT_FLOW_STEPS.data
+    default:
+      return '调用业务能力'
+  }
+}
+
 function messagesFromConversation(
   events: Array<{ event_type: string; payload: Record<string, unknown>; sequence: number }>,
 ): AssistantChatMessage[] {
@@ -99,7 +132,9 @@ function messagesFromConversation(
     const message = raw as Record<string, unknown>
     const content = typeof message.content === 'string' ? message.content : ''
     const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : []
-    if (!content && toolCalls.length > 0) continue
+    // Tool-call assistant messages are execution traces, not user-facing
+    // answers. Keep only the final assistant message after the tool result.
+    if (toolCalls.length > 0) continue
     messages.push({
       id: `history-a-${event.sequence}`,
       role: 'assistant',
@@ -115,9 +150,78 @@ function messagesFromConversation(
   return messages
 }
 
+function uniqueBusinessCharts(charts: BusinessChart[]): BusinessChart[] {
+  const seen = new Set<string>()
+  return charts.filter(chart => {
+    const signature = JSON.stringify(chart)
+    if (seen.has(signature)) return false
+    seen.add(signature)
+    return true
+  })
+}
+
+function AssistantMarkdown({ text }: { text: string }) {
+  return (
+    <div className="text-[15px] leading-7 text-[#1f2937]">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1: ({ children }) => <h3 className="mb-2 mt-4 text-[17px] font-semibold text-[#111827] first:mt-0">{children}</h3>,
+          h2: ({ children }) => <h3 className="mb-2 mt-4 text-[17px] font-semibold text-[#111827] first:mt-0">{children}</h3>,
+          h3: ({ children }) => <h4 className="mb-2 mt-3 text-[16px] font-semibold text-[#111827] first:mt-0">{children}</h4>,
+          p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+          ul: ({ children }) => <ul className="mb-3 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
+          ol: ({ children }) => <ol className="mb-3 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
+          li: ({ children }) => <li className="pl-1">{children}</li>,
+          blockquote: ({ children }) => (
+            <blockquote className="my-3 border-l-4 border-[#13c2c2] bg-[#f0fdfa] px-4 py-2 text-[#475569] last:mb-0">
+              {children}
+            </blockquote>
+          ),
+          hr: () => <hr className="my-4 border-[#e5e7eb]" />,
+          table: ({ children }) => (
+            <div className="my-3 overflow-x-auto rounded-xl border border-[#e5e7eb] last:mb-0">
+              <table className="min-w-full border-collapse text-[13px]">{children}</table>
+            </div>
+          ),
+          thead: ({ children }) => <thead className="bg-[#f8fafc]">{children}</thead>,
+          th: ({ children }) => <th className="border-b border-[#e5e7eb] px-3 py-2 text-left font-semibold text-[#374151]">{children}</th>,
+          td: ({ children }) => <td className="border-b border-[#f1f5f9] px-3 py-2 align-top text-[#4b5563]">{children}</td>,
+          code: ({ children, className }) => {
+            const isBlock = Boolean(className?.includes('language-'))
+            return (
+              <code
+                className={cn(
+                  isBlock
+                    ? 'block overflow-x-auto rounded-xl bg-[#0f172a] px-4 py-3 font-mono text-[13px] leading-6 text-[#e2e8f0]'
+                    : 'rounded bg-[#e6fffb] px-1.5 py-0.5 font-mono text-[13px] text-[#0f766e]',
+                  className,
+                )}
+              >
+                {children}
+              </code>
+            )
+          },
+          pre: ({ children }) => <pre className="my-3 overflow-x-auto last:mb-0">{children}</pre>,
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
 function InlineChart({ chart }: { chart: BusinessChart }) {
   if (chart.type === 'metric') {
-    return <div className="mt-3 text-3xl font-bold text-[#0f766e]">{String(chart.value ?? '—')}</div>
+    return (
+      <div className="mt-3 flex items-center justify-between gap-4 rounded-xl border border-[#bae6fd] bg-white px-4 py-3 shadow-sm">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-[#64748b]">查询指标</div>
+          <div className="mt-1 text-xs text-[#94a3b8]">业务分析工具 · 只读结果</div>
+        </div>
+        <div className="text-3xl font-bold tracking-tight text-[#0f766e]">{String(chart.value ?? '—')}</div>
+      </div>
+    )
   }
   const denominator = chart.type === 'pie'
     ? chart.denominator
@@ -132,13 +236,13 @@ function InlineChart({ chart }: { chart: BusinessChart }) {
         }).join(',')})`
       : '#e5e7eb'
     return (
-      <div className="mt-3 flex flex-wrap items-center gap-4">
-        <div className="relative size-24 rounded-full" style={{ background }}>
+      <div className="mt-3 flex flex-wrap items-center gap-4 rounded-xl border border-[#e0e7ff] bg-white px-4 py-3 shadow-sm">
+        <div className="relative size-24 shrink-0 rounded-full" style={{ background }}>
           <div className="absolute inset-5 grid place-items-center rounded-full bg-white text-xs font-semibold">
             {denominator}
           </div>
         </div>
-        <div className="grid gap-1 text-xs text-[#6b7280]">
+        <div className="grid min-w-[12rem] gap-1.5 text-xs text-[#6b7280]">
           {chart.data.map((item, index) => (
             <div className="flex items-center gap-1.5" key={item.label}>
               <span className="size-2 rounded-full" style={{ backgroundColor: INLINE_CHART_COLORS[index % INLINE_CHART_COLORS.length] }} />
@@ -152,7 +256,7 @@ function InlineChart({ chart }: { chart: BusinessChart }) {
   }
   const maximum = Math.max(1, ...chart.data.map(item => item.value))
   return (
-    <div className="mt-3 grid gap-1.5">
+    <div className="mt-3 grid gap-2 rounded-xl border border-[#e0e7ff] bg-white px-4 py-3 shadow-sm">
       {chart.data.map((item, index) => (
         <div className="grid grid-cols-[5rem_1fr_2rem] items-center gap-2 text-xs" key={item.label}>
           <span className="truncate text-[#6b7280]">{item.label}</span>
@@ -388,6 +492,10 @@ export function AssistantSettings({
   embedded = false,
   backTo,
   hideKnowledgePicker = false,
+  title,
+  chatSidebar = 'top',
+  chatKnowledgeBaseId = '',
+  onChatKnowledgeBaseChange,
 }: {
   assistant: AuditAssistant
   knowledgeBases: KnowledgeBase[]
@@ -397,6 +505,10 @@ export function AssistantSettings({
   embedded?: boolean
   backTo?: string
   hideKnowledgePicker?: boolean
+  title?: string
+  chatSidebar?: 'top' | 'left'
+  chatKnowledgeBaseId?: string
+  onChatKnowledgeBaseChange?: (knowledgeBaseId: string) => void
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -424,21 +536,36 @@ export function AssistantSettings({
   const [chatInput, setChatInput] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
   const [chatStatus, setChatStatus] = useState('')
+  const [agentFlow, setAgentFlow] = useState<string[]>([])
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [conversationItems, setConversationItems] = useState<AgentConversation[]>([])
+  const [conversationLoading, setConversationLoading] = useState(false)
+  const [conversationError, setConversationError] = useState('')
   const [messages, setMessages] = useState<AssistantChatMessage[]>([])
 
   useEffect(() => {
     setConversationId(null)
     setMessages([])
+    setAgentFlow([])
     setConversationItems([])
+    setConversationLoading(true)
+    setConversationError('')
     let active = true
     void api.listAgentConversations(assistant.id)
       .then(result => {
-        if (active) setConversationItems(result.items)
+        if (active) {
+          setConversationItems(result.items)
+          setConversationError('')
+        }
       })
       .catch(() => {
-        if (active) setConversationItems([])
+        if (active) {
+          setConversationItems([])
+          setConversationError('对话历史加载失败')
+        }
+      })
+      .finally(() => {
+        if (active) setConversationLoading(false)
       })
     return () => {
       active = false
@@ -779,8 +906,13 @@ export function AssistantSettings({
   }
 
   const refreshConversations = async () => {
-    const result = await api.listAgentConversations(assistant.id)
-    setConversationItems(result.items)
+    try {
+      const result = await api.listAgentConversations(assistant.id)
+      setConversationItems(result.items)
+      setConversationError('')
+    } catch {
+      setConversationError('对话历史加载失败')
+    }
   }
 
   const startNewChat = () => {
@@ -788,6 +920,7 @@ export function AssistantSettings({
     setConversationId(null)
     setMessages([])
     setChatStatus('')
+    setAgentFlow([])
   }
 
   const openConversation = async (id: string) => {
@@ -807,10 +940,6 @@ export function AssistantSettings({
   const sendChat = async () => {
     const text = chatInput.trim()
     if (!text || chatBusy) return
-    if (!kbSelected.size) {
-      toast.error('请先在右侧绑定知识库并保存')
-      return
-    }
     const userMsg = { id: `u_${Date.now()}`, role: 'user' as const, content: text }
     const assistantMsgId = `a_${Date.now()}`
     setMessages(prev => [
@@ -820,12 +949,14 @@ export function AssistantSettings({
     ])
     setChatInput('')
     setChatBusy(true)
-    setChatStatus('连接 Agent 中…')
+    setAgentFlow([AGENT_FLOW_STEPS.understand])
+    setChatStatus('正在理解问题…')
     try {
+      const idempotencyKey = crypto.randomUUID()
       for await (const event of api.streamAgentChatAssistant(assistant.id, {
         message: text,
         ...(conversationId ? { conversation_id: conversationId } : {}),
-      })) {
+      }, { idempotencyKey })) {
         if (event.event === 'conversation') {
           if (typeof event.data.conversation_id === 'string') {
             setConversationId(event.data.conversation_id)
@@ -845,15 +976,44 @@ export function AssistantSettings({
               )))
             }
           } else if (type === 'tool_call') {
-            setChatStatus(`正在调用 ${String(event.data.name || '工具')}…`)
+            // Tool names and execution traces are not user-facing content.
+            // Clear any pre-tool narration that may have arrived as tokens.
+            const flowStep = agentFlowStepForTool(event.data.name)
+            setAgentFlow(prev => appendAgentFlow(prev, flowStep))
+            setChatStatus(`${flowStep}…`)
+            setMessages(prev => prev.map(item => (
+              item.id === assistantMsgId ? { ...item, content: '' } : item
+            )))
           } else if (type === 'tool_result') {
-            setChatStatus('工具返回，正在整理回答…')
+            const toolResult = event.data.result
+            const hasChart = toolResult && typeof toolResult === 'object'
+              && 'chart' in toolResult && Boolean((toolResult as Record<string, unknown>).chart)
+            const flowStep = hasChart
+              ? AGENT_FLOW_STEPS.chart
+              : String(event.data.name || '') === 'search_knowledge_base'
+                ? AGENT_FLOW_STEPS.evidence
+                : AGENT_FLOW_STEPS.data
+            setAgentFlow(prev => appendAgentFlow(prev, flowStep))
+            setChatStatus(`${flowStep}…`)
           } else if (type === 'turn_started') {
-            setChatStatus('正在生成回答…')
+            const turn = Number(event.data.turn || 1)
+            if (turn > 1) {
+              setAgentFlow(prev => appendAgentFlow(prev, '补充检索'))
+              setChatStatus('正在补充和校验依据…')
+            } else {
+              setChatStatus('正在分析问题意图…')
+            }
           } else if (type === 'assistant_message') {
             const message = event.data.message
             if (message && typeof message === 'object') {
-              const content = (message as Record<string, unknown>).content
+              const record = message as Record<string, unknown>
+              const toolCalls = Array.isArray(record.tool_calls) ? record.tool_calls : []
+              // A tool-call assistant message is an execution trace. The
+              // user-facing answer comes from the final assistant message.
+              if (toolCalls.length > 0) continue
+              setAgentFlow(prev => appendAgentFlow(prev, AGENT_FLOW_STEPS.answer))
+              setChatStatus('正在生成回答…')
+              const content = record.content
               if (typeof content === 'string' && content) {
                 setMessages(prev => prev.map(item => (
                   item.id === assistantMsgId ? { ...item, content } : item
@@ -865,6 +1025,8 @@ export function AssistantSettings({
         }
         if (event.event === 'final') {
           const result = event.data as unknown as AgentChatResponse
+          setAgentFlow(prev => appendAgentFlow(prev, AGENT_FLOW_STEPS.answer))
+          setChatStatus('回答即将完成…')
           setConversationId(result.conversation_id)
           setMessages(prev => prev.map(item => (
             item.id === assistantMsgId
@@ -887,14 +1049,13 @@ export function AssistantSettings({
       toast.error((err as Error).message)
       setMessages(prev => prev.filter(item => item.id !== userMsg.id && item.id !== assistantMsgId))
       setChatInput(text)
+      await refreshConversations()
     } finally {
       setChatBusy(false)
       setChatStatus('')
     }
   }
 
-  const vectorWeight = Number(version?.retrieval_config.vector_weight ?? 0.7)
-  const keywordWeight = Math.round((1 - vectorWeight) * 100) / 100
   const manualRulesPayload = useMemo(
     (): ManualKnowledgeRules => ({
       version: Number(boundKb?.manual_rules?.version || 1),
@@ -909,7 +1070,7 @@ export function AssistantSettings({
   return (
     <div className={cn('flex h-full overflow-hidden', embedded ? 'bg-transparent' : 'bg-[#f8fafc]')}>
       <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[#e5e7eb] bg-white px-6 py-3">
+        {!(embedded && mainTab === 'chat') && <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[#e5e7eb] bg-white px-6 py-3">
           <div className="flex min-w-0 items-center gap-3">
             {!embedded && (
               <Button
@@ -924,11 +1085,13 @@ export function AssistantSettings({
             )}
             <div className="min-w-0">
               <h1 className="truncate text-[24px] font-semibold tracking-tight text-[#111827]">
-                {mainTab === 'workflow' && embedded ? '审查配置' : assistant.name}
+                {mainTab === 'workflow' && embedded ? '审查配置' : title || assistant.name}
               </h1>
               <p className="text-[14px] text-[#6b7280]">
                 {mainTab === 'chat'
-                  ? '知识库问答 · 使用已保存的审查配置'
+                  ? title
+                    ? '知识库检索 + 只读业务数据、SQL 与图表工具'
+                    : '知识库问答 · 使用已保存的审查配置'
                   : '配置本知识库的报告识别、审查流程与补充约定。'}
               </p>
             </div>
@@ -964,7 +1127,7 @@ export function AssistantSettings({
               </Button>
             )}
           </div>
-        </header>
+        </header>}
 
         {!embedded && (
         <div className="flex gap-2 border-b border-[#e5e7eb] bg-white px-6 py-2 sm:hidden">
@@ -992,20 +1155,62 @@ export function AssistantSettings({
         )}
 
         {mainTab === 'chat' ? (
-        <div className="mx-auto flex w-full max-w-5xl min-h-0 flex-1 flex-col px-6 py-5">
-          <div className="mb-3 flex min-h-10 items-center gap-2 overflow-hidden">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="shrink-0 rounded-lg"
-              disabled={chatBusy}
-              onClick={startNewChat}
-            >
-              <Plus className="size-4" />
-              新对话
-            </Button>
-            <div className="flex min-w-0 gap-2 overflow-x-auto pb-1">
+        <div className={cn(
+          'mx-auto flex w-full max-w-6xl min-h-0 min-w-0 flex-1 gap-4 px-6 py-5',
+          chatSidebar === 'left' ? 'flex-col md:flex-row' : 'flex-col',
+        )}>
+          <aside className={cn(
+            'flex min-h-0 min-w-0 shrink-0 flex-col rounded-2xl border border-[#e5e7eb] bg-white p-3 shadow-sm',
+            chatSidebar === 'left' ? 'max-h-40 w-full md:max-h-none md:w-64' : 'max-h-40',
+          )}>
+            {chatSidebar === 'left' && (
+              <div className="mb-3 border-b border-[#e5e7eb] px-1 pb-3">
+                <Label className="text-xs font-semibold text-[#374151]">问答知识库</Label>
+                <SearchableSelect
+                  value={chatKnowledgeBaseId}
+                  options={kbOptions}
+                  placeholder="请选择知识库"
+                  searchPlaceholder="搜索知识库…"
+                  onChange={onChatKnowledgeBaseChange || (() => undefined)}
+                  className="mt-2"
+                />
+                <p className="mt-2 text-[11px] leading-relaxed text-[#9ca3af]">
+                  切换后会使用该库的检索范围和对话历史。
+                </p>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-2 px-1 pb-3">
+              <div className="flex items-center gap-2 text-[14px] font-medium text-[#111827]">
+                <History className="size-4 text-[#6b7280]" />
+                <span>对话历史</span>
+                <span className="rounded-full bg-[#f3f4f6] px-1.5 py-0.5 text-[11px] text-[#6b7280]">
+                  {conversationItems.length}
+                </span>
+              </div>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="size-7 rounded-lg"
+                disabled={chatBusy}
+                onClick={startNewChat}
+                title="新对话"
+              >
+                <Plus className="size-4" />
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+              {conversationLoading && (
+                <div className="px-2 py-3 text-xs text-[#9ca3af]">正在加载历史…</div>
+              )}
+              {!conversationLoading && conversationError && (
+                <div className="px-2 py-3 text-xs text-[#b91c1c]">{conversationError}</div>
+              )}
+              {!conversationLoading && !conversationError && !conversationItems.length && (
+                <div className="px-2 py-3 text-xs leading-relaxed text-[#9ca3af]">
+                  暂无历史对话，发送第一条消息后会自动保存。
+                </div>
+              )}
               {conversationItems.map((item, index) => (
                 <button
                   type="button"
@@ -1013,52 +1218,100 @@ export function AssistantSettings({
                   disabled={chatBusy}
                   onClick={() => void openConversation(item.id)}
                   className={cn(
-                    'max-w-52 shrink-0 rounded-lg border px-3 py-1.5 text-left text-xs transition',
+                    'w-full rounded-xl border px-3 py-2 text-left transition',
                     item.id === conversationId
                       ? 'border-[#111827] bg-[#111827] text-white'
-                      : 'border-[#e5e7eb] bg-white text-[#4b5563] hover:border-[#9ca3af]',
+                      : 'border-transparent bg-[#f8fafc] text-[#4b5563] hover:border-[#d1d5db] hover:bg-white',
                   )}
-                  title={item.title}
+                  title={item.title || `对话 ${index + 1}`}
                 >
-                  <span className="block truncate">{item.title || `对话 ${index + 1}`}</span>
-                  <span className="block text-[10px] opacity-70">{item.updated_at.slice(0, 10)}</span>
+                  <span className="block truncate text-xs font-medium">
+                    {item.title || `对话 ${index + 1}`}
+                  </span>
+                  <span className="mt-1 block text-[10px] opacity-70">
+                    {item.updated_at.slice(0, 10)}
+                  </span>
                 </button>
               ))}
             </div>
-          </div>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm">
+            <Button
+              type="button"
+              variant="outline"
+              className="mt-3 w-full rounded-xl text-xs"
+              disabled={chatBusy}
+              onClick={startNewChat}
+            >
+              <Plus className="size-3.5" />
+              新对话
+            </Button>
+          </aside>
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm">
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
-              {chatBusy && chatStatus && (
-                <div className="flex items-center gap-2 text-xs text-[#6b7280]">
-                  <Loader2 className="size-3 animate-spin" />
-                  {chatStatus}
-                </div>
-              )}
               {!messages.length && (
                 <div className="flex h-full min-h-[16rem] flex-col items-center justify-center gap-2 px-6 text-center">
                   <Bot className="size-10 text-[#9ca3af]" />
-                  <p className="text-[16px] font-medium text-[#111827]">基于知识库提问</p>
+                  <p className="text-[16px] font-medium text-[#111827]">
+                    {title ? '知识库与业务数据统一问答' : '基于知识库提问'}
+                  </p>
                   <p className="max-w-md text-[15px] leading-relaxed text-[#6b7280]">
-                    这里是简单的 RAG 问答。改提示词与参数字段请到「审查配置」；完整审查请用「去审查」。
+                    {title
+                      ? '问文档事实会检索证据；问统计、SQL 或饼图/柱状图会调用只读业务工具。'
+                      : '这里是简单的 RAG 问答。改提示词与参数字段请到「审查配置」；完整审查请用「去审查」。'}
                   </p>
                 </div>
               )}
-              {messages.map(item => (
+              {messages.map(item => {
+                const charts = item.role === 'assistant'
+                  ? uniqueBusinessCharts(item.charts ?? [])
+                  : []
+                return (
                 <div
                   key={item.id}
                   className={cn('flex', item.role === 'user' ? 'justify-end' : 'justify-start')}
                 >
                   <div
                     className={cn(
-                      'max-w-[85%] rounded-2xl px-4 py-3 text-[15px] leading-relaxed',
+                      'max-w-[92%] rounded-2xl px-4 py-3 text-[15px] leading-relaxed',
                       item.role === 'user'
                         ? 'bg-[#111827] text-white'
-                        : 'bg-[#f3f4f6] text-[#111827]',
+                        : 'border border-[#dbeafe] bg-[#f7fbff] text-[#111827] shadow-sm',
                     )}
                   >
-                    <div className="whitespace-pre-wrap">{item.content}</div>
+                    {item.role === 'assistant' && (
+                      <div className="mb-3 flex items-center gap-2 border-b border-[#eef2f7] pb-2 text-xs font-semibold text-[#475569]">
+                        <span className="grid size-6 place-items-center rounded-lg bg-[#e6fffb] text-[#0f766e]">
+                          {charts.length > 0 ? <BarChart3 className="size-3.5" /> : <Bot className="size-3.5" />}
+                        </span>
+                        <span>{charts.length > 0 ? '业务分析结果' : '知识库回答'}</span>
+                        <span className="rounded-full bg-[#f8fafc] px-2 py-0.5 font-normal text-[#94a3b8]">
+                          {charts.length > 0 ? '只读查询' : '智能问答'}
+                        </span>
+                      </div>
+                    )}
+                    {item.role === 'assistant'
+                      ? <AssistantMarkdown text={item.content} />
+                      : <div className="whitespace-pre-wrap">{item.content}</div>}
+                    {charts.length > 0 && (
+                      <section className="mt-4 rounded-2xl border border-[#dbeafe] bg-[#f8fbff] p-3.5">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 text-sm font-semibold text-[#1e3a8a]">
+                            <BarChart3 className="size-4" />
+                            数据视图
+                          </div>
+                          <span className="rounded-full bg-white px-2 py-0.5 text-[11px] text-[#64748b]">
+                            {charts.length} 项结果
+                          </span>
+                        </div>
+                        <div className="mt-1 text-xs text-[#64748b]">以下内容由业务分析工具返回，可追溯到只读查询结果。</div>
+                        <div className="space-y-3">
+                          {charts.map((chart, index) => (
+                            <InlineChart chart={chart} key={`${item.id}-chart-${index}`} />
+                          ))}
+                        </div>
+                      </section>
+                    )}
                     {item.role === 'assistant' && item.citations && item.citations.length > 0 && (
-                      <div className="mt-3 space-y-1.5 border-t border-black/10 pt-2">
+                      <div className="mt-4 space-y-1.5 rounded-xl border border-[#e5e7eb] bg-[#f8fafc] p-3">
                         <div className="text-[13px] font-medium text-[#6b7280]">参考证据</div>
                         {item.citations.slice(0, 4).map((cite, index) => (
                           <div key={`${cite.file_name}-${index}`} className="text-[13px] text-[#6b7280]">
@@ -1068,12 +1321,10 @@ export function AssistantSettings({
                         ))}
                       </div>
                     )}
-                    {item.role === 'assistant' && item.charts?.map((chart, index) => (
-                      <InlineChart chart={chart} key={`${item.id}-chart-${index}`} />
-                    ))}
                   </div>
                 </div>
-              ))}
+                )
+              })}
               {chatBusy && (
                 <div className="hidden flex items-center gap-2 text-[15px] text-[#6b7280]">
                   <Loader2 className="size-4 animate-spin" />
@@ -1083,10 +1334,20 @@ export function AssistantSettings({
             </div>
 
             <div className="border-t border-[#e5e7eb] p-4">
+              {chatBusy && agentFlow.length > 0 && (
+                <div className="mb-2 flex items-center gap-1 text-[11px] text-[#94a3b8]" aria-live="polite">
+                  <Loader2 className="mr-1 size-3 animate-spin text-[#13a2a2]" />
+                  <span className="font-medium text-[#64748b]">当前流程：</span>
+                  <span className="truncate text-[#0f766e]">{agentFlow.join('  ›  ')}</span>
+                  {chatStatus && <span className="ml-1 shrink-0 text-[#64748b]">· {chatStatus}</span>}
+                </div>
+              )}
               <div className="flex items-end gap-2">
                 <Textarea
                   className="min-h-[44px] max-h-32 flex-1 resize-none rounded-xl border-[#e5e7eb] text-[15px]"
-                  placeholder="输入问题，例如：绝缘电阻的试验要求是什么？"
+                  placeholder={title
+                    ? '输入问题，例如：额定容量是什么？或画出审查状态分布饼图'
+                    : '输入问题，例如：绝缘电阻的试验要求是什么？'}
                   value={chatInput}
                   disabled={chatBusy}
                   onChange={e => setChatInput(e.target.value)}
@@ -1107,7 +1368,9 @@ export function AssistantSettings({
                 </Button>
               </div>
               <p className="mt-2 text-[13px] text-[#9ca3af]">
-                使用已保存的模型与知识库配置。改右侧设置后请先点「保存」。
+                {title
+                  ? 'Agent 会根据问题意图选择知识库检索、只读 SQL、schema 或图表工具。'
+                  : '使用已保存的模型与知识库配置。改右侧设置后请先点「保存」。'}
               </p>
             </div>
           </div>
@@ -1789,7 +2052,7 @@ export function AssistantSettings({
       </section>
 
       {mainTab === 'chat' && (
-      <aside className="flex w-[340px] shrink-0 flex-col border-l border-[#e5e7eb] bg-white">
+      <aside className="hidden w-[340px] shrink-0 flex-col border-l border-[#e5e7eb] bg-white lg:flex">
         <div className="border-b border-[#e5e7eb] px-5 py-4">
           <h3 className="text-[18px] font-semibold text-[#111827]">助手设置</h3>
         </div>
@@ -1867,33 +2130,25 @@ export function AssistantSettings({
           {version && (
             <div className="space-y-5">
               <div>
-                <SettingHint label="相似度阈值" tip="低于该分数的候选会被过滤。数值越高，召回越严。" />
+                <SettingHint label="Dense 召回阈值" tip="向量召回阶段的最低分数。0 表示不做 Dense 预过滤；数值越高，进入 RRF 的候选越少。" />
                 <SettingSlider
-                  value={Number(version.retrieval_config.similarity_threshold ?? 0.2)}
+                  value={Number(version.retrieval_config.dense_threshold ?? 0)}
                   min={0}
                   max={1}
                   step={0.01}
                   format={v => v.toFixed(2)}
-                  onChange={v => updateRetrieval('similarity_threshold', Math.round(v * 100) / 100)}
+                  onChange={v => updateRetrieval('dense_threshold', Math.round(v * 100) / 100)}
                 />
               </div>
               <div>
-                <SettingHint label="向量相似度权重" tip="语义检索与全文检索的混合比例。向右提高向量权重。" />
-                <div className="mb-1.5 flex justify-between text-[15px] text-[#6b7280]">
-                  <span>vector {vectorWeight.toFixed(2)}</span>
-                  <span>full-text {keywordWeight.toFixed(2)}</span>
-                </div>
+                <SettingHint label="Rerank 结果阈值" tip="重排完成后的最低相关性分数。0 表示不做 Rerank 结果过滤；它不参与 RRF 计算。" />
                 <SettingSlider
-                  value={vectorWeight}
+                  value={Number(version.retrieval_config.rerank_threshold ?? 0.2)}
                   min={0}
                   max={1}
                   step={0.01}
                   format={v => v.toFixed(2)}
-                  onChange={v => {
-                    const next = Math.round(v * 100) / 100
-                    updateRetrieval('vector_weight', next)
-                    updateRetrieval('keyword_weight', Math.round((1 - next) * 100) / 100)
-                  }}
+                  onChange={v => updateRetrieval('rerank_threshold', Math.round(v * 100) / 100)}
                 />
               </div>
               <div>

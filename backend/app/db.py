@@ -47,11 +47,48 @@ SEED_FIELDS = [
 ]
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id               TEXT PRIMARY KEY,
+    external_subject TEXT NOT NULL UNIQUE,
+    display_name     TEXT NOT NULL DEFAULT '',
+    status           TEXT NOT NULL DEFAULT 'active'
+                     CHECK (status IN ('active','disabled')),
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workspaces (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    slug        TEXT NOT NULL UNIQUE,
+    status      TEXT NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active','archived')),
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workspace_members (
+    workspace_id TEXT NOT NULL,
+    user_id      TEXT NOT NULL,
+    role         TEXT NOT NULL DEFAULT 'member',
+    status       TEXT NOT NULL DEFAULT 'active'
+                 CHECK (status IN ('active','invited','disabled')),
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, user_id),
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_members_user
+    ON workspace_members(user_id, status, workspace_id);
+
 CREATE TABLE IF NOT EXISTS files (
     id          TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL DEFAULT 'local-workspace',
     name        TEXT NOT NULL,
     path        TEXT NOT NULL,          -- rel to DATA_DIR, forward slashes
     sha         TEXT,
+    object_key  TEXT NOT NULL DEFAULT '',
     page_count  INTEGER,
     metadata    TEXT NOT NULL DEFAULT '{}',
     created_at  TEXT NOT NULL
@@ -59,6 +96,7 @@ CREATE TABLE IF NOT EXISTS files (
 
 CREATE TABLE IF NOT EXISTS chunks (
     id            TEXT PRIMARY KEY,
+    workspace_id  TEXT NOT NULL DEFAULT 'local-workspace',
     file_id       TEXT NOT NULL,
     page          INTEGER NOT NULL,
     bbox           TEXT NOT NULL,        -- JSON {x,y,w,h} 0-1 normalized
@@ -122,6 +160,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 CREATE TABLE IF NOT EXISTS jobs (
     id            TEXT PRIMARY KEY,
+    workspace_id  TEXT NOT NULL DEFAULT 'local-workspace',
     type          TEXT NOT NULL,
     target_type   TEXT NOT NULL,
     target_id     TEXT NOT NULL,
@@ -133,13 +172,18 @@ CREATE TABLE IF NOT EXISTS jobs (
     result        TEXT NOT NULL DEFAULT '{}',
     created_at    TEXT NOT NULL,
     started_at    TEXT,
-    finished_at   TEXT
+    finished_at   TEXT,
+    available_at  TEXT,
+    locked_by     TEXT,
+    locked_until  TEXT,
+    dead_letter   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status_type ON jobs(status, type, priority, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_target ON jobs(target_type, target_id, type, created_at);
 
 CREATE TABLE IF NOT EXISTS document_parses (
     id             TEXT PRIMARY KEY,
+    workspace_id   TEXT NOT NULL DEFAULT 'local-workspace',
     file_id        TEXT NOT NULL,
     provider       TEXT NOT NULL DEFAULT 'mineru',
     status         TEXT NOT NULL DEFAULT 'queued',
@@ -155,6 +199,7 @@ CREATE INDEX IF NOT EXISTS idx_document_parses_file ON document_parses(file_id, 
 
 CREATE TABLE IF NOT EXISTS knowledge_bases (
     id                       TEXT PRIMARY KEY,
+    workspace_id             TEXT NOT NULL DEFAULT 'local-workspace',
     name                     TEXT NOT NULL UNIQUE,
     description              TEXT NOT NULL DEFAULT '',
     status                   TEXT NOT NULL DEFAULT 'active'
@@ -172,6 +217,7 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
 CREATE TABLE IF NOT EXISTS knowledge_base_files (
     knowledge_base_id TEXT NOT NULL,
     file_id           TEXT NOT NULL,
+    workspace_id      TEXT NOT NULL DEFAULT 'local-workspace',
     role              TEXT NOT NULL DEFAULT 'source'
                       CHECK (role IN ('source','reference')),
     corpus_kind       TEXT NOT NULL DEFAULT 'standard'
@@ -187,6 +233,7 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_base_files_file
 
 CREATE TABLE IF NOT EXISTS audit_assistants (
     id                TEXT PRIMARY KEY,
+    workspace_id      TEXT NOT NULL DEFAULT 'local-workspace',
     name              TEXT NOT NULL UNIQUE,
     description       TEXT NOT NULL DEFAULT '',
     status            TEXT NOT NULL DEFAULT 'active'
@@ -220,6 +267,7 @@ CREATE TABLE IF NOT EXISTS assistant_versions (
 CREATE TABLE IF NOT EXISTS assistant_knowledge_bases (
     assistant_id      TEXT NOT NULL,
     knowledge_base_id TEXT NOT NULL,
+    workspace_id      TEXT NOT NULL DEFAULT 'local-workspace',
     priority          INTEGER NOT NULL DEFAULT 0,
     enabled           INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (assistant_id, knowledge_base_id),
@@ -229,6 +277,7 @@ CREATE TABLE IF NOT EXISTS assistant_knowledge_bases (
 
 CREATE TABLE IF NOT EXISTS assistant_init_drafts (
     assistant_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL DEFAULT 'local-workspace',
     status       TEXT NOT NULL DEFAULT 'ready'
                  CHECK (status IN ('generating','ready','failed','applied','discarded')),
     payload      TEXT NOT NULL DEFAULT '{}',
@@ -241,22 +290,26 @@ CREATE TABLE IF NOT EXISTS assistant_init_drafts (
 CREATE TABLE IF NOT EXISTS audit_case_reviews (
     report_name      TEXT NOT NULL,
     case_id          TEXT NOT NULL,
+    workspace_id     TEXT NOT NULL DEFAULT 'local-workspace',
     status           TEXT NOT NULL CHECK (status IN ('confirmed','corrected')),
     corrected_status TEXT NOT NULL DEFAULT '',
     note             TEXT NOT NULL DEFAULT '',
     reviewer         TEXT NOT NULL DEFAULT '',
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL,
-    PRIMARY KEY (report_name, case_id)
+    PRIMARY KEY (workspace_id, report_name, case_id)
 );
 
 CREATE TABLE IF NOT EXISTS chat_conversations (
     id             TEXT PRIMARY KEY,
     assistant_id   TEXT NOT NULL,
+    workspace_id   TEXT NOT NULL DEFAULT 'local-workspace',
+    user_id        TEXT NOT NULL DEFAULT 'local-user',
     title          TEXT NOT NULL DEFAULT '',
     summary        TEXT NOT NULL DEFAULT '',
     summary_version INTEGER NOT NULL DEFAULT 0,
     summary_sequence INTEGER NOT NULL DEFAULT 0,
+    config_snapshot TEXT NOT NULL DEFAULT '{}',
     created_at     TEXT NOT NULL,
     updated_at     TEXT NOT NULL,
     FOREIGN KEY (assistant_id) REFERENCES audit_assistants(id) ON DELETE CASCADE
@@ -282,6 +335,18 @@ _db_lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
 
+def is_active_workspace_member(*, workspace_id: str, user_id: str) -> bool:
+    """Check the request identity against the workspace membership table."""
+    row = get_conn().execute(
+        """SELECT 1 FROM workspace_members wm
+           JOIN users u ON u.id=wm.user_id AND u.status='active'
+           JOIN workspaces w ON w.id=wm.workspace_id AND w.status='active'
+           WHERE wm.workspace_id=? AND wm.user_id=? AND wm.status='active'""",
+        (workspace_id, user_id),
+    ).fetchone()
+    return row is not None
+
+
 def init_db() -> None:
     config.ensure_dirs()
     global _conn
@@ -291,6 +356,11 @@ def init_db() -> None:
     _conn.execute("PRAGMA foreign_keys=ON;")
     _conn.executescript(_SCHEMA)
     _conn.commit()
+    _migrate_workspace_columns()
+    _migrate_file_object_key()
+    _migrate_job_runtime_columns()
+    _migrate_audit_case_review_scope_key()
+    _seed_local_identity()
     _migrate_files_metadata()
     _migrate_chunk_layer_columns()
     _migrate_chunk_status_values()
@@ -302,6 +372,8 @@ def init_db() -> None:
     _migrate_assistant_version_name()
     _migrate_assistant_init_drafts()
     _migrate_chat_conversation_summary()
+    _migrate_chat_conversation_identity()
+    _migrate_retrieval_config_thresholds()
     _migrate_query_planner_category_notes()
     _migrate_audit_judge_category_notes()
     _migrate_test_items_model_decode_category_notes()
@@ -329,6 +401,220 @@ def _migrate_chat_conversation_summary() -> None:
             """ALTER TABLE chat_conversations
                ADD COLUMN summary_sequence INTEGER NOT NULL DEFAULT 0"""
         )
+    if "config_snapshot" not in cols:
+        _conn.execute(
+            """ALTER TABLE chat_conversations
+               ADD COLUMN config_snapshot TEXT NOT NULL DEFAULT '{}'"""
+        )
+
+
+def _migrate_workspace_columns() -> None:
+    """Add workspace ownership to pre-workspace SQLite databases."""
+    assert _conn is not None
+    tables = (
+        "files",
+        "chunks",
+        "jobs",
+        "document_parses",
+        "knowledge_bases",
+        "knowledge_base_files",
+        "audit_assistants",
+        "assistant_knowledge_bases",
+        "assistant_init_drafts",
+        "audit_case_reviews",
+    )
+    for table in tables:
+        cols = {
+            row["name"]
+            for row in _conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if "workspace_id" not in cols:
+            _conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN workspace_id "
+                "TEXT NOT NULL DEFAULT 'local-workspace'"
+            )
+    _conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_files_workspace ON files(workspace_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_chunks_workspace ON chunks(workspace_id, file_id);
+        CREATE INDEX IF NOT EXISTS idx_jobs_workspace ON jobs(workspace_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_document_parses_workspace
+            ON document_parses(workspace_id, file_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_knowledge_bases_workspace
+            ON knowledge_bases(workspace_id, status, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_kb_files_workspace
+            ON knowledge_base_files(workspace_id, knowledge_base_id, file_id);
+        CREATE INDEX IF NOT EXISTS idx_assistants_workspace
+            ON audit_assistants(workspace_id, status, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_assistant_kb_workspace
+            ON assistant_knowledge_bases(workspace_id, assistant_id, knowledge_base_id);
+        CREATE INDEX IF NOT EXISTS idx_case_reviews_workspace
+            ON audit_case_reviews(workspace_id, report_name, case_id);
+        """
+    )
+
+
+def _migrate_audit_case_review_scope_key() -> None:
+    """Make report reviews unique within a workspace, not globally."""
+    assert _conn is not None
+    rows = _conn.execute("PRAGMA table_info(audit_case_reviews)").fetchall()
+    primary_key = {row["name"] for row in rows if int(row["pk"] or 0) > 0}
+    if "workspace_id" in primary_key:
+        return
+    _conn.execute("ALTER TABLE audit_case_reviews RENAME TO audit_case_reviews_legacy")
+    _conn.execute(
+        """CREATE TABLE audit_case_reviews (
+            report_name      TEXT NOT NULL,
+            case_id          TEXT NOT NULL,
+            workspace_id     TEXT NOT NULL DEFAULT 'local-workspace',
+            status           TEXT NOT NULL CHECK (status IN ('confirmed','corrected')),
+            corrected_status TEXT NOT NULL DEFAULT '',
+            note             TEXT NOT NULL DEFAULT '',
+            reviewer         TEXT NOT NULL DEFAULT '',
+            created_at       TEXT NOT NULL,
+            updated_at       TEXT NOT NULL,
+            PRIMARY KEY (workspace_id, report_name, case_id)
+        )"""
+    )
+    _conn.execute(
+        """INSERT INTO audit_case_reviews
+           (report_name, case_id, workspace_id, status, corrected_status,
+            note, reviewer, created_at, updated_at)
+           SELECT report_name, case_id, workspace_id, status, corrected_status,
+                  note, reviewer, created_at, updated_at
+           FROM audit_case_reviews_legacy"""
+    )
+    _conn.execute("DROP TABLE audit_case_reviews_legacy")
+    _conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_case_reviews_workspace "
+        "ON audit_case_reviews(workspace_id, report_name, case_id)"
+    )
+
+
+def _migrate_file_object_key() -> None:
+    """Add the portable object key while retaining path for local fallback."""
+    assert _conn is not None
+    cols = {
+        row["name"] for row in _conn.execute("PRAGMA table_info(files)").fetchall()
+    }
+    if "object_key" not in cols:
+        _conn.execute("ALTER TABLE files ADD COLUMN object_key TEXT NOT NULL DEFAULT ''")
+
+
+def _migrate_job_runtime_columns() -> None:
+    """Add retry/lease fields to legacy local job queues."""
+    assert _conn is not None
+    cols = {row["name"] for row in _conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    additions = {
+        "available_at": "TEXT",
+        "locked_by": "TEXT",
+        "locked_until": "TEXT",
+        "dead_letter": "INTEGER NOT NULL DEFAULT 0",
+    }
+    for name, definition in additions.items():
+        if name not in cols:
+            _conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+
+
+def _seed_local_identity() -> None:
+    """Create the local development user/workspace without touching production identities."""
+    import time
+
+    assert _conn is not None
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    workspace_id = config.DEFAULT_WORKSPACE_ID
+    user_id = config.DEFAULT_USER_ID
+    _conn.execute(
+        """INSERT OR IGNORE INTO workspaces
+           (id, name, slug, status, created_at, updated_at)
+           VALUES (?, ?, ?, 'active', ?, ?)""",
+        (workspace_id, "Local Workspace", workspace_id, now, now),
+    )
+    _conn.execute(
+        """INSERT OR IGNORE INTO users
+           (id, external_subject, display_name, status, created_at, updated_at)
+           VALUES (?, ?, ?, 'active', ?, ?)""",
+        (user_id, user_id, "Local User", now, now),
+    )
+    _conn.execute(
+        """INSERT OR IGNORE INTO workspace_members
+           (workspace_id, user_id, role, status, created_at, updated_at)
+           VALUES (?, ?, 'owner', 'active', ?, ?)""",
+        (workspace_id, user_id, now, now),
+    )
+def _migrate_chat_conversation_identity() -> None:
+    """Add workspace/user ownership while preserving existing local sessions."""
+    assert _conn is not None
+    cols = {
+        row["name"]
+        for row in _conn.execute("PRAGMA table_info(chat_conversations)").fetchall()
+    }
+    if "tenant_id" in cols and "workspace_id" not in cols:
+        _conn.execute(
+            "ALTER TABLE chat_conversations RENAME COLUMN tenant_id TO workspace_id"
+        )
+        cols.remove("tenant_id")
+        cols.add("workspace_id")
+    if "workspace_id" not in cols:
+        _conn.execute(
+            """ALTER TABLE chat_conversations
+               ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local-workspace'"""
+        )
+    if "user_id" not in cols:
+        _conn.execute(
+            """ALTER TABLE chat_conversations
+               ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local-user'"""
+        )
+    _conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_chat_conversations_scope
+           ON chat_conversations(workspace_id, user_id, assistant_id, updated_at DESC)"""
+    )
+
+
+def _normalize_persisted_retrieval_config(value: Any) -> dict[str, Any]:
+    config = _loads_json(value, {})
+    if not isinstance(config, dict):
+        config = {}
+    legacy_threshold = config.get("similarity_threshold")
+    config.pop("similarity_threshold", None)
+    config.pop("vector_weight", None)
+    config.pop("keyword_weight", None)
+    try:
+        dense_threshold = float(config.get("dense_threshold", 0.0))
+    except (TypeError, ValueError):
+        dense_threshold = 0.0
+    try:
+        rerank_threshold = float(
+            config.get(
+                "rerank_threshold",
+                0.2 if legacy_threshold is None else legacy_threshold,
+            )
+        )
+    except (TypeError, ValueError):
+        rerank_threshold = 0.2
+    config["dense_threshold"] = dense_threshold if 0 <= dense_threshold <= 1 else 0.0
+    config["rerank_threshold"] = (
+        rerank_threshold if 0 <= rerank_threshold <= 1 else 0.2
+    )
+    return config
+
+
+def _migrate_retrieval_config_thresholds() -> None:
+    """Persist only effective retrieval settings and migrate legacy names."""
+    assert _conn is not None
+    for table in ("assistant_versions", "knowledge_bases"):
+        rows = _conn.execute(
+            f"SELECT id, retrieval_config FROM {table}"
+        ).fetchall()
+        for row in rows:
+            current = _loads_json(row["retrieval_config"], {})
+            normalized = _normalize_persisted_retrieval_config(current)
+            if normalized == current:
+                continue
+            _conn.execute(
+                f"UPDATE {table} SET retrieval_config=? WHERE id=?",
+                (json.dumps(normalized, ensure_ascii=False), row["id"]),
+            )
 
 
 def _migrate_assistant_single_version() -> None:
@@ -939,26 +1225,40 @@ def _ensure_knowledge_base_assistants() -> None:
         )
 
 
-def assistant_id_for_knowledge_base(knowledge_base_id: str) -> str | None:
+def assistant_id_for_knowledge_base(
+    knowledge_base_id: str,
+    *,
+    workspace_id: str | None = None,
+) -> str | None:
+    if workspace_id is None:
+        from . import current_user
+        workspace_id = current_user.get_current_user().workspace_id
     row = get_conn().execute(
         """SELECT assistant_id
            FROM assistant_knowledge_bases
-           WHERE knowledge_base_id=? AND enabled=1
+           WHERE knowledge_base_id=? AND workspace_id=? AND enabled=1
            ORDER BY priority ASC, assistant_id ASC
            LIMIT 1""",
-        (knowledge_base_id,),
+        (knowledge_base_id, workspace_id),
     ).fetchone()
     return str(row["assistant_id"]) if row else None
 
 
-def knowledge_base_id_for_assistant(assistant_id: str) -> str | None:
+def knowledge_base_id_for_assistant(
+    assistant_id: str,
+    *,
+    workspace_id: str | None = None,
+) -> str | None:
+    if workspace_id is None:
+        from . import current_user
+        workspace_id = current_user.get_current_user().workspace_id
     row = get_conn().execute(
         """SELECT knowledge_base_id
            FROM assistant_knowledge_bases
-           WHERE assistant_id=? AND enabled=1
+           WHERE assistant_id=? AND workspace_id=? AND enabled=1
            ORDER BY priority ASC, knowledge_base_id ASC
            LIMIT 1""",
-        (assistant_id,),
+        (assistant_id, workspace_id),
     ).fetchone()
     return str(row["knowledge_base_id"]) if row else None
 
@@ -994,11 +1294,14 @@ def ensure_assistant_for_knowledge_base(
     import time
 
     from .parameter_schema import resolve_parameter_schema
+    from . import current_user
 
     conn = get_conn()
+    workspace_id = current_user.get_current_user().workspace_id
     kb = conn.execute(
-        "SELECT id, name, description, status FROM knowledge_bases WHERE id=?",
-        (knowledge_base_id,),
+        """SELECT id, workspace_id, name, description, status
+           FROM knowledge_bases WHERE id=? AND workspace_id=?""",
+        (knowledge_base_id, workspace_id),
     ).fetchone()
     if not kb:
         raise KeyError(f"knowledge base not found: {knowledge_base_id}")
@@ -1009,8 +1312,8 @@ def ensure_assistant_for_knowledge_base(
             """SELECT a.*, v.version AS active_version
                FROM audit_assistants a
                LEFT JOIN assistant_versions v ON v.id=a.active_version_id
-               WHERE a.id=?""",
-            (existing_id,),
+               WHERE a.id=? AND a.workspace_id=?""",
+            (existing_id, workspace_id),
         ).fetchone()
         if row:
             return dict(row)
@@ -1040,8 +1343,8 @@ def ensure_assistant_for_knowledge_base(
         # Another writer may have bound this KB between the check and now.
         raced = tx.execute(
             """SELECT assistant_id FROM assistant_knowledge_bases
-               WHERE knowledge_base_id=? AND enabled=1 LIMIT 1""",
-            (knowledge_base_id,),
+               WHERE knowledge_base_id=? AND workspace_id=? AND enabled=1 LIMIT 1""",
+            (knowledge_base_id, workspace_id),
         ).fetchone()
         if raced:
             return dict(
@@ -1049,16 +1352,23 @@ def ensure_assistant_for_knowledge_base(
                     """SELECT a.*, v.version AS active_version
                        FROM audit_assistants a
                        LEFT JOIN assistant_versions v ON v.id=a.active_version_id
-                       WHERE a.id=?""",
-                    (raced["assistant_id"],),
+                       WHERE a.id=? AND a.workspace_id=?""",
+                    (raced["assistant_id"], workspace_id),
                 ).fetchone()
             )
 
         tx.execute(
             """INSERT INTO audit_assistants
-               (id,name,description,status,active_version_id,created_at,updated_at)
-               VALUES (?,?,?,'active',NULL,?,?)""",
-            (assistant_id, assistant_name, assistant_description, now, now),
+               (id,workspace_id,name,description,status,active_version_id,created_at,updated_at)
+               VALUES (?,?,?,?,'active',NULL,?,?)""",
+            (
+                assistant_id,
+                workspace_id,
+                assistant_name,
+                assistant_description,
+                now,
+                now,
+            ),
         )
         snapshot_provenance = json.dumps(
             {
@@ -1093,22 +1403,23 @@ def ensure_assistant_for_knowledge_base(
         )
         # Drop any prior binds on this KB (should be none) and bind 1:1.
         tx.execute(
-            "DELETE FROM assistant_knowledge_bases WHERE knowledge_base_id=?",
-            (knowledge_base_id,),
+            """DELETE FROM assistant_knowledge_bases
+               WHERE knowledge_base_id=? AND workspace_id=?""",
+            (knowledge_base_id, workspace_id),
         )
         tx.execute(
             """INSERT INTO assistant_knowledge_bases
-               (assistant_id, knowledge_base_id, priority, enabled)
-               VALUES (?,?,0,1)""",
-            (assistant_id, knowledge_base_id),
+               (assistant_id, knowledge_base_id, workspace_id, priority, enabled)
+               VALUES (?,?,?,0,1)""",
+            (assistant_id, knowledge_base_id, workspace_id),
         )
 
     row = get_conn().execute(
         """SELECT a.*, v.version AS active_version
            FROM audit_assistants a
            LEFT JOIN assistant_versions v ON v.id=a.active_version_id
-           WHERE a.id=?""",
-        (assistant_id,),
+           WHERE a.id=? AND a.workspace_id=?""",
+        (assistant_id, workspace_id),
     ).fetchone()
     return dict(row)
 
@@ -1149,11 +1460,14 @@ def _default_retrieval_config() -> dict[str, Any]:
         "final_section": 6,
         "final_per_type": 15,
         "special_route_reserve": 3,
-        "similarity_threshold": 0.2,
+        "dense_threshold": 0.0,
+        "rerank_threshold": 0.2,
+        "agentic_rag_enabled": True,
+        "agentic_rag_max_rounds": 3,
+        "agentic_rag_max_search_calls": 3,
+        "agentic_rag_timeout_seconds": 30.0,
         "aggregate_continuation_tables": False,
         "expand_references": False,
-        "keyword_weight": 0.3,
-        "vector_weight": 0.7,
         "query_planner_routes": default_query_planner_routes(),
         # Peer-report context triggers for the audit workflow. Editable per
         # assistant version; an empty list disables peer context.
@@ -1295,9 +1609,12 @@ def _seed_knowledge_base_and_assistant() -> None:
             json.dumps(
                 {
                     "top_k": 10,
-                    "similarity_threshold": 0.2,
-                    "keyword_weight": 0.3,
-                    "vector_weight": 0.7,
+                    "dense_threshold": 0.0,
+                    "rerank_threshold": 0.2,
+                    "agentic_rag_enabled": True,
+                    "agentic_rag_max_rounds": 3,
+                    "agentic_rag_max_search_calls": 3,
+                    "agentic_rag_timeout_seconds": 30.0,
                     "content_type": "all",
                 },
                 ensure_ascii=False,
@@ -1801,29 +2118,35 @@ def transaction() -> Iterator[sqlite3.Connection]:
 
 
 def assistant_scoped_file_ids(assistant_id: str) -> list[str]:
+    from . import current_user
+    workspace_id = current_user.get_current_user().workspace_id
     rows = get_conn().execute(
         """SELECT DISTINCT kbf.file_id
            FROM assistant_knowledge_bases akb
            JOIN knowledge_bases kb ON kb.id=akb.knowledge_base_id
            JOIN knowledge_base_files kbf
              ON kbf.knowledge_base_id=akb.knowledge_base_id
-           WHERE akb.assistant_id=? AND akb.enabled=1
+            AND kbf.workspace_id=akb.workspace_id
+           WHERE akb.assistant_id=? AND akb.workspace_id=? AND akb.enabled=1
              AND kb.status='active' AND kbf.enabled=1
            ORDER BY kbf.file_id""",
-        (assistant_id,),
+        (assistant_id, workspace_id),
     ).fetchall()
     return [row["file_id"] for row in rows]
 
 
 def assistant_bound_knowledge_bases(assistant_id: str) -> list[dict[str, Any]]:
     """Enabled bound KBs ordered by priority ascending (higher priority last / wins)."""
+    from . import current_user
+    workspace_id = current_user.get_current_user().workspace_id
     rows = get_conn().execute(
         """SELECT kb.*, akb.priority AS bind_priority
            FROM assistant_knowledge_bases akb
            JOIN knowledge_bases kb ON kb.id=akb.knowledge_base_id
-           WHERE akb.assistant_id=? AND akb.enabled=1 AND kb.status='active'
+           WHERE akb.assistant_id=? AND akb.workspace_id=?
+             AND akb.enabled=1 AND kb.status='active'
            ORDER BY akb.priority ASC, kb.name ASC""",
-        (assistant_id,),
+        (assistant_id, workspace_id),
     ).fetchall()
     return [dict(row) for row in rows]
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from .. import jobs as job_service
+from .. import current_user, jobs as job_service
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -26,6 +26,9 @@ def list_jobs(
 @router.get("/{job_id}")
 def get_job(job_id: str):
     try:
-        return job_service.get_job(job_id)
+        return job_service.get_job(
+            job_id,
+            workspace_id_value=current_user.get_current_user().workspace_id,
+        )
     except KeyError:
         raise HTTPException(404, "job not found")

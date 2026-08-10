@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import config, db
+from . import config, current_user, db
 from .audit_policy import (
     PRODUCTION_EVIDENCE_COMPRESSION_MODE,
     PRODUCTION_RECOVERY_MODE,
@@ -108,8 +108,8 @@ def run_assistant_audit(
     run_started = (started_at or "").strip() or time.strftime("%Y-%m-%dT%H:%M:%S")
 
     file_row = db.get_conn().execute(
-        "SELECT name FROM files WHERE id=?",
-        (report_file_id,),
+        "SELECT name FROM files WHERE id=? AND workspace_id=?",
+        (report_file_id, current_user.get_current_user().workspace_id),
     ).fetchone()
     report_file_name = str(file_row["name"]) if file_row and file_row["name"] else None
 
@@ -161,6 +161,7 @@ def run_assistant_audit(
             for key, value in (
                 ("report_file_id", report_file_id),
                 ("report_file_name", report_file_name),
+                ("workspace_id", current_user.get_current_user().workspace_id),
                 ("job_id", job_id),
                 ("started_at", run_started),
                 ("finished_at", finished_at),

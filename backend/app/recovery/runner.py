@@ -112,27 +112,32 @@ def run_recovery_agent(
     ]
     fallback_used = False
     if not recovery_pools and environment.original_query.strip():
-        config = environment.retrieval_config
-        fallback_pool = environment.candidate_search(
-            environment.original_query,
-            query_routes={"production": environment.original_query},
-            route_top_k=int(config.get("route_top_k") or retrieval.ROUTE_TOP_K),
-            candidates_per_type=int(
+        config = retrieval.normalize_retrieval_config(environment.retrieval_config)
+        fallback_kwargs: dict[str, Any] = {
+            "query_routes": {"production": environment.original_query},
+            "route_top_k": int(config.get("route_top_k") or retrieval.ROUTE_TOP_K),
+            "candidates_per_type": int(
                 config.get("candidate_count_per_type")
                 or config.get("candidates_per_type")
                 or retrieval.CANDIDATES_PER_TYPE
             ),
-            rrf_k=int(config.get("rrf_k") or retrieval.RRF_K),
-            special_route_reserve=int(config.get("special_route_reserve") or 0),
-            file_ids=environment.allowed_file_ids,
+            "rrf_k": int(config.get("rrf_k") or retrieval.RRF_K),
+            "dense_threshold": float(config.get("dense_threshold") or 0.0),
+            "special_route_reserve": int(config.get("special_route_reserve") or 0),
+            "file_ids": environment.allowed_file_ids,
+        }
+        if environment.workspace_id:
+            fallback_kwargs["workspace_id"] = environment.workspace_id
+        fallback_pool = environment.candidate_search(
+            environment.original_query,
+            **fallback_kwargs,
         )
         if fallback_pool.get("hits"):
             recovery_pools.append(fallback_pool)
             fallback_used = True
     merged = None
     if recovery_pools:
-        config = environment.retrieval_config
-        configured_threshold = config.get("similarity_threshold")
+        config = retrieval.normalize_retrieval_config(environment.retrieval_config)
         merged = retrieval.merge_and_rerank_candidate_pools(
             environment.original_query,
             [initial_pool, *recovery_pools],
@@ -144,10 +149,10 @@ def run_recovery_agent(
             rrf_k=int(config.get("rrf_k") or retrieval.RRF_K),
             final_table=int(config.get("final_table") or 8),
             final_section=int(config.get("final_section") or 6),
-            similarity_threshold=(
-                float(configured_threshold)
-                if configured_threshold is not None
-                else 0.2
+            rerank_threshold=float(
+                config.get("rerank_threshold")
+                if config.get("rerank_threshold") is not None
+                else retrieval.DEFAULT_RERANK_THRESHOLD
             ),
             aggregate_continuation_tables=bool(
                 config.get("aggregate_continuation_tables", False)

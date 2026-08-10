@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
-  ChartPie,
+  Bot,
   CircleHelp,
   ClipboardCheck,
   FolderOpen,
@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils'
 const NAV = [
   { to: '/', label: '审查', icon: ClipboardCheck, end: true, help: helpText.nav.workbench },
   { to: '/knowledge-bases', label: '知识库', icon: FolderOpen, help: helpText.nav.knowledge },
-  { to: '/analytics', label: '业务问答', icon: ChartPie, help: helpText.nav.analytics },
+  { to: '/analytics', label: '智能问答', icon: Bot, help: helpText.nav.analytics },
   { to: '/settings', label: '系统设置', icon: Settings, help: helpText.nav.settings },
 ] as const
 

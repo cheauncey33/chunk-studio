@@ -5,7 +5,7 @@ import json
 import os
 import re
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from decimal import Decimal
 from html import unescape
 from html.parser import HTMLParser
@@ -14,6 +14,7 @@ from typing import Any
 
 from . import embeddings, lexical, llm, retrieval_experiments
 from .evidence_locator import chunk_text_sha256
+from .storage import vector_store
 
 
 QUERY_REWRITE_MODEL = os.environ.get("RETRIEVAL_QUERY_MODEL", llm.DEFAULT_MODEL)
@@ -24,6 +25,12 @@ CANDIDATES_PER_TYPE = 20
 LEXICAL_CANDIDATES_PER_TYPE = 20
 RRF_K = 60
 SPECIAL_ROUTE_RESERVE = 3
+DEFAULT_DENSE_THRESHOLD = 0.0
+DEFAULT_RERANK_THRESHOLD = 0.2
+DEFAULT_AGENTIC_RAG_ENABLED = True
+DEFAULT_AGENTIC_RAG_MAX_ROUNDS = 3
+DEFAULT_AGENTIC_RAG_MAX_SEARCH_CALLS = 3
+DEFAULT_AGENTIC_RAG_TIMEOUT_SECONDS = 30.0
 # Legacy equal quota (kept for callers that still pass final_per_type alone).
 FINAL_PER_TYPE = 15
 # Production judge delivery: prefer more tables than sections.
@@ -60,6 +67,69 @@ TextReranker = Callable[..., list[tuple[int, float]]]
 LexicalSearcher = Callable[..., dict[str, Any]]
 
 
+def _bounded_threshold(value: Any, default: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number < 0 or number > 1:
+        return default
+    return round(number, 4)
+
+
+def normalize_retrieval_config(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Normalize persisted retrieval settings at the configuration boundary.
+
+    ``similarity_threshold`` was ambiguous because it was applied after
+    reranking, while ``vector_weight`` / ``keyword_weight`` were persisted but
+    never consumed by this production pipeline. Keep a one-way compatibility
+    mapping for old saved versions, then expose only the effective settings.
+    """
+    config = dict(value or {}) if isinstance(value, Mapping) else {}
+    legacy_threshold = config.get("similarity_threshold")
+    config.pop("similarity_threshold", None)
+    config.pop("vector_weight", None)
+    config.pop("keyword_weight", None)
+    config["dense_threshold"] = _bounded_threshold(
+        config.get("dense_threshold", DEFAULT_DENSE_THRESHOLD),
+        DEFAULT_DENSE_THRESHOLD,
+    )
+    config["rerank_threshold"] = _bounded_threshold(
+        config.get(
+            "rerank_threshold",
+            DEFAULT_RERANK_THRESHOLD if legacy_threshold is None else legacy_threshold,
+        ),
+        DEFAULT_RERANK_THRESHOLD,
+    )
+    enabled = config.get("agentic_rag_enabled", DEFAULT_AGENTIC_RAG_ENABLED)
+    if isinstance(enabled, str):
+        enabled = enabled.strip().casefold() not in {"0", "false", "no", "off"}
+    config["agentic_rag_enabled"] = bool(enabled)
+    try:
+        max_rounds = int(config.get("agentic_rag_max_rounds", DEFAULT_AGENTIC_RAG_MAX_ROUNDS))
+    except (TypeError, ValueError):
+        max_rounds = DEFAULT_AGENTIC_RAG_MAX_ROUNDS
+    config["agentic_rag_max_rounds"] = max(1, min(max_rounds, DEFAULT_AGENTIC_RAG_MAX_ROUNDS))
+    try:
+        max_search_calls = int(
+            config.get("agentic_rag_max_search_calls", DEFAULT_AGENTIC_RAG_MAX_SEARCH_CALLS)
+        )
+    except (TypeError, ValueError):
+        max_search_calls = DEFAULT_AGENTIC_RAG_MAX_SEARCH_CALLS
+    config["agentic_rag_max_search_calls"] = max(
+        1,
+        min(max_search_calls, DEFAULT_AGENTIC_RAG_MAX_SEARCH_CALLS),
+    )
+    try:
+        timeout_seconds = float(
+            config.get("agentic_rag_timeout_seconds", DEFAULT_AGENTIC_RAG_TIMEOUT_SECONDS)
+        )
+    except (TypeError, ValueError):
+        timeout_seconds = DEFAULT_AGENTIC_RAG_TIMEOUT_SECONDS
+    config["agentic_rag_timeout_seconds"] = max(1.0, min(timeout_seconds, 120.0))
+    return config
+
+
 class _RerankTextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -70,7 +140,7 @@ class _RerankTextExtractor(HTMLParser):
             self.parts.append(data)
 
 
-def plan_query_rewrites(query: str, *, model: str = QUERY_REWRITE_MODEL) -> dict[str, str]:
+def _legacy_plan_query_rewrites(query: str, *, model: str = QUERY_REWRITE_MODEL) -> dict[str, str]:
     planner_query = _normalize_query_for_rewrite(query)
     if not planner_query:
         raise ValueError("query must not be blank")
@@ -86,6 +156,44 @@ def plan_query_rewrites(query: str, *, model: str = QUERY_REWRITE_MODEL) -> dict
                     "试验名称、参数名称及连续中文领域短语；不得翻译、替换或省略这些短语。"
                     "严格返回JSON对象："
                     '{"semantic":"...","keyword":"..."}'
+                ),
+            },
+            {"role": "user", "content": planner_query},
+        ],
+        model=model,
+        temperature=0,
+    )
+    rewrites = {
+        route: _validate_rewrite(planner_query, parsed.get(route), route=route)
+        for route in ("semantic", "keyword")
+    }
+    if len(set(rewrites.values())) != len(rewrites):
+        raise ValueError("query rewriter returned duplicate routes")
+    return rewrites
+
+
+def plan_query_rewrites(
+    query: str,
+    *,
+    model: str = QUERY_REWRITE_MODEL,
+) -> dict[str, str]:
+    """Add validated rewrite routes while keeping the original query intact."""
+    planner_query = _normalize_query_for_rewrite(query)
+    if not planner_query:
+        raise ValueError("query must not be blank")
+    parsed = llm.chat_json(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Rewrite a standards-evidence retrieval query into two JSON fields. "
+                    "Use only terms and facts present in the original query. Never add "
+                    "a standard number, product type, parameter value, unit, or answer. "
+                    "The semantic field should be a natural-language evidence question. "
+                    "The keyword field should preserve exact standard numbers, model names, "
+                    "parameter names, values, units, and test abbreviations. Both fields "
+                    "must preserve the original domain anchors and numbers. Return exactly "
+                    "{\"semantic\":\"...\",\"keyword\":\"...\"}."
                 ),
             },
             {"role": "user", "content": planner_query},
@@ -156,6 +264,10 @@ def hybrid_search(
     candidates_per_type: int = CANDIDATES_PER_TYPE,
     lexical_candidates_per_type: int | None = None,
     rrf_k: int = RRF_K,
+    dense_threshold: float | None = None,
+    rerank_threshold: float | None = None,
+    # Backward-compatible request argument. Persisted configurations must use
+    # dense_threshold / rerank_threshold instead.
     similarity_threshold: float | None = None,
     query_routes: dict[str, str] | None = None,
     special_route_reserve: int = 0,
@@ -171,6 +283,7 @@ def hybrid_search(
     lexical_searcher: LexicalSearcher | None = None,
     lexical_enabled: bool | None = None,
     file_ids: list[str] | None = None,
+    workspace_id: str | None = None,
 ) -> dict[str, Any]:
     query = query.strip()
     if not query:
@@ -183,6 +296,16 @@ def hybrid_search(
         raise ValueError("candidates_per_type must be between 1 and 100")
     if not 1 <= rrf_k <= 200:
         raise ValueError("rrf_k must be between 1 and 200")
+    legacy_similarity_threshold = (
+        similarity_threshold is not None and rerank_threshold is None
+    )
+    if legacy_similarity_threshold:
+        legacy_value = float(similarity_threshold)
+        rerank_threshold = None if legacy_value < 0 else legacy_value
+    if dense_threshold is not None and not 0 <= float(dense_threshold) <= 1:
+        raise ValueError("dense_threshold must be between 0 and 1")
+    if rerank_threshold is not None and not 0 <= float(rerank_threshold) <= 1:
+        raise ValueError("rerank_threshold must be between 0 and 1")
     if not 0 <= special_route_reserve <= 20:
         raise ValueError("special_route_reserve must be between 0 and 20")
     if final_per_type is not None and not 1 <= final_per_type <= 50:
@@ -206,7 +329,7 @@ def hybrid_search(
 
     planner = planner or plan_query_rewrites
     batch_embedder = batch_embedder or embeddings.embed_queries_with_dashscope
-    vector_searcher = vector_searcher or embeddings.vector_search_by_vector
+    vector_searcher = vector_searcher or vector_store.get_vector_store().search_by_vector
     reranker = reranker or rerank_documents
     lexical_searcher = lexical_searcher or lexical.search
     if lexical_enabled is None:
@@ -261,6 +384,8 @@ def hybrid_search(
             }
             if file_ids is not None:
                 vector_kwargs["file_ids"] = file_ids
+            if workspace_id is not None:
+                vector_kwargs["workspace_id"] = workspace_id
             result = vector_searcher(
                 route_query,
                 route_vector_by_name[route],
@@ -268,6 +393,12 @@ def hybrid_search(
             )
             total_by_type.setdefault(content_type, int(result["total_candidates"]))
             for rank, hit in enumerate(result["hits"], start=1):
+                if (
+                    dense_threshold is not None
+                    and float(dense_threshold) > 0
+                    and float(hit.get("score") or 0.0) < float(dense_threshold)
+                ):
+                    continue
                 candidate = merged.setdefault(
                     hit["chunk_id"],
                     _candidate(hit, content_type=content_type, source="dense"),
@@ -361,6 +492,8 @@ def hybrid_search(
             final_per_type=final_per_type,
             final_table=final_quotas["table"] if final_quotas else None,
             final_section=final_quotas["section"] if final_quotas else None,
+            dense_threshold=dense_threshold,
+            rerank_threshold=rerank_threshold,
         )
 
     documents = [_rerank_document(candidate) for candidate in candidate_pool]
@@ -391,16 +524,24 @@ def hybrid_search(
     else:
         selected = ordered[:top_k]
 
-    if similarity_threshold is not None:
-        selected = [
-            hit
-            for hit in selected
-            if float(
-                hit["rerank_score"]
+    if rerank_threshold is not None and float(rerank_threshold) > 0:
+        if rerank_model is not None:
+            selected = [
+                hit
+                for hit in selected
                 if hit.get("rerank_score") is not None
-                else hit.get("score") or 0
-            )
-            >= similarity_threshold
+                and float(hit["rerank_score"]) >= float(rerank_threshold)
+            ]
+        elif legacy_similarity_threshold:
+            selected = [
+                hit
+                for hit in selected
+                if float(hit.get("score") or 0.0) >= float(rerank_threshold)
+            ]
+    elif legacy_similarity_threshold and rerank_threshold is None:
+        # Preserve the old fallback behavior only for direct legacy callers.
+        selected = [
+            hit for hit in selected if float(hit.get("score") or 0.0) >= float(similarity_threshold)
         ]
 
     if expand_references or aggregate_continuation_tables:
@@ -424,6 +565,8 @@ def hybrid_search(
         final_per_type=final_per_type,
         final_table=final_quotas["table"] if final_quotas else None,
         final_section=final_quotas["section"] if final_quotas else None,
+        dense_threshold=dense_threshold,
+        rerank_threshold=rerank_threshold,
     )
 
 
@@ -444,6 +587,7 @@ def retrieve_candidate_pool(
     candidates_per_type: int = CANDIDATES_PER_TYPE,
     lexical_candidates_per_type: int | None = None,
     rrf_k: int = RRF_K,
+    dense_threshold: float | None = None,
     special_route_reserve: int = 0,
     planner: QueryPlanner | None = None,
     batch_embedder: QueryBatchEmbedder | None = None,
@@ -451,6 +595,7 @@ def retrieve_candidate_pool(
     lexical_searcher: LexicalSearcher | None = None,
     lexical_enabled: bool | None = None,
     file_ids: list[str] | None = None,
+    workspace_id: str | None = None,
 ) -> dict[str, Any]:
     """Return the bounded hybrid candidate pool before external reranking."""
     result = hybrid_search(
@@ -460,6 +605,7 @@ def retrieve_candidate_pool(
         candidates_per_type=candidates_per_type,
         lexical_candidates_per_type=lexical_candidates_per_type,
         rrf_k=rrf_k,
+        dense_threshold=dense_threshold,
         similarity_threshold=None,
         query_routes=query_routes,
         special_route_reserve=special_route_reserve,
@@ -472,6 +618,7 @@ def retrieve_candidate_pool(
         lexical_searcher=lexical_searcher,
         lexical_enabled=lexical_enabled,
         file_ids=file_ids,
+        workspace_id=workspace_id,
     )
     for hit in result["hits"]:
         hit["rerank_score"] = None
@@ -489,6 +636,9 @@ def merge_and_rerank_candidate_pools(
     rrf_k: int = RRF_K,
     final_table: int | None = None,
     final_section: int | None = None,
+    rerank_threshold: float | None = None,
+    # Backward-compatible argument for recovery callers created before the
+    # threshold split.
     similarity_threshold: float | None = None,
     aggregate_continuation_tables: bool = False,
     expand_references: bool = False,
@@ -506,6 +656,15 @@ def merge_and_rerank_candidate_pools(
             "degraded": [],
             "hits": [],
         }
+
+    legacy_similarity_threshold = (
+        similarity_threshold is not None and rerank_threshold is None
+    )
+    if legacy_similarity_threshold:
+        legacy_value = float(similarity_threshold)
+        rerank_threshold = None if legacy_value < 0 else legacy_value
+    if rerank_threshold is not None and not 0 <= float(rerank_threshold) <= 1:
+        raise ValueError("rerank_threshold must be between 0 and 1")
 
     merged: dict[str, dict[str, Any]] = {}
     degraded: list[str] = []
@@ -592,16 +751,23 @@ def merge_and_rerank_candidate_pools(
         selected = _slice_final_per_type(ordered, final_quotas=final_quotas)
     else:
         selected = ordered[:top_k]
-    if similarity_threshold is not None:
-        selected = [
-            hit
-            for hit in selected
-            if float(
-                hit["rerank_score"]
+    if rerank_threshold is not None and float(rerank_threshold) > 0:
+        if rerank_model is not None:
+            selected = [
+                hit
+                for hit in selected
                 if hit.get("rerank_score") is not None
-                else hit.get("score") or 0.0
-            )
-            >= similarity_threshold
+                and float(hit["rerank_score"]) >= float(rerank_threshold)
+            ]
+        elif legacy_similarity_threshold:
+            selected = [
+                hit
+                for hit in selected
+                if float(hit.get("score") or 0.0) >= float(rerank_threshold)
+            ]
+    elif legacy_similarity_threshold and rerank_threshold is None:
+        selected = [
+            hit for hit in selected if float(hit.get("score") or 0.0) >= float(similarity_threshold)
         ]
     if expand_references or aggregate_continuation_tables:
         selected = _enrich_evidence_hits(
@@ -704,8 +870,9 @@ def _resolve_query_routes(
             value = str(planned.get(route) or "").strip()
             if value and value not in routes.values():
                 routes[route] = value
-        if len(routes) != 3:
-            raise ValueError("query rewriter omitted or duplicated a route")
+        # A rewrite may legitimately be identical to the raw query. Keep the
+        # production route and any distinct validated additions instead of
+        # degrading the whole planner result.
     except (RuntimeError, ValueError, json.JSONDecodeError, KeyError, TypeError):
         degraded.append("query_rewrite_failed")
         routes = {"production": query}
@@ -834,6 +1001,8 @@ def _response(
     final_per_type: int | None = None,
     final_table: int | None = None,
     final_section: int | None = None,
+    dense_threshold: float | None = None,
+    rerank_threshold: float | None = None,
 ) -> dict[str, Any]:
     return {
         "query": query,
@@ -848,6 +1017,8 @@ def _response(
         "final_per_type": final_per_type,
         "final_table": final_table,
         "final_section": final_section,
+        "dense_threshold": dense_threshold,
+        "rerank_threshold": rerank_threshold,
         "rerank_model": rerank_model,
         "degraded": degraded,
         "hits": hits,
@@ -1000,6 +1171,23 @@ def _query_domain_anchors(query: str) -> list[str]:
     anchors = []
     for value in _CHINESE_ANCHOR_RE.findall(query):
         anchor = _GENERIC_DOMAIN_SUFFIX_RE.sub("", value)
+        for phrase in (
+            "请根据",
+            "根据",
+            "已绑定知识库",
+            "知识库",
+            "说明",
+            "介绍",
+            "解释",
+            "请给出",
+            "给出",
+            "页码引用",
+            "引用",
+            "是什么",
+            "定义",
+        ):
+            anchor = anchor.replace(phrase, "")
+        anchor = re.sub(r"[的之与及和并]", "", anchor)
         if len(anchor) >= 4 and anchor not in anchors:
             anchors.append(anchor)
     return anchors

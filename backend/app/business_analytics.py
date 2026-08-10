@@ -37,12 +37,31 @@ SEMANTIC_SCHEMA = {
     ],
 }
 
+SEMANTIC_TABLE_DESCRIPTIONS = {
+    "knowledge_bases": "当前知识库及其启用文件、绑定助手数量。",
+    "source_files": "文件级业务统计，不暴露原始文档正文。",
+    "audit_reports": "审查报告级汇总指标。",
+    "audit_cases": "审查报告中的逐条检测项目及判定状态。",
+}
+
+SEMANTIC_COLUMN_DESCRIPTIONS = {
+    "knowledge_bases.status": "知识库状态，例如 active 或 archived。",
+    "source_files.approved_chunk_count": "该文件当前 approved 切片数量。",
+    "audit_reports.case_count": "报告包含的审查条目数。",
+    "audit_cases.status": "supported、mismatch、insufficient_context 或 not_audited。",
+}
+
 
 def _record(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _audit_payloads(reports_dir: Path) -> list[tuple[str, dict[str, Any]]]:
+def _audit_payloads(
+    reports_dir: Path,
+    *,
+    source: sqlite3.Connection | None = None,
+    workspace_id: str | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
     payloads: list[tuple[str, dict[str, Any]]] = []
     if not reports_dir.exists():
         return payloads
@@ -59,6 +78,33 @@ def _audit_payloads(reports_dir: Path) -> list[tuple[str, dict[str, Any]]]:
             or path.name.startswith(("end_to_end_audit_", "hbjc_end_to_end_audit"))
         ):
             continue
+        if workspace_id:
+            explicit = str(payload.get("workspace_id") or "").strip()
+            if explicit:
+                if explicit != workspace_id:
+                    continue
+            elif source is not None:
+                matched = False
+                for field, table in (
+                    ("assistant_id", "audit_assistants"),
+                    ("knowledge_base_id", "knowledge_bases"),
+                    ("report_file_id", "files"),
+                    ("job_id", "jobs"),
+                ):
+                    value = str(payload.get(field) or "").strip()
+                    if not value:
+                        continue
+                    row = source.execute(
+                        f"SELECT workspace_id FROM {table} WHERE id=?",
+                        (value,),
+                    ).fetchone()
+                    if row:
+                        matched = str(row["workspace_id"]) == workspace_id
+                        break
+                if not matched and workspace_id != config.DEFAULT_WORKSPACE_ID:
+                    continue
+            elif workspace_id != config.DEFAULT_WORKSPACE_ID:
+                continue
         payloads.append((path.name, payload))
     return payloads
 
@@ -67,6 +113,7 @@ def build_business_snapshot(
     *,
     source: sqlite3.Connection | None = None,
     reports_dir: Path | None = None,
+    workspace_id: str | None = None,
 ) -> sqlite3.Connection:
     """Copy curated source fields into a new ephemeral SQLite database."""
     source_conn = source or db.get_conn()
@@ -96,34 +143,46 @@ def build_business_snapshot(
         );
         """
     )
-    kb_rows = source_conn.execute(
-        """SELECT kb.id, kb.name, kb.status, kb.created_at, kb.updated_at,
+    kb_sql = """SELECT kb.id, kb.name, kb.status, kb.created_at, kb.updated_at,
                   COUNT(DISTINCT CASE WHEN kbf.enabled=1 THEN kbf.file_id END) AS file_count,
                   COUNT(DISTINCT CASE WHEN akb.enabled=1 THEN akb.assistant_id END) AS assistant_count
              FROM knowledge_bases kb
              LEFT JOIN knowledge_base_files kbf ON kbf.knowledge_base_id=kb.id
              LEFT JOIN assistant_knowledge_bases akb ON akb.knowledge_base_id=kb.id
+            {workspace_clause}
             GROUP BY kb.id, kb.name, kb.status, kb.created_at, kb.updated_at"""
+    workspace_clause = "WHERE kb.workspace_id=?" if workspace_id else ""
+    kb_rows = source_conn.execute(
+        kb_sql.format(workspace_clause=workspace_clause),
+        (workspace_id,) if workspace_id else (),
     ).fetchall()
     snapshot.executemany(
         "INSERT INTO knowledge_bases VALUES (?,?,?,?,?,?,?)",
         [tuple(row) for row in kb_rows],
     )
-    file_rows = source_conn.execute(
-        """SELECT f.id, f.name, f.created_at,
+    file_sql = """SELECT f.id, f.name, f.created_at,
                   COUNT(DISTINCT CASE WHEN kbf.enabled=1 THEN kbf.knowledge_base_id END) AS knowledge_base_count,
                   COUNT(DISTINCT CASE WHEN c.status='approved' THEN c.id END) AS approved_chunk_count
              FROM files f
              LEFT JOIN knowledge_base_files kbf ON kbf.file_id=f.id
              LEFT JOIN chunks c ON c.file_id=f.id
+            {workspace_clause}
             GROUP BY f.id, f.name, f.created_at"""
+    workspace_clause = "WHERE f.workspace_id=?" if workspace_id else ""
+    file_rows = source_conn.execute(
+        file_sql.format(workspace_clause=workspace_clause),
+        (workspace_id,) if workspace_id else (),
     ).fetchall()
     snapshot.executemany(
         "INSERT INTO source_files VALUES (?,?,?,?,?)",
         [tuple(row) for row in file_rows],
     )
 
-    for report_name, payload in _audit_payloads(report_root):
+    for report_name, payload in _audit_payloads(
+        report_root,
+        source=source_conn,
+        workspace_id=workspace_id,
+    ):
         cases = [item for item in payload.get("cases") or [] if isinstance(item, dict)]
         counts = {status: 0 for status in (
             "supported", "mismatch", "insufficient_context", "not_audited",
@@ -173,7 +232,11 @@ def build_business_snapshot(
 
 def describe_business_schema() -> dict[str, Any]:
     return {
+        "source": "持久化 SQLite 应用库 -> 每次查询临时复制的内存 SQLite 快照",
+        "read_only": True,
         "tables": SEMANTIC_SCHEMA,
+        "table_descriptions": SEMANTIC_TABLE_DESCRIPTIONS,
+        "column_descriptions": SEMANTIC_COLUMN_DESCRIPTIONS,
         "chart_types": ["metric", "pie", "bar", "table"],
         "max_rows": MAX_RESULT_ROWS,
     }
@@ -365,6 +428,7 @@ def query_business_data(
     source: sqlite3.Connection | None = None,
     reports_dir: Path | None = None,
     model: str = llm.DEFAULT_MODEL,
+    workspace_id: str | None = None,
 ) -> dict[str, Any]:
     normalized = str(question or "").strip()
     if not normalized:
@@ -372,7 +436,11 @@ def query_business_data(
     plan = fixed_query_plan(normalized)
     route = "fixed_metric" if plan else "text2sql"
     active_plan = plan or _text2sql_plan(normalized, model=model)
-    snapshot = build_business_snapshot(source=source, reports_dir=reports_dir)
+    snapshot = build_business_snapshot(
+        source=source,
+        reports_dir=reports_dir,
+        workspace_id=workspace_id,
+    )
     try:
         result = execute_readonly_query(snapshot, str(active_plan["sql"]))
     finally:

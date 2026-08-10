@@ -61,12 +61,16 @@ def pending_documents(
     dimension: int,
     force: bool = False,
     include_table_columns: bool = False,
+    workspace_id: str | None = None,
 ) -> list[EmbeddingDocument]:
+    workspace_clause = " AND c.workspace_id=?" if workspace_id else ""
+    chunk_params: tuple[Any, ...] = (workspace_id,) if workspace_id else ()
     rows = db.get_conn().execute(
-        """SELECT id, text, business_metadata
-           FROM chunks
-           WHERE status='approved'
-           ORDER BY file_id, page, created_at"""
+        """SELECT c.id, c.text, c.business_metadata
+           FROM chunks c
+           WHERE c.status='approved'""" + workspace_clause + """
+           ORDER BY c.file_id, c.page, c.created_at""",
+        chunk_params,
     ).fetchall()
     documents = [
         build_document(row, include_table_columns=include_table_columns) for row in rows
@@ -77,8 +81,9 @@ def pending_documents(
         row["chunk_id"]: row["text_sha256"]
         for row in db.get_conn().execute(
             """SELECT chunk_id, text_sha256 FROM chunk_embeddings
-               WHERE model=? AND dimension=?""",
-            (model, dimension),
+               JOIN chunks c ON c.id=chunk_embeddings.chunk_id
+               WHERE model=? AND dimension=?""" + workspace_clause,
+            (model, dimension, *chunk_params),
         ).fetchall()
     }
     return [doc for doc in documents if existing.get(doc.chunk_id) != doc.text_sha256]
@@ -175,6 +180,7 @@ def vector_search(
     file_ids: list[str] | None = None,
     model: str = DEFAULT_MODEL,
     dimension: int = DEFAULT_DIMENSION,
+    workspace_id: str | None = None,
     query_embedder: Callable[..., list[float]] = embed_query_with_dashscope,
 ) -> dict[str, Any]:
     query = query.strip()
@@ -189,6 +195,7 @@ def vector_search(
         file_ids=file_ids,
         model=model,
         dimension=dimension,
+        workspace_id=workspace_id,
     )
 
 
@@ -201,6 +208,7 @@ def vector_search_by_vector(
     file_ids: list[str] | None = None,
     model: str = DEFAULT_MODEL,
     dimension: int = DEFAULT_DIMENSION,
+    workspace_id: str | None = None,
 ) -> dict[str, Any]:
     query = query.strip()
     if not query:
@@ -211,8 +219,12 @@ def vector_search_by_vector(
     if query_norm == 0:
         raise ValueError("query vector has zero norm")
 
-    content_type_clause = ""
+    workspace_clause = ""
     params: list[Any] = [model, dimension]
+    if workspace_id:
+        workspace_clause = " AND c.workspace_id=? AND f.workspace_id=?"
+        params.extend([workspace_id, workspace_id])
+    content_type_clause = ""
     if content_type is not None:
         content_type_clause = " AND json_extract(c.business_metadata, '$.content_type')=?"
         params.append(content_type)
@@ -236,7 +248,7 @@ def vector_search_by_vector(
            JOIN chunks c ON c.id=e.chunk_id
            JOIN files f ON f.id=c.file_id
            WHERE c.status='approved' AND e.model=? AND e.dimension=?
-                 {content_type_clause}{file_clause}""",
+                 {workspace_clause}{content_type_clause}{file_clause}""",
         params,
     ).fetchall()
     scored: list[tuple[float, int, Any]] = []
@@ -328,6 +340,7 @@ def build_embeddings(
     include_table_columns: bool = False,
     embedder: Callable[..., tuple[list[list[float]], int]] = embed_with_dashscope,
     on_batch: Callable[[int, int, int], None] | None = None,
+    workspace_id: str | None = None,
 ) -> dict[str, int | str]:
     if not 1 <= batch_size <= MAX_BATCH_SIZE:
         raise ValueError(f"batch_size must be between 1 and {MAX_BATCH_SIZE}")
@@ -336,6 +349,7 @@ def build_embeddings(
         dimension=dimension,
         force=force,
         include_table_columns=include_table_columns,
+        workspace_id=workspace_id,
     )
     if limit is not None:
         documents = documents[:limit]

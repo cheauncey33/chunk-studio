@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from . import audit_run, config, db, llm
+from . import audit_run, config, current_user, db, llm
 
 GENERIC_TEMPLATE_ID = "assistant_audit_template"
 DEFAULT_FALLBACK_ID = "assistant_oil_transformer_audit"
@@ -30,6 +30,7 @@ def _router_prompt() -> str:
 
 def list_routable_candidates() -> list[dict[str, Any]]:
     """Assistants with exactly one bound active KB (exclude template)."""
+    workspace_id = current_user.get_current_user().workspace_id
     rows = db.get_conn().execute(
         """SELECT a.id AS assistant_id, a.name AS assistant_name,
                   a.description AS assistant_description,
@@ -38,15 +39,18 @@ def list_routable_candidates() -> list[dict[str, Any]]:
                   kb.description AS knowledge_base_description
            FROM audit_assistants a
            JOIN assistant_knowledge_bases akb
-             ON akb.assistant_id=a.id AND akb.enabled=1
+             ON akb.assistant_id=a.id
+            AND akb.workspace_id=a.workspace_id AND akb.enabled=1
            JOIN assistant_versions v ON v.id=a.active_version_id
            JOIN knowledge_bases kb
-             ON kb.id=akb.knowledge_base_id AND kb.status='active'
+             ON kb.id=akb.knowledge_base_id
+            AND kb.workspace_id=akb.workspace_id AND kb.status='active'
            WHERE a.status='active'
+             AND a.workspace_id=?
              AND a.id!=?
              AND a.active_version_id IS NOT NULL
            ORDER BY kb.name ASC, a.name ASC""",
-        (GENERIC_TEMPLATE_ID,),
+        (workspace_id, GENERIC_TEMPLATE_ID),
     ).fetchall()
     # Keep one row per assistant (1:1 enforcement may leave temporary duplicates).
     seen: set[str] = set()
@@ -75,6 +79,13 @@ def route_report_to_assistant(
     model: str | None = None,
 ) -> dict[str, Any]:
     """Choose an assistant for the report; fall back when needed."""
+    workspace_id = current_user.get_current_user().workspace_id
+    report_row = db.get_conn().execute(
+        "SELECT id FROM files WHERE id=? AND workspace_id=?",
+        (report_file_id, workspace_id),
+    ).fetchone()
+    if not report_row:
+        raise ValueError("report file not found in current workspace")
     candidates = list_routable_candidates()
     fallback_id = _fallback_assistant_id()
     markdown_path = audit_run.resolve_markdown_path(report_file_id)

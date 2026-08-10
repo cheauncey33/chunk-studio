@@ -13,6 +13,8 @@ class ToolContext:
     file_ids: list[str]
     retrieval_config: dict[str, Any]
     model: str
+    current_question: str = ""
+    workspace_id: str | None = None
 
 
 ToolFactory = Callable[[ToolContext], Iterable[ToolDefinition]]

@@ -31,6 +31,61 @@ def _hit(chunk_id: str, score: float, *, content_type: str, text: str) -> dict:
     }
 
 
+def test_hybrid_search_separates_dense_and_rerank_thresholds() -> None:
+    seen_documents: list[str] = []
+
+    def vector_searcher(_query: str, _vector: list[float], **kwargs):
+        if kwargs["content_type"] != "table":
+            return {"total_candidates": 0, "hits": []}
+        return {
+            "total_candidates": 2,
+            "hits": [
+                _hit("dense-keep", 0.91, content_type="table", text="keep"),
+                _hit("dense-drop", 0.21, content_type="table", text="drop"),
+            ],
+        }
+
+    def reranker(_query: str, documents: list[str], top_n: int):
+        seen_documents.extend(documents)
+        return [(0, 0.81)]
+
+    result = retrieval.hybrid_search(
+        "原始查询",
+        top_k=5,
+        query_routes={"production": "原始查询"},
+        batch_embedder=lambda queries, **kwargs: [
+            [1.0] * embeddings.DEFAULT_DIMENSION for _ in queries
+        ],
+        vector_searcher=vector_searcher,
+        reranker=reranker,
+        lexical_enabled=False,
+        dense_threshold=0.5,
+        rerank_threshold=0.8,
+    )
+
+    assert len(seen_documents) == 1
+    assert "keep" in seen_documents[0]
+    assert "drop" not in seen_documents[0]
+    assert [hit["chunk_id"] for hit in result["hits"]] == ["dense-keep"]
+    assert result["dense_threshold"] == 0.5
+    assert result["rerank_threshold"] == 0.8
+
+
+def test_normalize_retrieval_config_removes_unused_legacy_settings() -> None:
+    normalized = retrieval.normalize_retrieval_config({
+        "similarity_threshold": 0.46,
+        "vector_weight": 0.7,
+        "keyword_weight": 0.3,
+        "top_k": 10,
+    })
+
+    assert normalized["dense_threshold"] == 0.0
+    assert normalized["rerank_threshold"] == 0.46
+    assert "similarity_threshold" not in normalized
+    assert "vector_weight" not in normalized
+    assert "keyword_weight" not in normalized
+
+
 def test_hybrid_search_uses_typed_rrf_candidates_then_reranker() -> None:
     query = "原始查询 10 kV"
     planned = {"semantic": "语义查询 10 kV", "keyword": "关键词 10 kV"}

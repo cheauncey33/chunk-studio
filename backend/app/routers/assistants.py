@@ -8,11 +8,11 @@ import time
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import chat_agent, chat_sessions, db, jobs, llm, retrieval
+from .. import chat_agent, chat_sessions, config, current_user, db, jobs, llm, retrieval, runtime
 
 
 router = APIRouter(prefix="/assistants", tags=["assistants"])
@@ -98,7 +98,7 @@ def _loads(value: str | None) -> dict[str, Any]:
     try:
         parsed = json.loads(value or "{}")
         return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         return {}
 
 
@@ -116,7 +116,9 @@ def _version_out(row: Any) -> dict[str, Any]:
         resolve_query_planner_routes,
     )
 
-    retrieval_config = _loads(row["retrieval_config"])
+    retrieval_config = retrieval.normalize_retrieval_config(
+        _loads(row["retrieval_config"])
+    )
     retrieval_config.setdefault("aggregate_continuation_tables", False)
     retrieval_config.setdefault("expand_references", False)
     retrieval_config.setdefault("final_table", 8)
@@ -166,8 +168,8 @@ def _assistant_row(assistant_id: str):
         """SELECT a.*, v.version AS active_version
            FROM audit_assistants a
            LEFT JOIN assistant_versions v ON v.id=a.active_version_id
-           WHERE a.id=?""",
-        (assistant_id,),
+           WHERE a.id=? AND a.workspace_id=?""",
+        (assistant_id, current_user.get_current_user().workspace_id),
     ).fetchone()
     if not row:
         raise HTTPException(404, "assistant not found")
@@ -179,9 +181,11 @@ def _assistant_out(row: Any) -> dict[str, Any]:
         """SELECT kb.id, kb.name
            FROM assistant_knowledge_bases akb
            JOIN knowledge_bases kb ON kb.id=akb.knowledge_base_id
-           WHERE akb.assistant_id=? AND akb.enabled=1
+           WHERE akb.assistant_id=?
+             AND akb.workspace_id=? AND kb.workspace_id=? AND akb.enabled=1
            ORDER BY akb.priority, kb.name""",
-        (row["id"],),
+        (row["id"], current_user.get_current_user().workspace_id,
+         current_user.get_current_user().workspace_id),
     ).fetchall()
     return {
         "id": row["id"],
@@ -213,8 +217,9 @@ def list_assistants():
         """SELECT a.*, v.version AS active_version
            FROM audit_assistants a
            LEFT JOIN assistant_versions v ON v.id=a.active_version_id
-           WHERE a.status!='archived'
-           ORDER BY a.updated_at DESC, a.name"""
+           WHERE a.status!='archived' AND a.workspace_id=?
+           ORDER BY a.updated_at DESC, a.name""",
+        (current_user.get_current_user().workspace_id,),
     ).fetchall()
     return [_assistant_out(row) for row in rows]
 
@@ -244,9 +249,16 @@ def create_assistant(body: AssistantCreate):
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO audit_assistants
-               (id,name,description,status,active_version_id,created_at,updated_at)
-               VALUES (?,?,?,'active',NULL,?,?)""",
-            (assistant_id, body.name.strip(), body.description.strip(), now, now),
+               (id,workspace_id,name,description,status,active_version_id,created_at,updated_at)
+               VALUES (?,?,?,?,'active',NULL,?,?)""",
+            (
+                assistant_id,
+                current_user.get_current_user().workspace_id,
+                body.name.strip(),
+                body.description.strip(),
+                now,
+                now,
+            ),
         )
         snapshot_provenance = json.dumps(
             {
@@ -344,8 +356,8 @@ def update_assistant(assistant_id: str, body: AssistantUpdate):
         params.extend([time.strftime("%Y-%m-%dT%H:%M:%S"), assistant_id])
         with db.transaction() as conn:
             conn.execute(
-                f"UPDATE audit_assistants SET {', '.join(updates)} WHERE id=?",
-                params,
+                f"UPDATE audit_assistants SET {', '.join(updates)} WHERE id=? AND workspace_id=?",
+                [*params, current_user.get_current_user().workspace_id],
             )
     return _assistant_out(_assistant_row(assistant_id))
 
@@ -372,6 +384,9 @@ def update_active_version(assistant_id: str, body: AssistantVersionConfigUpdate)
     if provider != "deepseek":
         raise HTTPException(422, "only DeepSeek assistant versions are supported")
     parameter_schema = resolve_parameter_schema(body.parameter_schema)
+    normalized_retrieval_config = retrieval.normalize_retrieval_config(
+        body.retrieval_config
+    )
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     provenance = body.initialization_provenance
     if not isinstance(provenance, dict):
@@ -411,7 +426,7 @@ def update_active_version(assistant_id: str, body: AssistantVersionConfigUpdate)
                     json.dumps(body.model_settings, ensure_ascii=False),
                     json.dumps(body.node_prompts, ensure_ascii=False),
                     json.dumps(body.rules, ensure_ascii=False),
-                    json.dumps(body.retrieval_config, ensure_ascii=False),
+                    json.dumps(normalized_retrieval_config, ensure_ascii=False),
                     json.dumps(parameter_schema, ensure_ascii=False),
                     json.dumps(provenance, ensure_ascii=False),
                     now,
@@ -437,7 +452,7 @@ def update_active_version(assistant_id: str, body: AssistantVersionConfigUpdate)
                     json.dumps(body.model_settings, ensure_ascii=False),
                     json.dumps(body.node_prompts, ensure_ascii=False),
                     json.dumps(body.rules, ensure_ascii=False),
-                    json.dumps(body.retrieval_config, ensure_ascii=False),
+                    json.dumps(normalized_retrieval_config, ensure_ascii=False),
                     json.dumps(parameter_schema, ensure_ascii=False),
                     json.dumps(provenance, ensure_ascii=False),
                     now,
@@ -465,35 +480,35 @@ def set_knowledge_bases(assistant_id: str, body: KnowledgeBaseSelection):
     if unique_ids:
         kb_id = unique_ids[0]
         row = db.get_conn().execute(
-            "SELECT id FROM knowledge_bases WHERE id=?",
-            (kb_id,),
+            "SELECT id FROM knowledge_bases WHERE id=? AND workspace_id=?",
+            (kb_id, current_user.get_current_user().workspace_id),
         ).fetchone()
         if not row:
             raise HTTPException(422, "knowledge base does not exist")
         conflict = db.get_conn().execute(
             """SELECT assistant_id FROM assistant_knowledge_bases
-               WHERE knowledge_base_id=? AND enabled=1 AND assistant_id!=?""",
-            (kb_id, assistant_id),
+               WHERE knowledge_base_id=? AND workspace_id=? AND enabled=1 AND assistant_id!=?""",
+            (kb_id, current_user.get_current_user().workspace_id, assistant_id),
         ).fetchone()
         if conflict:
             raise HTTPException(409, "该知识库已绑定其他助手")
     with db.transaction() as conn:
         conn.execute(
-            "DELETE FROM assistant_knowledge_bases WHERE assistant_id=?",
-            (assistant_id,),
+            "DELETE FROM assistant_knowledge_bases WHERE assistant_id=? AND workspace_id=?",
+            (assistant_id, current_user.get_current_user().workspace_id),
         )
         if unique_ids:
             kb_id = unique_ids[0]
             # Ensure the KB has no stale binds (disabled rows included).
             conn.execute(
-                "DELETE FROM assistant_knowledge_bases WHERE knowledge_base_id=?",
-                (kb_id,),
+                "DELETE FROM assistant_knowledge_bases WHERE knowledge_base_id=? AND workspace_id=?",
+                (kb_id, current_user.get_current_user().workspace_id),
             )
             conn.execute(
                 """INSERT INTO assistant_knowledge_bases
-                   (assistant_id,knowledge_base_id,priority,enabled)
-                   VALUES (?,?,0,1)""",
-                (assistant_id, kb_id),
+                   (assistant_id,knowledge_base_id,workspace_id,priority,enabled)
+                   VALUES (?,?,?,0,1)""",
+                (assistant_id, kb_id, current_user.get_current_user().workspace_id),
             )
     return _assistant_out(_assistant_row(assistant_id))
 
@@ -664,7 +679,9 @@ def assistant_chat(assistant_id: str, body: AssistantChatRequest):
         raise HTTPException(404, "active version not found")
 
     model_config = _loads(version["model_config"])
-    retrieval_config = _loads(version["retrieval_config"])
+    retrieval_config = retrieval.normalize_retrieval_config(
+        _loads(version["retrieval_config"])
+    )
     file_ids = db.assistant_scoped_file_ids(assistant_id)
     if not file_ids:
         raise HTTPException(400, "请先绑定知识库，并确保库内有已启用的文件")
@@ -672,8 +689,12 @@ def assistant_chat(assistant_id: str, body: AssistantChatRequest):
     top_k = int(retrieval_config.get("top_k") or 10)
     route_top_k = int(retrieval_config.get("route_top_k") or 30)
     candidates_per_type = int(retrieval_config.get("candidate_count_per_type") or 20)
-    similarity_threshold = retrieval_config.get("similarity_threshold")
-    threshold = float(similarity_threshold) if similarity_threshold is not None else 0.2
+    dense_threshold = float(retrieval_config.get("dense_threshold") or 0.0)
+    rerank_threshold = float(
+        retrieval_config.get("rerank_threshold")
+        if retrieval_config.get("rerank_threshold") is not None
+        else retrieval.DEFAULT_RERANK_THRESHOLD
+    )
     aggregate_continuation_tables = bool(
         retrieval_config.get("aggregate_continuation_tables", False)
     )
@@ -685,7 +706,8 @@ def assistant_chat(assistant_id: str, body: AssistantChatRequest):
             top_k=max(1, min(top_k, 50)),
             route_top_k=max(1, min(route_top_k, 100)),
             candidates_per_type=max(1, min(candidates_per_type, 100)),
-            similarity_threshold=threshold,
+            dense_threshold=dense_threshold,
+            rerank_threshold=rerank_threshold,
             aggregate_continuation_tables=aggregate_continuation_tables,
             expand_references=expand_references,
             file_ids=file_ids,
@@ -725,7 +747,8 @@ def assistant_chat(assistant_id: str, body: AssistantChatRequest):
             "hit_count": len(hits),
             "scoped_file_count": len(file_ids),
             "top_k": top_k,
-            "similarity_threshold": threshold,
+            "dense_threshold": dense_threshold,
+            "rerank_threshold": rerank_threshold,
             "aggregate_continuation_tables": aggregate_continuation_tables,
             "expand_references": expand_references,
             "degraded": search.get("degraded") or [],
@@ -734,15 +757,32 @@ def assistant_chat(assistant_id: str, body: AssistantChatRequest):
 
 
 @router.get("/{assistant_id}/conversations")
-def list_agent_conversations(assistant_id: str) -> dict[str, Any]:
+def list_agent_conversations(
+    assistant_id: str,
+    request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
     _assistant_row(assistant_id)
-    return {"items": chat_sessions.list_conversations(assistant_id)}
+    identity = _request_current_user(request)
+    return {"items": chat_sessions.list_conversations(
+        assistant_id,
+        workspace_id=identity.workspace_id,
+        user_id=identity.user_id,
+    )}
 
 
 @router.get("/{assistant_id}/conversations/{conversation_id}")
-def get_agent_conversation(assistant_id: str, conversation_id: str) -> dict[str, Any]:
+def get_agent_conversation(
+    assistant_id: str,
+    conversation_id: str,
+    request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
     _assistant_row(assistant_id)
-    conversation = chat_sessions.get_conversation(conversation_id)
+    identity = _request_current_user(request)
+    conversation = chat_sessions.get_conversation(
+        conversation_id,
+        workspace_id=identity.workspace_id,
+        user_id=identity.user_id,
+    )
     if not conversation or conversation["assistant_id"] != assistant_id:
         raise HTTPException(404, "conversation not found")
     return {
@@ -751,7 +791,22 @@ def get_agent_conversation(assistant_id: str, conversation_id: str) -> dict[str,
     }
 
 
-def _prepare_agent_context(assistant_id: str, body: AgentChatRequest) -> dict[str, Any]:
+def _request_current_user(request: Request | None) -> current_user.CurrentUser:
+    if request is None:
+        return current_user.local_current_user()
+    try:
+        return current_user.current_user_for_headers(request.headers)
+    except current_user.CurrentUserError as exc:
+        raise HTTPException(401, str(exc)) from exc
+
+
+def _prepare_agent_context(
+    assistant_id: str,
+    body: AgentChatRequest,
+    *,
+    identity: current_user.CurrentUser | None = None,
+) -> dict[str, Any]:
+    identity = identity or current_user.local_current_user()
     assistant = _assistant_row(assistant_id)
     if not assistant["active_version_id"]:
         raise HTTPException(400, "assistant has no active version")
@@ -762,12 +817,30 @@ def _prepare_agent_context(assistant_id: str, body: AgentChatRequest) -> dict[st
     if not version:
         raise HTTPException(404, "active version not found")
 
-    file_ids = db.assistant_scoped_file_ids(assistant_id)
-    if not file_ids:
-        raise HTTPException(400, "请先绑定知识库，并确保库内有已启用的文件")
+    # Business-only Agent turns are valid without enabled KB files. In that
+    # case chat_agent omits the document-search tool and explains the limit.
+    current_file_ids = db.assistant_scoped_file_ids(assistant_id)
+    current_model_config = _loads(version["model_config"])
+    current_retrieval_config = retrieval.normalize_retrieval_config(
+        _loads(version["retrieval_config"])
+    )
+    current_snapshot = {
+        "assistant_version_id": str(version["id"]),
+        "workspace_id": identity.workspace_id,
+        "user_id": identity.user_id,
+        "model_config": current_model_config,
+        "retrieval_config": current_retrieval_config,
+        # Freeze the corpus membership together with the tuning parameters so
+        # a later KB edit cannot silently change an existing conversation.
+        "file_ids": current_file_ids,
+    }
 
     conversation = (
-        chat_sessions.get_conversation(body.conversation_id)
+        chat_sessions.get_conversation(
+            body.conversation_id,
+            workspace_id=identity.workspace_id,
+            user_id=identity.user_id,
+        )
         if body.conversation_id
         else None
     )
@@ -779,15 +852,46 @@ def _prepare_agent_context(assistant_id: str, body: AgentChatRequest) -> dict[st
         conversation = chat_sessions.create_conversation(
             assistant_id,
             title=body.message.strip()[:120],
+            config_snapshot=current_snapshot,
+            workspace_id=identity.workspace_id,
+            user_id=identity.user_id,
         )
+    else:
+        stored_snapshot = _loads(conversation.get("config_snapshot"))
+        if stored_snapshot:
+            current_snapshot = stored_snapshot
+        else:
+            # Conversations created before snapshot support keep their
+            # original behavior on first reuse, then become reproducible.
+            chat_sessions.set_config_snapshot_if_empty(
+                str(conversation["id"]),
+                current_snapshot,
+            )
     conversation_id = str(conversation["id"])
+
+    snapshot_model_config = current_snapshot.get("model_config")
+    model_config = (
+        snapshot_model_config
+        if isinstance(snapshot_model_config, dict)
+        else current_model_config
+    )
+    snapshot_retrieval_config = current_snapshot.get("retrieval_config")
+    retrieval_config = retrieval.normalize_retrieval_config(
+        snapshot_retrieval_config
+        if isinstance(snapshot_retrieval_config, dict)
+        else current_retrieval_config
+    )
+    snapshot_file_ids = current_snapshot.get("file_ids")
+    file_ids = (
+        [str(file_id) for file_id in snapshot_file_ids]
+        if isinstance(snapshot_file_ids, list)
+        else current_file_ids
+    )
 
     chat_sessions.append_events(
         conversation_id,
         [("user_message", {"content": body.message.strip()})],
     )
-    model_config = _loads(version["model_config"])
-    retrieval_config = _loads(version["retrieval_config"])
     model = str(model_config.get("model") or llm.DEFAULT_MODEL)
     temperature = float(model_config.get("temperature") or 0)
     chat_sessions.compact_conversation(
@@ -800,8 +904,11 @@ def _prepare_agent_context(assistant_id: str, body: AgentChatRequest) -> dict[st
     )
     return {
         "conversation_id": conversation_id,
+        "workspace_id": identity.workspace_id,
+        "user_id": identity.user_id,
         "file_ids": file_ids,
         "retrieval_config": retrieval_config,
+        "config_snapshot": current_snapshot,
         "model": model,
         "temperature": temperature,
     }
@@ -813,7 +920,10 @@ def _persist_agent_result(conversation_id: str, result: dict[str, Any]) -> None:
         if not isinstance(message, dict):
             continue
         if message.get("role") == "assistant":
-            payload: dict[str, Any] = {"message": message}
+            stored_message = dict(message)
+            if not stored_message.get("tool_calls"):
+                stored_message.pop("tool_calls", None)
+            payload: dict[str, Any] = {"message": stored_message}
             if not message.get("tool_calls"):
                 payload["citations"] = result.get("citations") or []
                 payload["charts"] = result.get("charts") or []
@@ -843,37 +953,238 @@ def _agent_response(conversation_id: str, model: str, result: dict[str, Any]) ->
     }
 
 
-@router.post("/{assistant_id}/agent-chat")
-def assistant_agent_chat(assistant_id: str, body: AgentChatRequest) -> dict[str, Any]:
-    """Persistent Agent chat using native model tool calls."""
-    context = _prepare_agent_context(assistant_id, body)
-    try:
-        result = chat_agent.run_chat_agent(
-            assistant_id=assistant_id,
-            messages=chat_sessions.load_messages(context["conversation_id"]),
-            file_ids=context["file_ids"],
-            retrieval_config=context["retrieval_config"],
-            model=context["model"],
-            temperature=context["temperature"],
+def _runtime_scope(identity: current_user.CurrentUser, assistant_id: str) -> str:
+    return f"{identity.workspace_id}:{identity.user_id}:{assistant_id}"
+
+
+def _stream_name(identity: current_user.CurrentUser, conversation_id: str) -> str:
+    return f"{identity.workspace_id}:{identity.user_id}:{conversation_id}"
+
+
+def _claim_idempotency(
+    request: Request | None,
+    identity: current_user.CurrentUser,
+    assistant_id: str,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Reserve an optional request key and return a completed replay if present."""
+    if request is None:
+        return None, None
+    idempotency_key = str(request.headers.get("Idempotency-Key") or "").strip()
+    if not idempotency_key:
+        return None, None
+    if len(idempotency_key) > 200:
+        raise HTTPException(400, "Idempotency-Key is too long")
+    scope = _runtime_scope(identity, assistant_id)
+    services = runtime.get_runtime()
+    if services.idempotency.reserve(scope, idempotency_key):
+        return idempotency_key, None
+    replay = services.idempotency.get_response(scope, idempotency_key)
+    if replay is not None:
+        return idempotency_key, replay
+    raise HTTPException(409, "request with this Idempotency-Key is still processing")
+
+
+def _release_idempotency(
+    identity: current_user.CurrentUser,
+    assistant_id: str,
+    idempotency_key: str | None,
+) -> None:
+    if idempotency_key:
+        runtime.get_runtime().idempotency.delete(
+            _runtime_scope(identity, assistant_id),
+            idempotency_key,
         )
-    except RuntimeError as exc:
-        raise HTTPException(502, str(exc)) from exc
-    _persist_agent_result(context["conversation_id"], result)
-    return _agent_response(context["conversation_id"], context["model"], result)
 
 
-def _sse(event: str, payload: dict[str, Any]) -> str:
+def _conversation_lock(
+    identity: current_user.CurrentUser,
+    assistant_id: str,
+    conversation_id: str | None,
+) -> runtime.ConversationLock:
+    suffix = conversation_id or "new"
+    return runtime.get_runtime().conversation_lock(
+        f"{identity.workspace_id}:{identity.user_id}:{assistant_id}:{suffix}",
+        blocking_timeout=0,
+    )
+
+
+def _admit_agent(
+    identity: current_user.CurrentUser,
+    assistant_id: str,
+) -> tuple[runtime.RuntimeServices, str]:
+    services = runtime.get_runtime()
+    user_key = f"{identity.workspace_id}:{identity.user_id}"
+    allowed, _count = services.rate_limits.allow(
+        user_key,
+        limit=config.USER_RATE_LIMIT_PER_MINUTE,
+        window_seconds=60,
+    )
+    if not allowed:
+        raise HTTPException(429, "user request rate limit exceeded")
+    agent_key = f"{user_key}:{assistant_id}"
+    if not services.agent_concurrency.acquire(
+        agent_key,
+        limit=config.AGENT_CONCURRENCY_LIMIT,
+        lease_seconds=config.AGENT_LEASE_SECONDS,
+    ):
+        raise HTTPException(429, "agent concurrency limit exceeded")
+    return services, agent_key
+
+
+@router.post("/{assistant_id}/agent-chat")
+def assistant_agent_chat(
+    assistant_id: str,
+    body: AgentChatRequest,
+    request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """Persistent Agent chat using native model tool calls."""
+    identity = _request_current_user(request)
+    idempotency_key, replay = _claim_idempotency(request, identity, assistant_id)
+    if replay is not None:
+        return replay
+    services, agent_key = _admit_agent(identity, assistant_id)
+    lock = _conversation_lock(identity, assistant_id, body.conversation_id)
+    try:
+        with lock:
+            context = _prepare_agent_context(
+                assistant_id,
+                body,
+                identity=identity,
+            )
+            try:
+                result = chat_agent.run_chat_agent(
+                    assistant_id=assistant_id,
+                    messages=chat_sessions.load_messages(context["conversation_id"]),
+                    file_ids=context["file_ids"],
+                    retrieval_config=context["retrieval_config"],
+                    model=context["model"],
+                    temperature=context["temperature"],
+                    workspace_id=context["workspace_id"],
+                )
+            except RuntimeError as exc:
+                raise HTTPException(502, str(exc)) from exc
+            _persist_agent_result(context["conversation_id"], result)
+            response = _agent_response(context["conversation_id"], context["model"], result)
+    except runtime.ConversationBusy as exc:
+        services.agent_concurrency.release(agent_key)
+        _release_idempotency(identity, assistant_id, idempotency_key)
+        raise HTTPException(409, str(exc)) from exc
+    except Exception:
+        services.agent_concurrency.release(agent_key)
+        _release_idempotency(identity, assistant_id, idempotency_key)
+        raise
+    services.agent_concurrency.release(agent_key)
+    if idempotency_key:
+        runtime.get_runtime().idempotency.save_response(
+            _runtime_scope(identity, assistant_id),
+            idempotency_key,
+            response,
+        )
+    return response
+
+
+def _sse(event: str, payload: dict[str, Any], event_id: str | None = None) -> str:
+    event_id_line = f"id: {event_id}\n" if event_id else ""
     return (
+        event_id_line +
         f"event: {event}\n"
         f"data: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
     )
 
 
+@router.get("/{assistant_id}/conversations/{conversation_id}/events/stream")
+def replay_agent_events(
+    assistant_id: str,
+    conversation_id: str,
+    request: Request = None,  # type: ignore[assignment]
+) -> StreamingResponse:
+    """Replay durable SSE events after a client reconnects."""
+    _assistant_row(assistant_id)
+    identity = _request_current_user(request)
+    conversation = chat_sessions.get_conversation(
+        conversation_id,
+        workspace_id=identity.workspace_id,
+        user_id=identity.user_id,
+    )
+    if not conversation or conversation["assistant_id"] != assistant_id:
+        raise HTTPException(404, "conversation not found")
+    last_event_id = (
+        str(request.headers.get("Last-Event-ID") or "0-0")
+        if request else "0-0"
+    )
+    items = runtime.get_runtime().events.read_since(
+        _stream_name(identity, conversation_id),
+        last_event_id,
+    )
+
+    def body_iter():
+        for item in items:
+            event = item.get("payload") or {}
+            event_name = str(event.get("event") or "agent")
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                payload = {}
+            yield _sse(event_name, payload, str(item["id"]))
+        yield _sse("done", {})
+
+    return StreamingResponse(
+        body_iter(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("/{assistant_id}/agent-chat/stream")
-def assistant_agent_chat_stream(assistant_id: str, body: AgentChatRequest) -> StreamingResponse:
+def assistant_agent_chat_stream(
+    assistant_id: str,
+    body: AgentChatRequest,
+    request: Request = None,  # type: ignore[assignment]
+) -> StreamingResponse:
     """Stream Agent lifecycle events while keeping the final result durable."""
-    context = _prepare_agent_context(assistant_id, body)
+    identity = _request_current_user(request)
+    idempotency_key, replay = _claim_idempotency(request, identity, assistant_id)
+    if replay is not None:
+        def replay_iter():
+            yield _sse("replayed", replay)
+            yield _sse("final", replay)
+            yield _sse("done", {})
+        return StreamingResponse(replay_iter(), media_type="text/event-stream")
+
+    services, agent_key = _admit_agent(identity, assistant_id)
+    lock = _conversation_lock(identity, assistant_id, body.conversation_id)
+    try:
+        if not lock.acquire():
+            raise runtime.ConversationBusy("conversation is already being processed")
+        context = _prepare_agent_context(
+            assistant_id,
+            body,
+            identity=identity,
+        )
+    except runtime.ConversationBusy as exc:
+        services.agent_concurrency.release(agent_key)
+        _release_idempotency(identity, assistant_id, idempotency_key)
+        raise HTTPException(409, str(exc)) from exc
+    except Exception:
+        services.agent_concurrency.release(agent_key)
+        lock.release()
+        _release_idempotency(identity, assistant_id, idempotency_key)
+        raise
+
+    stream_name = _stream_name(identity, context["conversation_id"])
     events: queue.Queue[dict[str, Any] | None] = queue.Queue()
+
+    def publish(kind: str, payload: dict[str, Any]) -> None:
+        event_id = runtime.get_runtime().events.append(
+            stream_name,
+            {"event": kind, "payload": payload},
+        )
+        events.put({"kind": kind, "payload": payload, "id": event_id})
+
+    publish("conversation", {"conversation_id": context["conversation_id"]})
 
     def worker() -> None:
         try:
@@ -884,35 +1195,39 @@ def assistant_agent_chat_stream(assistant_id: str, body: AgentChatRequest) -> St
                 retrieval_config=context["retrieval_config"],
                 model=context["model"],
                 temperature=context["temperature"],
-                event_sink=lambda event: events.put({"kind": "agent", "payload": event}),
+                workspace_id=context["workspace_id"],
+                event_sink=lambda event: publish("agent", event),
                 stream_tokens=True,
             )
             _persist_agent_result(context["conversation_id"], result)
-            events.put({
-                "kind": "final",
-                "payload": _agent_response(
-                    context["conversation_id"],
-                    context["model"],
-                    result,
-                ),
-            })
+            final_response = _agent_response(
+                context["conversation_id"],
+                context["model"],
+                result,
+            )
+            if idempotency_key:
+                runtime.get_runtime().idempotency.save_response(
+                    _runtime_scope(identity, assistant_id),
+                    idempotency_key,
+                    final_response,
+                )
+            publish("final", final_response)
         except Exception as exc:
-            events.put({
-                "kind": "error",
-                "payload": {"error_type": type(exc).__name__, "error": str(exc)},
-            })
+            publish("error", {"error_type": type(exc).__name__, "error": str(exc)})
+            _release_idempotency(identity, assistant_id, idempotency_key)
         finally:
+            services.agent_concurrency.release(agent_key)
+            lock.release()
             events.put(None)
 
     threading.Thread(target=worker, name="agent-chat-stream", daemon=True).start()
 
     def body_iter():
-        yield _sse("conversation", {"conversation_id": context["conversation_id"]})
         while True:
             item = events.get()
             if item is None:
                 break
-            yield _sse(str(item["kind"]), item["payload"])
+            yield _sse(str(item["kind"]), item["payload"], str(item["id"]))
         yield _sse("done", {})
 
     return StreamingResponse(

@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from .. import db, embeddings
+from .. import current_user, db, embeddings
 from .. import jobs as job_service
 
 router = APIRouter(prefix="/embeddings", tags=["embeddings"])
@@ -14,12 +14,14 @@ router = APIRouter(prefix="/embeddings", tags=["embeddings"])
 @router.get("/status")
 def embeddings_status() -> dict[str, Any]:
     approved = db.get_conn().execute(
-        "SELECT COUNT(*) FROM chunks WHERE status='approved'"
+        "SELECT COUNT(*) FROM chunks WHERE status='approved' AND workspace_id=?",
+        (current_user.get_current_user().workspace_id,),
     ).fetchone()[0]
     pending = len(
         embeddings.pending_documents(
             model=embeddings.DEFAULT_MODEL,
             dimension=embeddings.DEFAULT_DIMENSION,
+            workspace_id=current_user.get_current_user().workspace_id,
         )
     )
     latest = job_service.list_jobs(type_="embed", limit=1)

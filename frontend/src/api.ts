@@ -65,6 +65,7 @@ export interface AgentChatResponse {
 export interface AgentStreamEvent {
   event: string
   data: Record<string, unknown>
+  id?: string
 }
 
 export interface CSFile {
@@ -634,7 +635,10 @@ export const api = {
     body: {
       query: string
       top_k: number
-      similarity_threshold: number
+      dense_threshold?: number
+      rerank_threshold?: number
+      /** @deprecated Use dense_threshold / rerank_threshold. */
+      similarity_threshold?: number
       route_top_k?: number
       candidates_per_type?: number
       rrf_k?: number
@@ -791,7 +795,8 @@ export const api = {
         hit_count: number
         scoped_file_count: number
         top_k: number
-        similarity_threshold: number
+        dense_threshold: number
+        rerank_threshold: number
         degraded: string[]
       }
     }>),
@@ -817,10 +822,17 @@ export const api = {
   streamAgentChatAssistant: async function* (
     id: string,
     body: { message: string; conversation_id?: string },
+    options: { idempotencyKey?: string; lastEventId?: string } = {},
   ): AsyncGenerator<AgentStreamEvent> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    }
+    if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey
+    if (options.lastEventId) headers['Last-Event-ID'] = options.lastEventId
     const response = await fetch(`${API}/assistants/${id}/agent-chat/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      headers,
       body: JSON.stringify(body),
     })
     if (!response.ok) {
@@ -838,6 +850,7 @@ export const api = {
       buffer = blocks.pop() || ''
       for (const block of blocks) {
         const eventLine = block.split('\n').find(line => line.startsWith('event:'))
+        const idLine = block.split('\n').find(line => line.startsWith('id:'))
         const dataLine = block.split('\n').find(line => line.startsWith('data:'))
         if (!dataLine) continue
         let data: Record<string, unknown>
@@ -847,7 +860,11 @@ export const api = {
         } catch {
           continue
         }
-        yield { event: eventLine?.slice(6).trim() || 'message', data }
+        yield {
+          event: eventLine?.slice(6).trim() || 'message',
+          id: idLine?.slice(3).trim() || undefined,
+          data,
+        }
       }
       if (done) break
     }

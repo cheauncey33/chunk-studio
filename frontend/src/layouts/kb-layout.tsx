@@ -2,7 +2,6 @@ import { NavLink, Outlet, useParams } from 'react-router-dom'
 import {
   Bot,
   FolderOpen,
-  MessageSquare,
   Settings,
   TextSearch,
   Workflow,
@@ -15,7 +14,6 @@ import { cn, formatDate } from '@/lib/utils'
 const ITEMS = [
   { to: 'files', label: '文件概览', icon: FolderOpen, help: helpText.kbNav.files },
   { to: 'retrieval', label: '检索测试', icon: TextSearch, help: helpText.kbNav.retrieval },
-  { to: 'chat', label: '智能问答', icon: MessageSquare, help: helpText.kbNav.chat },
   { to: 'workflow', label: '审查配置', icon: Workflow, help: helpText.kbNav.workflow },
   { to: 'settings', label: '知识库设置', icon: Settings, help: helpText.kbNav.settings },
 ] as const
@@ -69,7 +67,7 @@ export function KnowledgeLayout() {
           </ul>
           <p className="mt-4 hidden px-3 text-[12px] leading-relaxed text-text-secondary md:block">
             <Bot className="mr-1 inline size-3.5 align-text-bottom" />
-            智能问答与审查配置属于本库；通用模板在系统设置。
+            智能问答已移动到顶部主导航；审查配置仍属于本库。
           </p>
         </nav>
       </aside>

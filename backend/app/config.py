@@ -36,8 +36,144 @@ PAGECACHE_DIR = DATA_DIR / "pagecache"
 PARSES_DIR = DATA_DIR / "parses"
 DB_PATH = DATA_DIR / "chunkstudio.db"
 
+# --- Deployable service backends ---
+# SQLite/local files remain the default so existing checkouts keep working.
+# Production deployments opt in explicitly to PostgreSQL/pgvector, Redis and
+# object storage; these values are configuration boundaries, not connection
+# side effects during module import.
+DATABASE_BACKEND = os.environ.get(
+    "CHUNK_STUDIO_DATABASE_BACKEND",
+    os.environ.get("DATABASE_BACKEND", "sqlite"),
+).strip().casefold() or "sqlite"
+DATABASE_URL = (
+    os.environ.get("CHUNK_STUDIO_DATABASE_URL")
+    or os.environ.get("DATABASE_URL")
+    or ""
+).strip()
+VECTOR_BACKEND = os.environ.get(
+    "CHUNK_STUDIO_VECTOR_BACKEND",
+    os.environ.get(
+        "VECTOR_BACKEND",
+        "pgvector" if DATABASE_BACKEND in {"postgres", "postgresql"} else "sqlite",
+    ),
+).strip().casefold() or "sqlite"
+REDIS_URL = (
+    os.environ.get("CHUNK_STUDIO_REDIS_URL")
+    or os.environ.get("REDIS_URL")
+    or ""
+).strip()
+OBJECT_STORAGE_BACKEND = os.environ.get(
+    "CHUNK_STUDIO_OBJECT_STORAGE_BACKEND",
+    os.environ.get("OBJECT_STORAGE_BACKEND", "local"),
+).strip().casefold() or "local"
+OBJECT_STORAGE_BUCKET = (
+    os.environ.get("CHUNK_STUDIO_OBJECT_STORAGE_BUCKET")
+    or os.environ.get("OBJECT_STORAGE_BUCKET")
+    or ""
+).strip()
+OBJECT_STORAGE_ENDPOINT_URL = (
+    os.environ.get("CHUNK_STUDIO_OBJECT_STORAGE_ENDPOINT_URL")
+    or os.environ.get("OBJECT_STORAGE_ENDPOINT_URL")
+    or ""
+).strip()
+OBJECT_STORAGE_REGION = (
+    os.environ.get("CHUNK_STUDIO_OBJECT_STORAGE_REGION")
+    or os.environ.get("OBJECT_STORAGE_REGION")
+    or "us-east-1"
+).strip()
+OBJECT_STORAGE_ACCESS_KEY = (
+    os.environ.get("CHUNK_STUDIO_OBJECT_STORAGE_ACCESS_KEY")
+    or os.environ.get("OBJECT_STORAGE_ACCESS_KEY")
+    or ""
+).strip()
+OBJECT_STORAGE_SECRET_KEY = (
+    os.environ.get("CHUNK_STUDIO_OBJECT_STORAGE_SECRET_KEY")
+    or os.environ.get("OBJECT_STORAGE_SECRET_KEY")
+    or ""
+).strip()
+
+# The local mode supplies one explicit current-user identity for development. A deployed
+# service must switch to an upstream-authenticated mode before it can use
+# workspace-aware repositories (the actual OIDC/JWT adapter is a later slice).
+AUTH_MODE = os.environ.get(
+    "CHUNK_STUDIO_AUTH_MODE",
+    os.environ.get("AUTH_MODE", "dev"),
+).strip().casefold() or "dev"
+TRUST_PROXY_AUTH = os.environ.get(
+    "CHUNK_STUDIO_TRUST_PROXY_AUTH",
+    os.environ.get("TRUST_PROXY_AUTH", "0"),
+).strip().casefold() in {"1", "true", "yes", "on"}
+DEFAULT_WORKSPACE_ID = (
+    os.environ.get("CHUNK_STUDIO_DEFAULT_WORKSPACE_ID")
+    or os.environ.get("DEFAULT_WORKSPACE_ID")
+    # Backward-compatible reads for local .env files created during the first
+    # multi-user slice. New configuration should use workspace_id terminology.
+    or os.environ.get("CHUNK_STUDIO_DEFAULT_TENANT_ID")
+    or os.environ.get("DEFAULT_TENANT_ID")
+    or "local-workspace"
+).strip() or "local-workspace"
+DEFAULT_USER_ID = (
+    os.environ.get("CHUNK_STUDIO_DEFAULT_USER_ID")
+    or os.environ.get("DEFAULT_USER_ID")
+    or "local-user"
+).strip() or "local-user"
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, str(default))))
+    except ValueError:
+        return default
+
+
+USER_RATE_LIMIT_PER_MINUTE = _positive_int_env(
+    "CHUNK_STUDIO_USER_RATE_LIMIT_PER_MINUTE",
+    60,
+)
+AGENT_CONCURRENCY_LIMIT = _positive_int_env(
+    "CHUNK_STUDIO_AGENT_CONCURRENCY_LIMIT",
+    2,
+)
+AGENT_LEASE_SECONDS = _positive_int_env(
+    "CHUNK_STUDIO_AGENT_LEASE_SECONDS",
+    300,
+)
+RUN_IN_PROCESS_WORKER = os.environ.get(
+    "CHUNK_STUDIO_RUN_IN_PROCESS_WORKER",
+    "1",
+).strip().casefold() in {"1", "true", "yes", "on"}
+
 HOST = "127.0.0.1"
 PORT = 8000
+
+
+def validate_deployment_config() -> None:
+    """Reject unsafe/incomplete production backend combinations early."""
+    if DATABASE_BACKEND in {"postgres", "postgresql"} and not DATABASE_URL:
+        raise RuntimeError(
+            "DATABASE_URL is required when CHUNK_STUDIO_DATABASE_BACKEND=postgres"
+        )
+    if VECTOR_BACKEND in {"pgvector", "postgres", "postgresql"} and not DATABASE_URL:
+        raise RuntimeError(
+            "DATABASE_URL is required when CHUNK_STUDIO_VECTOR_BACKEND=pgvector"
+        )
+    if AUTH_MODE in {"trusted_proxy", "proxy"} and not TRUST_PROXY_AUTH:
+        raise RuntimeError(
+            "TRUST_PROXY_AUTH must be enabled for trusted_proxy authentication"
+        )
+
+
+def deployment_config() -> dict[str, str | bool]:
+    """Return non-secret backend choices for health checks and diagnostics."""
+    return {
+        "database_backend": DATABASE_BACKEND,
+        "vector_backend": VECTOR_BACKEND,
+        "redis_configured": bool(REDIS_URL),
+        "object_storage_backend": OBJECT_STORAGE_BACKEND,
+        "object_storage_configured": bool(OBJECT_STORAGE_BUCKET),
+        "auth_mode": AUTH_MODE,
+        "in_process_worker": RUN_IN_PROCESS_WORKER,
+    }
 
 
 def ensure_dirs() -> None:

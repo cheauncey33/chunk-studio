@@ -14,12 +14,16 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from .. import chunk_schema, config, db, extractors, pdf
+from .. import chunk_schema, config, current_user, db, extractors, pdf
 from ..adapters.ocr import _repair_mojibake
 from ..models import AutoImageChunkRequest, AutoSectionChunkRequest, AutoTableChunkRequest
 from .chunks import _row_to_out
 
 router = APIRouter(prefix="/auto-chunks", tags=["auto-chunks"])
+
+
+def _workspace_id() -> str:
+    return current_user.get_current_user().workspace_id
 
 _TABLE_TITLE_RE = re.compile(r"^表\s*0*((?:[A-Za-z]\s*\.\s*)?\d+)\s*(.+)?")
 _TABLE_REF_RE = re.compile(r"表\s*0*(\d+)(?:\s*[～~\-—至]\s*表?\s*0*(\d+))?")
@@ -249,7 +253,10 @@ async def auto_section_chunks(file_id: str, body: AutoSectionChunkRequest):
 
 
 def _get_file(file_id: str) -> dict[str, Any]:
-    row = db.get_conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
+    row = db.get_conn().execute(
+        "SELECT * FROM files WHERE id=? AND workspace_id=?",
+        (file_id, _workspace_id()),
+    ).fetchone()
     if not row:
         raise HTTPException(404, "file not found")
     return dict(row)
@@ -258,16 +265,16 @@ def _get_file(file_id: str) -> dict[str, Any]:
 def _select_parse(file_id: str, parse_id: str | None) -> dict[str, Any]:
     if parse_id:
         row = db.get_conn().execute(
-            "SELECT * FROM document_parses WHERE id=? AND file_id=?",
-            (parse_id, file_id),
+            "SELECT * FROM document_parses WHERE id=? AND file_id=? AND workspace_id=?",
+            (parse_id, file_id, _workspace_id()),
         ).fetchone()
     else:
         row = db.get_conn().execute(
             """SELECT * FROM document_parses
-               WHERE file_id=? AND status='done' AND raw_zip_path IS NOT NULL
+               WHERE file_id=? AND workspace_id=? AND status='done' AND raw_zip_path IS NOT NULL
                ORDER BY updated_at DESC, created_at DESC
                LIMIT 1""",
-            (file_id,),
+            (file_id, _workspace_id()),
         ).fetchone()
     if not row:
         raise HTTPException(404, "MinerU parse result not found for this file")
@@ -874,12 +881,13 @@ async def _create_section_chunk(f: dict[str, Any], candidate: SectionCandidate):
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO chunks
-               (id, file_id, page, bbox, rotation, crop_path, text, text_source,
+               (id, workspace_id, file_id, page, bbox, rotation, crop_path, text, text_source,
                 metadata, business_metadata, metadata_llm, source_trace, chunk_logic, relations,
                 status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cid,
+                _workspace_id(),
                 f["id"],
                 candidate.page,
                 json.dumps(candidate.bbox),
@@ -898,7 +906,10 @@ async def _create_section_chunk(f: dict[str, Any], candidate: SectionCandidate):
                 now,
             ),
         )
-    row = db.get_conn().execute("SELECT * FROM chunks WHERE id=?", (cid,)).fetchone()
+    row = db.get_conn().execute(
+        "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
+        (cid, _workspace_id()),
+    ).fetchone()
     return _row_to_out(row)
 
 
@@ -959,12 +970,13 @@ async def _create_image_chunk(f: dict[str, Any], candidate: ImageCandidate):
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO chunks
-               (id, file_id, page, bbox, rotation, crop_path, text, text_source,
+               (id, workspace_id, file_id, page, bbox, rotation, crop_path, text, text_source,
                 metadata, business_metadata, metadata_llm, source_trace, chunk_logic, relations,
                 status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cid,
+                _workspace_id(),
                 f["id"],
                 candidate.page,
                 json.dumps(candidate.bbox),
@@ -983,7 +995,10 @@ async def _create_image_chunk(f: dict[str, Any], candidate: ImageCandidate):
                 now,
             ),
         )
-    row = db.get_conn().execute("SELECT * FROM chunks WHERE id=?", (cid,)).fetchone()
+    row = db.get_conn().execute(
+        "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
+        (cid, _workspace_id()),
+    ).fetchone()
     return _row_to_out(row)
 
 
@@ -1422,12 +1437,13 @@ async def _create_chunk_from_candidate(
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO chunks
-               (id, file_id, page, bbox, rotation, crop_path, text, text_source,
+               (id, workspace_id, file_id, page, bbox, rotation, crop_path, text, text_source,
                 metadata, business_metadata, metadata_llm, source_trace, chunk_logic, relations,
                 status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cid,
+                _workspace_id(),
                 f["id"],
                 candidate.page,
                 json.dumps(candidate.bbox),
@@ -1446,7 +1462,10 @@ async def _create_chunk_from_candidate(
                 now,
             ),
         )
-    row = db.get_conn().execute("SELECT * FROM chunks WHERE id=?", (cid,)).fetchone()
+    row = db.get_conn().execute(
+        "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
+        (cid, _workspace_id()),
+    ).fetchone()
     return _row_to_out(row)
 
 
@@ -1457,8 +1476,8 @@ def _existing_similar_chunk(file_id: str, page: int, text: str) -> bool:
         return False
 
     rows = db.get_conn().execute(
-        "SELECT text FROM chunks WHERE file_id=? AND page=?",
-        (file_id, page),
+        "SELECT text FROM chunks WHERE file_id=? AND page=? AND workspace_id=?",
+        (file_id, page, _workspace_id()),
     ).fetchall()
     for row in rows:
         existing = _normalize_for_dedupe(row["text"] or "")

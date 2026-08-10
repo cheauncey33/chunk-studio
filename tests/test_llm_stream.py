@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from app import llm
 
 
@@ -45,3 +47,30 @@ def test_chat_tools_stream_aggregates_tokens_and_tool_call_deltas(monkeypatch) -
     assert any(event["type"] == "token" for event in events)
     assert any(event["type"] == "tool_call_delta" for event in events)
     assert captured["json"]["stream"] is True
+
+
+def test_chat_tools_stream_reads_provider_error_body_before_accessing_text(monkeypatch) -> None:
+    monkeypatch.setattr(llm, "resolve_config", lambda **kwargs: {
+        "api_key": "key",
+        "base_url": "https://example.test/v1",
+        "model": "model-a",
+    })
+
+    class FakeStream:
+        def __enter__(self):
+            return SimpleNamespace(
+                status_code=400,
+                text='{"error":{"message":"invalid conversation"}}',
+                read=lambda: b'{"error":{"message":"invalid conversation"}}',
+            )
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(llm.httpx, "stream", lambda **kwargs: FakeStream())
+
+    with pytest.raises(RuntimeError, match="invalid conversation"):
+        llm.chat_tools_stream(
+            [{"role": "user", "content": "question"}],
+            [{"type": "function", "function": {"name": "search", "parameters": {"type": "object"}}}],
+        )
