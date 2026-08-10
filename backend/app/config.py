@@ -91,6 +91,14 @@ OBJECT_STORAGE_SECRET_KEY = (
     or os.environ.get("OBJECT_STORAGE_SECRET_KEY")
     or ""
 ).strip()
+# The first PostgreSQL content slice is read-only by design.  Keep writes on
+# SQLite until the corresponding repository methods and dual-backend diff
+# checks are in place; enabling this flag therefore cannot silently create a
+# split-brain write path.
+CONTENT_READ_BACKEND = os.environ.get(
+    "CHUNK_STUDIO_CONTENT_READ_BACKEND",
+    os.environ.get("CONTENT_READ_BACKEND", "sqlite"),
+).strip().casefold() or "sqlite"
 
 # The local mode supplies one explicit current-user identity for development. A deployed
 # service must switch to an upstream-authenticated mode before it can use
@@ -157,6 +165,10 @@ def validate_deployment_config() -> None:
         raise RuntimeError(
             "DATABASE_URL is required when CHUNK_STUDIO_VECTOR_BACKEND=pgvector"
         )
+    if CONTENT_READ_BACKEND in {"postgres", "postgresql"} and not DATABASE_URL:
+        raise RuntimeError(
+            "DATABASE_URL is required when CHUNK_STUDIO_CONTENT_READ_BACKEND=postgres"
+        )
     if AUTH_MODE in {"trusted_proxy", "proxy"} and not TRUST_PROXY_AUTH:
         raise RuntimeError(
             "TRUST_PROXY_AUTH must be enabled for trusted_proxy authentication"
@@ -171,6 +183,7 @@ def deployment_config() -> dict[str, str | bool]:
         "redis_configured": bool(REDIS_URL),
         "object_storage_backend": OBJECT_STORAGE_BACKEND,
         "object_storage_configured": bool(OBJECT_STORAGE_BUCKET),
+        "content_read_backend": CONTENT_READ_BACKEND,
         "auth_mode": AUTH_MODE,
         "in_process_worker": RUN_IN_PROCESS_WORKER,
     }

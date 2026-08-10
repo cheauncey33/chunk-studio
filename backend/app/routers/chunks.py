@@ -8,9 +8,12 @@ import time
 import uuid
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 
 from .. import chunk_schema, config, current_user, db, extractors, jobs, pdf
 from ..models import BBox, ChunkCreate, ChunkOut, ChunkUpdate
+from ..storage.object_store import get_object_store
+from ..storage.repositories import get_content_repository
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +106,12 @@ def list_chunks(
     page: int | None = None,
     has_llm_suggestions: bool = False,
 ):
+    repository = get_content_repository()
+    if repository is not None:
+        return [
+            _row_to_out(row)
+            for row in repository.list_chunks(file_id=file_id, page=page)
+        ]
     sql = "SELECT * FROM chunks"
     args: list = [_workspace_id()]
     clauses = ["workspace_id=?"]
@@ -129,6 +138,33 @@ def list_chunks(
 @router.get("/{chunk_id}")
 def get_chunk(chunk_id: str):
     return _get_chunk(chunk_id)
+
+
+@router.get("/{chunk_id}/crop")
+def get_chunk_crop(chunk_id: str):
+    """Serve a crop from shared object storage, with local rollback fallback."""
+    repository = get_content_repository()
+    row = repository.get_chunk(chunk_id) if repository is not None else None
+    if row is None:
+        row = db.get_conn().execute(
+            "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
+            (chunk_id, _workspace_id()),
+        ).fetchone()
+        row = dict(row) if row else None
+    if not row:
+        raise HTTPException(404, "chunk not found")
+    object_key = str(row.get("crop_object_key") or "").strip()
+    if object_key:
+        try:
+            return Response(get_object_store().get_bytes(object_key), media_type="image/png")
+        except Exception as exc:
+            raise HTTPException(404, "crop object missing") from exc
+    crop_path = str(row.get("crop_path") or "").strip()
+    if crop_path:
+        path = config.from_rel(crop_path)
+        if path.is_file():
+            return Response(path.read_bytes(), media_type="image/png")
+    raise HTTPException(404, "crop image missing")
 
 
 @router.patch("/{chunk_id}")
@@ -281,6 +317,12 @@ def _review_sensitive_change(current: dict, body: ChunkUpdate) -> bool:
 
 
 def _get_chunk(cid: str) -> ChunkOut:
+    repository = get_content_repository()
+    if repository is not None:
+        row = repository.get_chunk(cid)
+        if not row:
+            raise HTTPException(404, "chunk not found")
+        return _row_to_out(row)
     row = db.get_conn().execute(
         "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
         (cid, _workspace_id()),
@@ -292,8 +334,12 @@ def _get_chunk(cid: str) -> ChunkOut:
 
 def _row_to_out(r) -> ChunkOut:
     d = dict(r)
-    bbox = json.loads(d["bbox"])
-    crop_url = f"/crops/{d['crop_path'].split('/')[-1]}" if d.get("crop_path") else None
+    bbox = d["bbox"] if isinstance(d["bbox"], dict) else json.loads(d["bbox"])
+    crop_url = (
+        f"/api/chunks/{d['id']}/crop"
+        if d.get("crop_object_key")
+        else (f"/crops/{d['crop_path'].split('/')[-1]}" if d.get("crop_path") else None)
+    )
     ocr_job = jobs.latest_job_for_target(d["id"], "ocr")
     layers = chunk_schema.ensure_layered_chunk(
         metadata=d.get("metadata"),

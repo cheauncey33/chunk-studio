@@ -53,6 +53,48 @@ class JobRepository(Protocol):
     def mark_failed(self, job_id: str, error: str, *, retry_delay_seconds: int = 30) -> None: ...
 
 
+class ContentRepository(Protocol):
+    """Read-side contract for the first business-content migration slice."""
+
+    def list_knowledge_bases(self, *, limit: int = 100) -> list[dict[str, Any]]: ...
+
+    def get_knowledge_base(self, knowledge_base_id: str) -> dict[str, Any] | None: ...
+
+    def list_files(self, *, limit: int = 500) -> list[dict[str, Any]]: ...
+
+    def get_file(self, file_id: str) -> dict[str, Any] | None: ...
+
+    def latest_parse(self, file_id: str) -> dict[str, Any] | None: ...
+
+    def list_file_parses(self, file_id: str, *, limit: int = 100) -> list[dict[str, Any]]: ...
+
+    def list_knowledge_base_files(
+        self,
+        knowledge_base_id: str,
+        *,
+        file_id: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]: ...
+
+    def list_knowledge_base_chunks(
+        self,
+        knowledge_base_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]: ...
+
+    def list_chunks(
+        self,
+        *,
+        file_id: str | None = None,
+        page: int | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]: ...
+
+    def get_chunk(self, chunk_id: str) -> dict[str, Any] | None: ...
+
+
 def _decode(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -571,6 +613,307 @@ class PostgresJobRepository:
             )
 
 
+@dataclass(frozen=True)
+class PostgresContentRepository:
+    """Workspace-scoped read adapter for migrated business content."""
+
+    dsn: str
+
+    def _connect(self):
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "PostgreSQL content reads require the optional psycopg dependency"
+            ) from exc
+        return psycopg.connect(self.dsn, row_factory=dict_row)
+
+    @staticmethod
+    def _scope(workspace_id: str | None = None) -> str:
+        value = str(workspace_id or current_user.get_current_user().workspace_id).strip()
+        if not value:
+            raise ValueError("workspace identity is required")
+        return value
+
+    def list_knowledge_bases(
+        self,
+        *,
+        limit: int = 100,
+        workspace_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        workspace = self._scope(workspace_id)
+        bounded_limit = max(1, min(int(limit), 500))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT kb.*, nf.name AS default_naming_file_name,
+                          (
+                            SELECT akb.assistant_id
+                            FROM assistant_knowledge_bases akb
+                            WHERE akb.knowledge_base_id=kb.id
+                              AND akb.workspace_id=kb.workspace_id AND akb.enabled
+                            ORDER BY akb.priority ASC, akb.assistant_id ASC
+                            LIMIT 1
+                          ) AS assistant_id,
+                          COUNT(DISTINCT kbf.file_id) FILTER (WHERE kbf.enabled) AS file_count,
+                          COUNT(DISTINCT c.id) FILTER (WHERE kbf.enabled) AS chunk_count
+                   FROM knowledge_bases kb
+                   LEFT JOIN files nf
+                     ON nf.id=kb.default_naming_file_id AND nf.workspace_id=kb.workspace_id
+                   LEFT JOIN knowledge_base_files kbf
+                     ON kbf.knowledge_base_id=kb.id AND kbf.workspace_id=kb.workspace_id
+                   LEFT JOIN chunks c
+                     ON c.file_id=kbf.file_id AND c.workspace_id=kb.workspace_id
+                   WHERE kb.status <> 'archived' AND kb.workspace_id=%s
+                   GROUP BY kb.id, nf.name
+                   ORDER BY kb.is_default DESC, kb.updated_at DESC, kb.name
+                   LIMIT %s""",
+                (workspace, bounded_limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_knowledge_base(
+        self,
+        knowledge_base_id: str,
+        *,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        workspace = self._scope(workspace_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT kb.*, nf.name AS default_naming_file_name,
+                          (
+                            SELECT akb.assistant_id
+                            FROM assistant_knowledge_bases akb
+                            WHERE akb.knowledge_base_id=kb.id
+                              AND akb.workspace_id=kb.workspace_id AND akb.enabled
+                            ORDER BY akb.priority ASC, akb.assistant_id ASC
+                            LIMIT 1
+                          ) AS assistant_id,
+                          COUNT(DISTINCT kbf.file_id) FILTER (WHERE kbf.enabled) AS file_count,
+                          COUNT(DISTINCT c.id) FILTER (WHERE kbf.enabled) AS chunk_count
+                   FROM knowledge_bases kb
+                   LEFT JOIN files nf
+                     ON nf.id=kb.default_naming_file_id AND nf.workspace_id=kb.workspace_id
+                   LEFT JOIN knowledge_base_files kbf
+                     ON kbf.knowledge_base_id=kb.id AND kbf.workspace_id=kb.workspace_id
+                   LEFT JOIN chunks c
+                     ON c.file_id=kbf.file_id AND c.workspace_id=kb.workspace_id
+                   WHERE kb.id=%s AND kb.workspace_id=%s
+                   GROUP BY kb.id, nf.name""",
+                (knowledge_base_id, workspace),
+            ).fetchone()
+        return dict(row) if row else None
+
+    @staticmethod
+    def _file_select() -> str:
+        return """SELECT f.*,
+                          latest.status AS parse_status,
+                          latest.error AS parse_error,
+                          latest.markdown_path AS parse_markdown_path,
+                          latest.markdown_object_key AS parse_markdown_object_key,
+                          latest.raw_zip_path AS parse_raw_zip_path,
+                          latest.raw_zip_object_key AS parse_raw_zip_object_key,
+                          latest.result AS parse_result
+                   FROM files f
+                   LEFT JOIN LATERAL (
+                     SELECT p.status, p.error, p.markdown_path,
+                            p.markdown_object_key, p.raw_zip_path,
+                            p.raw_zip_object_key, p.result
+                     FROM document_parses p
+                     WHERE p.file_id=f.id AND p.workspace_id=f.workspace_id
+                     ORDER BY p.created_at DESC, p.id DESC
+                     LIMIT 1
+                   ) latest ON TRUE"""
+
+    def list_files(
+        self,
+        *,
+        limit: int = 500,
+        workspace_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        workspace = self._scope(workspace_id)
+        bounded_limit = max(1, min(int(limit), 1000))
+        with self._connect() as conn:
+            rows = conn.execute(
+                self._file_select()
+                + " WHERE f.workspace_id=%s ORDER BY f.created_at DESC, f.id DESC LIMIT %s",
+                (workspace, bounded_limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_file(
+        self,
+        file_id: str,
+        *,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        workspace = self._scope(workspace_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                self._file_select() + " WHERE f.id=%s AND f.workspace_id=%s",
+                (file_id, workspace),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def latest_parse(
+        self,
+        file_id: str,
+        *,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        workspace = self._scope(workspace_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT p.* FROM document_parses p
+                   WHERE p.file_id=%s AND p.workspace_id=%s
+                   ORDER BY p.created_at DESC, p.id DESC LIMIT 1""",
+                (file_id, workspace),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_file_parses(
+        self,
+        file_id: str,
+        *,
+        limit: int = 100,
+        workspace_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        workspace = self._scope(workspace_id)
+        bounded_limit = max(1, min(int(limit), 500))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT p.* FROM document_parses p
+                   WHERE p.file_id=%s AND p.workspace_id=%s
+                   ORDER BY p.created_at DESC, p.id DESC LIMIT %s""",
+                (file_id, workspace, bounded_limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_knowledge_base_files(
+        self,
+        knowledge_base_id: str,
+        *,
+        file_id: str | None = None,
+        limit: int = 500,
+        workspace_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        workspace = self._scope(workspace_id)
+        bounded_limit = max(1, min(int(limit), 1000))
+        clauses = [
+            "kbf.knowledge_base_id=%s",
+            "kbf.workspace_id=%s",
+            "f.workspace_id=%s",
+            "kb.workspace_id=%s",
+            "kb.default_naming_file_id IS DISTINCT FROM f.id",
+            "LOWER(COALESCE(f.metadata->>'doc_role', '')) NOT IN ('report', 'naming', 'sample_report')",
+            "LOWER(COALESCE(f.metadata->>'doc_type', '')) NOT IN ('report', 'naming', 'sample_report')",
+        ]
+        params: list[Any] = [knowledge_base_id, workspace, workspace, workspace]
+        if file_id:
+            clauses.append("kbf.file_id=%s")
+            params.append(file_id)
+        params.append(bounded_limit)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT f.id, f.name, f.page_count, f.metadata, f.created_at,
+                          kbf.role, kbf.corpus_kind, kbf.enabled,
+                          (SELECT count(*) FROM chunks c
+                           WHERE c.file_id=f.id AND c.workspace_id=f.workspace_id) AS chunk_count,
+                          (SELECT count(*) FROM chunks c
+                           WHERE c.file_id=f.id AND c.workspace_id=f.workspace_id
+                             AND c.status='approved') AS approved_count,
+                          latest.status AS parse_status, latest.error AS parse_error,
+                          latest.markdown_path AS parse_markdown_path,
+                          latest.markdown_object_key AS parse_markdown_object_key,
+                          latest.raw_zip_path AS parse_raw_zip_path,
+                          latest.raw_zip_object_key AS parse_raw_zip_object_key,
+                          latest.result AS parse_result
+                   FROM knowledge_base_files kbf
+                   JOIN knowledge_bases kb ON kb.id=kbf.knowledge_base_id
+                   JOIN files f ON f.id=kbf.file_id
+                   LEFT JOIN LATERAL (
+                     SELECT p.status, p.error, p.markdown_path, p.markdown_object_key,
+                            p.raw_zip_path, p.raw_zip_object_key, p.result
+                     FROM document_parses p
+                     WHERE p.file_id=f.id AND p.workspace_id=f.workspace_id
+                     ORDER BY p.created_at DESC, p.id DESC LIMIT 1
+                   ) latest ON TRUE
+                   WHERE """ + " AND ".join(clauses)
+                + " ORDER BY f.created_at DESC, f.id DESC LIMIT %s",
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_knowledge_base_chunks(
+        self,
+        knowledge_base_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        workspace_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        workspace = self._scope(workspace_id)
+        bounded_limit = max(1, min(int(limit), 200))
+        bounded_offset = max(0, int(offset))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT c.id, c.file_id, f.name AS file_name, c.page, c.text,
+                          c.status, c.business_metadata, c.source_trace, c.updated_at
+                   FROM knowledge_base_files kbf
+                   JOIN knowledge_bases kb ON kb.id=kbf.knowledge_base_id
+                   JOIN chunks c ON c.file_id=kbf.file_id
+                   JOIN files f ON f.id=c.file_id
+                   WHERE kbf.knowledge_base_id=%s AND kbf.workspace_id=%s
+                     AND kb.workspace_id=%s AND c.workspace_id=%s AND f.workspace_id=%s
+                     AND kbf.enabled
+                   ORDER BY c.updated_at DESC, c.id
+                   LIMIT %s OFFSET %s""",
+                (knowledge_base_id, workspace, workspace, workspace, workspace,
+                 bounded_limit, bounded_offset),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_chunks(
+        self,
+        *,
+        file_id: str | None = None,
+        page: int | None = None,
+        limit: int = 500,
+        workspace_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        workspace = self._scope(workspace_id)
+        clauses = ["workspace_id=%s"]
+        params: list[Any] = [workspace]
+        if file_id:
+            clauses.append("file_id=%s")
+            params.append(file_id)
+        if page is not None:
+            clauses.append("page=%s")
+            params.append(page)
+        params.append(max(1, min(int(limit), 1000)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM chunks WHERE " + " AND ".join(clauses)
+                + " ORDER BY page, created_at, id LIMIT %s",
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_chunk(
+        self,
+        chunk_id: str,
+        *,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        workspace = self._scope(workspace_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM chunks WHERE id=%s AND workspace_id=%s",
+                (chunk_id, workspace),
+            ).fetchone()
+        return dict(row) if row else None
+
 def postgres_schema_sql() -> list[str]:
     """DDL for session/job tables; deployment runs it before switching adapters."""
     return [
@@ -669,6 +1012,8 @@ def postgres_content_schema_sql() -> list[str]:
              path TEXT NOT NULL,
              sha TEXT,
              object_key TEXT NOT NULL DEFAULT '',
+             object_sha256 TEXT NOT NULL DEFAULT '',
+             object_size INTEGER NOT NULL DEFAULT 0,
              page_count INTEGER,
              metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
              created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -681,6 +1026,9 @@ def postgres_content_schema_sql() -> list[str]:
              bbox JSONB NOT NULL DEFAULT '{}'::jsonb,
              rotation INTEGER NOT NULL DEFAULT 0,
              crop_path TEXT,
+             crop_object_key TEXT NOT NULL DEFAULT '',
+             crop_sha256 TEXT NOT NULL DEFAULT '',
+             crop_size INTEGER NOT NULL DEFAULT 0,
              text TEXT,
              text_source TEXT NOT NULL DEFAULT 'pending'
                CHECK (text_source IN ('digital', 'manual', 'ocr', 'pending')),
@@ -706,7 +1054,11 @@ def postgres_content_schema_sql() -> list[str]:
              markdown_path TEXT,
              raw_zip_path TEXT,
              markdown_object_key TEXT NOT NULL DEFAULT '',
+             markdown_sha256 TEXT NOT NULL DEFAULT '',
+             markdown_size INTEGER NOT NULL DEFAULT 0,
              raw_zip_object_key TEXT NOT NULL DEFAULT '',
+             raw_zip_sha256 TEXT NOT NULL DEFAULT '',
+             raw_zip_size INTEGER NOT NULL DEFAULT 0,
              result JSONB NOT NULL DEFAULT '{}'::jsonb,
              error TEXT NOT NULL DEFAULT '',
              created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -801,6 +1153,15 @@ def postgres_content_schema_sql() -> list[str]:
              updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
              PRIMARY KEY (workspace_id, report_name, case_id)
         )""",
+        "ALTER TABLE files ADD COLUMN IF NOT EXISTS object_sha256 TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE files ADD COLUMN IF NOT EXISTS object_size INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS crop_object_key TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS crop_sha256 TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS crop_size INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE document_parses ADD COLUMN IF NOT EXISTS markdown_sha256 TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE document_parses ADD COLUMN IF NOT EXISTS markdown_size INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE document_parses ADD COLUMN IF NOT EXISTS raw_zip_sha256 TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE document_parses ADD COLUMN IF NOT EXISTS raw_zip_size INTEGER NOT NULL DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS ix_files_scope_created ON files(workspace_id, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS ix_chunks_scope_file_page ON chunks(workspace_id, file_id, page, created_at)",
         "CREATE INDEX IF NOT EXISTS ix_chunks_scope_status_updated ON chunks(workspace_id, status, updated_at DESC)",
@@ -828,4 +1189,13 @@ def get_job_repository() -> PostgresJobRepository | None:
         if not config.DATABASE_URL:
             raise RuntimeError("DATABASE_URL is required for PostgreSQL repositories")
         return PostgresJobRepository(config.DATABASE_URL)
+    return None
+
+
+def get_content_repository() -> PostgresContentRepository | None:
+    """Return the opt-in PostgreSQL read adapter for migrated content."""
+    if config.CONTENT_READ_BACKEND in {"postgres", "postgresql"}:
+        if not config.DATABASE_URL:
+            raise RuntimeError("DATABASE_URL is required for PostgreSQL content reads")
+        return PostgresContentRepository(config.DATABASE_URL)
     return None

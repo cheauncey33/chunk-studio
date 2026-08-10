@@ -1,7 +1,7 @@
 """Copy local file objects to the configured object store.
 
-The command is dry-run by default. ``--apply`` writes objects and records only
-the portable ``files.object_key``; the legacy local ``files.path`` remains as a
+The command is dry-run by default. ``--apply`` writes objects and records the
+portable key plus checksum/size; the legacy local ``files.path`` remains as a
 rollback/read-compatibility path until all consumers have switched to object
 storage.
 """
@@ -21,7 +21,8 @@ def main() -> int:
     args = parser.parse_args()
     db.init_db()
     rows = db.get_conn().execute(
-        "SELECT id, workspace_id, name, path, sha, object_key FROM files ORDER BY created_at"
+        """SELECT id, workspace_id, name, path, sha, object_key, object_sha256, object_size
+           FROM files ORDER BY created_at"""
     ).fetchall()
     store = get_object_store()
     pending: list[dict[str, Any]] = []
@@ -85,8 +86,9 @@ def main() -> int:
             continue
         with db.transaction() as conn:
             conn.execute(
-                "UPDATE files SET object_key=? WHERE id=? AND workspace_id=?",
-                (info.key, item["id"], item["workspace_id"]),
+                """UPDATE files SET object_key=?, object_sha256=?, object_size=?
+                   WHERE id=? AND workspace_id=?""",
+                (info.key, info.sha256, info.size, item["id"], item["workspace_id"]),
             )
         migrated += 1
     print(json.dumps({"migrated": migrated, "failed": failed}, ensure_ascii=False))

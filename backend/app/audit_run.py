@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import config, current_user, db
+from . import artifacts, config, current_user, db
 from .audit_policy import (
     PRODUCTION_EVIDENCE_COMPRESSION_MODE,
     PRODUCTION_RECOVERY_MODE,
@@ -35,10 +35,20 @@ def production_runtime_args() -> list[str]:
 
 
 def _latest_done_parse(file_id: str) -> dict[str, Any]:
+    from .storage.repositories import get_content_repository
+
+    repository = get_content_repository()
+    if repository is not None:
+        parse = repository.latest_parse(file_id)
+        if parse and parse.get("status") == "done" and (
+            parse.get("markdown_path") or parse.get("markdown_object_key")
+        ):
+            return parse
     row = db.get_conn().execute(
         """SELECT * FROM document_parses
-           WHERE file_id=? AND status='done' AND markdown_path IS NOT NULL
-             AND TRIM(markdown_path) != ''
+           WHERE file_id=? AND status='done'
+             AND ((markdown_path IS NOT NULL AND TRIM(markdown_path) != '')
+                  OR (markdown_object_key IS NOT NULL AND TRIM(markdown_object_key) != ''))
            ORDER BY created_at DESC LIMIT 1""",
         (file_id,),
     ).fetchone()
@@ -49,9 +59,14 @@ def _latest_done_parse(file_id: str) -> dict[str, Any]:
 
 def resolve_markdown_path(file_id: str) -> Path:
     parse = _latest_done_parse(file_id)
-    path = config.from_rel(parse["markdown_path"])
-    if not path.is_file():
-        raise ValueError(f"parse markdown missing on disk: {path}")
+    path = artifacts.materialize_artifact(
+        parse.get("markdown_path"),
+        parse.get("markdown_object_key"),
+        cache_name=f"{file_id}-{parse.get('id') or 'latest'}",
+        suffix=".md",
+    )
+    if path is None:
+        raise ValueError(f"parse markdown artifact missing: {file_id}")
     return path
 
 

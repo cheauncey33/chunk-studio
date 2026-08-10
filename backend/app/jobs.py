@@ -8,9 +8,10 @@ import time
 import uuid
 from typing import Any
 
-from . import chunk_schema, config, current_user, db, extractors
+from . import artifacts, chunk_schema, config, current_user, db, extractors
 from .adapters import ocr as ocr_adapter
 from .storage.repositories import get_job_repository
+from .storage.object_store import get_object_store
 
 logger = logging.getLogger(__name__)
 JOB_POLL_SECONDS = 1.0
@@ -746,19 +747,32 @@ async def _run_parse_job(job: dict[str, Any]) -> None:
         _fail_job(job, result.error)
         return
 
-    markdown_rel, zip_rel = _write_parse_outputs(file_id, parse_id, result.text, result.zip_bytes)
+    outputs = _write_parse_outputs(file_id, parse_id, result.text, result.zip_bytes)
+    markdown_rel = outputs["markdown_path"]
+    zip_rel = outputs["raw_zip_path"]
     parse_result = {
         "markdown_length": len(result.text),
         "has_zip": bool(result.zip_bytes),
+        "markdown_object_key": outputs["markdown_object_key"],
+        "raw_zip_object_key": outputs["raw_zip_object_key"],
     }
     with db.transaction() as conn:
         conn.execute(
             """UPDATE document_parses
-               SET status='done', markdown_path=?, raw_zip_path=?, result=?, error='', updated_at=?
+               SET status='done', markdown_path=?, raw_zip_path=?,
+                   markdown_object_key=?, markdown_sha256=?, markdown_size=?,
+                   raw_zip_object_key=?, raw_zip_sha256=?, raw_zip_size=?,
+                   result=?, error='', updated_at=?
                WHERE id=?""",
             (
                 markdown_rel,
                 zip_rel,
+                outputs["markdown_object_key"],
+                outputs["markdown_sha256"],
+                outputs["markdown_size"],
+                outputs["raw_zip_object_key"],
+                outputs["raw_zip_sha256"],
+                outputs["raw_zip_size"],
                 json.dumps(parse_result, ensure_ascii=False),
                 finished,
                 parse_id,
@@ -941,17 +955,39 @@ async def _run_assistant_init_job(job: dict[str, Any]) -> None:
 
 def _write_parse_outputs(
     file_id: str, parse_id: str, markdown: str, zip_bytes: bytes | None
-) -> tuple[str, str | None]:
+) -> dict[str, Any]:
     config.PARSES_DIR.mkdir(parents=True, exist_ok=True)
     stem = f"{file_id}_{parse_id}"
     md_path = config.PARSES_DIR / f"{stem}.md"
-    md_path.write_text(markdown, encoding="utf-8")
+    markdown_bytes = markdown.encode("utf-8")
+    md_path.write_bytes(markdown_bytes)
+    store = get_object_store()
+    workspace = workspace_id()
+    markdown_key = artifacts.parse_artifact_key(workspace, file_id, parse_id, "markdown")
+    markdown_info = store.put_bytes(
+        markdown_key,
+        markdown_bytes,
+        content_type="text/markdown; charset=utf-8",
+    )
     zip_rel = None
+    zip_key = ""
+    zip_info: Any = None
     if zip_bytes:
         zip_path = config.PARSES_DIR / f"{stem}.zip"
         zip_path.write_bytes(zip_bytes)
         zip_rel = config.to_rel(zip_path)
-    return config.to_rel(md_path), zip_rel
+        zip_key = artifacts.parse_artifact_key(workspace, file_id, parse_id, "layout_zip")
+        zip_info = store.put_bytes(zip_key, zip_bytes, content_type="application/zip")
+    return {
+        "markdown_path": config.to_rel(md_path),
+        "markdown_object_key": markdown_info.key,
+        "markdown_sha256": markdown_info.sha256,
+        "markdown_size": markdown_info.size,
+        "raw_zip_path": zip_rel,
+        "raw_zip_object_key": zip_info.key if zip_info else "",
+        "raw_zip_sha256": zip_info.sha256 if zip_info else "",
+        "raw_zip_size": zip_info.size if zip_info else 0,
+    }
 
 
 async def ocr_chunk_sync(chunk_id: str) -> tuple[bool, str]:

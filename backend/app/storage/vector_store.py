@@ -134,7 +134,7 @@ class PgVectorStore:
         where_sql = " AND ".join(where)
         count_sql = f"SELECT count(*) AS total FROM {self.table_name} WHERE {where_sql}"
         search_sql = f"""
-            SELECT chunk_id, file_id, file_name, page, crop_path, text,
+            SELECT chunk_id, file_id, file_name, page, crop_path, crop_object_key, text,
                    business_metadata, source_trace,
                    1 - (embedding <=> %s::vector) AS score
             FROM {self.table_name}
@@ -151,6 +151,7 @@ class PgVectorStore:
         hits = []
         for row in rows:
             crop_path = row.get("crop_path")
+            crop_object_key = row.get("crop_object_key")
             hits.append({
                 "chunk_id": row["chunk_id"],
                 "score": float(row["score"]),
@@ -158,7 +159,9 @@ class PgVectorStore:
                 "file_name": row["file_name"],
                 "page": row["page"],
                 "crop_url": (
-                    f"/crops/{str(crop_path).split('/')[-1]}" if crop_path else None
+                    f"/api/chunks/{row['chunk_id']}/crop"
+                    if crop_object_key
+                    else (f"/crops/{str(crop_path).split('/')[-1]}" if crop_path else None)
                 ),
                 "text": row.get("text") or "",
                 "business_metadata": _json_object(row.get("business_metadata")),
@@ -192,6 +195,9 @@ def pgvector_schema_sql(*, dimension: int = embeddings.DEFAULT_DIMENSION) -> lis
             file_name TEXT NOT NULL,
             page INTEGER,
             crop_path TEXT,
+            crop_object_key TEXT NOT NULL DEFAULT '',
+            crop_sha256 TEXT NOT NULL DEFAULT '',
+            crop_size INTEGER NOT NULL DEFAULT 0,
             text TEXT NOT NULL DEFAULT '',
             business_metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             source_trace JSONB NOT NULL DEFAULT '{{}}'::jsonb,
@@ -205,6 +211,9 @@ def pgvector_schema_sql(*, dimension: int = embeddings.DEFAULT_DIMENSION) -> lis
         "ON chunk_vector_index USING hnsw (embedding vector_cosine_ops)",
         "CREATE INDEX IF NOT EXISTS ix_chunk_vector_index_scope "
         "ON chunk_vector_index (workspace_id, model, dimension, status)",
+        "ALTER TABLE chunk_vector_index ADD COLUMN IF NOT EXISTS crop_object_key TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE chunk_vector_index ADD COLUMN IF NOT EXISTS crop_sha256 TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE chunk_vector_index ADD COLUMN IF NOT EXISTS crop_size INTEGER NOT NULL DEFAULT 0",
     ]
 
 

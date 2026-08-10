@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from app import config, current_user, embeddings, retrieval
+from app import artifacts, config, current_user, embeddings, retrieval
 from app.storage import object_store, repositories, vector_store
 from app import runtime
 
@@ -73,6 +73,16 @@ def test_pgvector_schema_is_workspace_scoped_and_indexed() -> None:
     assert "embedding vector(3)" in schema
     assert "USING hnsw" in schema
     assert "PRIMARY KEY (workspace_id, chunk_id, model, dimension)" in schema
+    assert "crop_object_key TEXT NOT NULL DEFAULT ''" in schema
+
+
+def test_content_schema_has_artifact_metadata_and_scope_indexes() -> None:
+    schema = "\n".join(repositories.postgres_content_schema_sql())
+
+    assert "markdown_object_key TEXT NOT NULL DEFAULT ''" in schema
+    assert "markdown_sha256 TEXT NOT NULL DEFAULT ''" in schema
+    assert "crop_object_key TEXT NOT NULL DEFAULT ''" in schema
+    assert "ix_kb_files_scope_kb" in schema
 
 
 def test_vector_store_factory_requires_dsn_for_pgvector(monkeypatch) -> None:
@@ -118,6 +128,21 @@ def test_local_object_store_round_trips_and_rejects_traversal(tmp_path) -> None:
         store.put_bytes("../outside", b"bad")
     store.delete("workspace-1/files/a.pdf")
     assert not store.exists("workspace-1/files/a.pdf")
+
+
+def test_artifact_helpers_prefer_object_store_and_keep_local_fallback(monkeypatch, tmp_path) -> None:
+    local = tmp_path / "legacy.md"
+    local.write_text("legacy", encoding="utf-8")
+    store = object_store.LocalObjectStore(tmp_path / "objects")
+    store.put_bytes("workspace-1/markdown.md", b"shared")
+    monkeypatch.setattr(config, "OBJECT_STORAGE_BACKEND", "local")
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "PARSES_DIR", tmp_path / "parses")
+    monkeypatch.setattr(object_store, "get_object_store", lambda: store)
+
+    assert artifacts.read_artifact("legacy.md", "workspace-1/markdown.md") == b"shared"
+    assert artifacts.read_artifact("legacy.md", "missing/key") == b"legacy"
+    assert artifacts.parse_artifact_key("workspace-1", "file-1", "parse-1", "markdown").endswith("/markdown.md")
 
 
 def test_runtime_local_lock_idempotency_stream_and_limits() -> None:
@@ -225,3 +250,6 @@ def test_postgres_repository_factory_is_opt_in(monkeypatch) -> None:
     monkeypatch.setattr(config, "DATABASE_URL", "postgresql://example.invalid/db")
     assert isinstance(repositories.get_chat_repository(), repositories.PostgresChatRepository)
     assert isinstance(repositories.get_job_repository(), repositories.PostgresJobRepository)
+
+    monkeypatch.setattr(config, "CONTENT_READ_BACKEND", "postgres")
+    assert isinstance(repositories.get_content_repository(), repositories.PostgresContentRepository)

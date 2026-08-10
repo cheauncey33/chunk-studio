@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import io
 import json
 import re
 import time
@@ -14,7 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from .. import chunk_schema, config, current_user, db, extractors, pdf
+from .. import artifacts, chunk_schema, config, current_user, db, extractors, pdf
 from ..adapters.ocr import _repair_mojibake
 from ..models import AutoImageChunkRequest, AutoSectionChunkRequest, AutoTableChunkRequest
 from .chunks import _row_to_out
@@ -135,9 +136,8 @@ async def auto_table_chunks(file_id: str, body: AutoTableChunkRequest):
     """
     f = _get_file(file_id)
     parse = _select_parse(file_id, body.parse_id)
-    zip_rel = parse.get("raw_zip_path")
-    if not zip_rel:
-        raise HTTPException(409, "selected parse has no raw_zip_path")
+    if not parse.get("raw_zip_path") and not parse.get("raw_zip_object_key"):
+        raise HTTPException(409, "selected parse has no layout artifact")
 
     candidates = _build_table_candidates(f, parse, body)
     if body.dry_run:
@@ -175,8 +175,8 @@ async def auto_image_chunks(file_id: str, body: AutoImageChunkRequest):
     """Preview or create image/figure chunks from MinerU image blocks."""
     f = _get_file(file_id)
     parse = _select_parse(file_id, body.parse_id)
-    if not parse.get("raw_zip_path"):
-        raise HTTPException(409, "selected parse has no raw_zip_path")
+    if not parse.get("raw_zip_path") and not parse.get("raw_zip_object_key"):
+        raise HTTPException(409, "selected parse has no layout artifact")
 
     candidates = _build_image_candidates(f, parse, body)
     if body.dry_run:
@@ -219,8 +219,8 @@ async def auto_section_chunks(file_id: str, body: AutoSectionChunkRequest):
     """
     f = _get_file(file_id)
     parse = _select_parse(file_id, body.parse_id)
-    if not parse.get("raw_zip_path"):
-        raise HTTPException(409, "selected parse has no raw_zip_path")
+    if not parse.get("raw_zip_path") and not parse.get("raw_zip_object_key"):
+        raise HTTPException(409, "selected parse has no layout artifact")
 
     candidates = _build_section_candidates(f, parse, body)
     if body.dry_run:
@@ -271,7 +271,9 @@ def _select_parse(file_id: str, parse_id: str | None) -> dict[str, Any]:
     else:
         row = db.get_conn().execute(
             """SELECT * FROM document_parses
-               WHERE file_id=? AND workspace_id=? AND status='done' AND raw_zip_path IS NOT NULL
+               WHERE file_id=? AND workspace_id=? AND status='done'
+                 AND ((raw_zip_path IS NOT NULL AND TRIM(raw_zip_path) != '')
+                      OR (raw_zip_object_key IS NOT NULL AND TRIM(raw_zip_object_key) != ''))
                ORDER BY updated_at DESC, created_at DESC
                LIMIT 1""",
             (file_id, _workspace_id()),
@@ -284,7 +286,7 @@ def _select_parse(file_id: str, parse_id: str | None) -> dict[str, Any]:
 def _build_table_candidates(
     f: dict[str, Any], parse: dict[str, Any], body: AutoTableChunkRequest
 ) -> list[Candidate]:
-    model = _load_model_json(parse["raw_zip_path"])
+    model = _load_model_json(parse)
     markdown_tables = _load_markdown_table_captions(parse)
     markdown_cursor = 0
     candidates: list[Candidate] = []
@@ -353,7 +355,7 @@ def _build_table_candidates(
 def _build_image_candidates(
     f: dict[str, Any], parse: dict[str, Any], body: AutoImageChunkRequest
 ) -> list[ImageCandidate]:
-    model = _load_model_json(parse["raw_zip_path"])
+    model = _load_model_json(parse)
     section_at: dict[tuple[int, int], tuple[str, list[dict[str, str]]]] = {}
     current_section: tuple[str, list[dict[str, str]]] | None = None
     section_units = _extract_section_units(model)
@@ -433,7 +435,7 @@ def _find_image_caption_block(
 def _build_section_candidates(
     f: dict[str, Any], parse: dict[str, Any], body: AutoSectionChunkRequest
 ) -> list[SectionCandidate]:
-    model = _load_model_json(parse["raw_zip_path"])
+    model = _load_model_json(parse)
     units = _extract_section_units(model)
     top_units = _select_section_roots(units, body.target_level)
     candidates: list[SectionCandidate] = []
@@ -1056,12 +1058,14 @@ def _section_candidate_out(candidate: SectionCandidate) -> dict[str, Any]:
     }
 
 
-def _load_model_json(zip_rel: str) -> list[Any]:
-    zip_path = config.from_rel(zip_rel)
-    if not zip_path.exists():
-        raise HTTPException(404, f"parse zip not found: {zip_rel}")
+def _load_model_json(parse: dict[str, Any]) -> list[Any]:
+    zip_bytes = artifacts.read_artifact(
+        parse.get("raw_zip_path"), parse.get("raw_zip_object_key")
+    )
+    if zip_bytes is None:
+        raise HTTPException(404, "parse layout artifact not found")
     try:
-        with zipfile.ZipFile(zip_path) as zf:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             names = zf.namelist()
             model_name = next((n for n in names if n.endswith("_model.json")), None)
             if not model_name:
@@ -1073,20 +1077,19 @@ def _load_model_json(zip_rel: str) -> list[Any]:
 
 def _load_markdown_table_captions(parse: dict[str, Any]) -> list[MarkdownTableCaption]:
     markdown = ""
-    markdown_rel = parse.get("markdown_path")
-    if markdown_rel:
-        markdown_path = config.from_rel(markdown_rel)
-        if markdown_path.exists():
-            markdown = markdown_path.read_text(encoding="utf-8", errors="ignore")
+    markdown_bytes = artifacts.read_artifact(
+        parse.get("markdown_path"), parse.get("markdown_object_key")
+    )
+    if markdown_bytes is not None:
+        markdown = markdown_bytes.decode("utf-8", errors="ignore")
     if not markdown:
-        zip_rel = parse.get("raw_zip_path")
-        if not zip_rel:
-            return []
-        zip_path = config.from_rel(zip_rel)
-        if not zip_path.exists():
+        zip_bytes = artifacts.read_artifact(
+            parse.get("raw_zip_path"), parse.get("raw_zip_object_key")
+        )
+        if zip_bytes is None:
             return []
         try:
-            with zipfile.ZipFile(zip_path) as zf:
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
                 full_md = next((n for n in zf.namelist() if n.endswith("full.md")), None)
                 if full_md:
                     markdown = zf.read(full_md).decode("utf-8", errors="ignore")

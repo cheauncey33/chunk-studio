@@ -42,7 +42,7 @@ def _rows(
             """
             SELECT e.chunk_id, e.model, e.dimension, e.text_sha256, e.embedding,
                    e.created_at, e.updated_at,
-                   c.file_id, c.page, c.crop_path, c.text,
+                   c.file_id, c.page, c.crop_path, c.crop_object_key, c.crop_sha256, c.crop_size, c.text,
                    c.business_metadata, c.source_trace,
                    f.name AS file_name, c.status
             FROM chunk_embeddings e
@@ -72,6 +72,9 @@ def _rows(
                 "file_name": row["file_name"] or "",
                 "page": row["page"],
                 "crop_path": row["crop_path"],
+                "crop_object_key": row["crop_object_key"] or "",
+                "crop_sha256": row["crop_sha256"] or "",
+                "crop_size": row["crop_size"] or 0,
                 "text": row["text"] or "",
                 "business_metadata": _json(row["business_metadata"]),
                 "source_trace": _json(row["source_trace"]),
@@ -129,9 +132,9 @@ def main() -> int:
                 """
                 INSERT INTO chunk_vector_index
                 (workspace_id, chunk_id, model, dimension, text_sha256, embedding,
-                 file_id, file_name, page, crop_path, text, business_metadata,
+                 file_id, file_name, page, crop_path, crop_object_key, crop_sha256, crop_size, text, business_metadata,
                  source_trace, status, created_at, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s::vector,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,
+                VALUES (%s,%s,%s,%s,%s,%s::vector,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,
                         'approved',COALESCE(%s, now()),COALESCE(%s, now()))
                 ON CONFLICT (workspace_id, chunk_id, model, dimension) DO UPDATE SET
                   text_sha256=excluded.text_sha256,
@@ -140,6 +143,9 @@ def main() -> int:
                   file_name=excluded.file_name,
                   page=excluded.page,
                   crop_path=excluded.crop_path,
+                  crop_object_key=excluded.crop_object_key,
+                  crop_sha256=excluded.crop_sha256,
+                  crop_size=excluded.crop_size,
                   text=excluded.text,
                   business_metadata=excluded.business_metadata,
                   source_trace=excluded.source_trace,
@@ -157,6 +163,9 @@ def main() -> int:
                         row["file_name"],
                         row["page"],
                         row["crop_path"],
+                        row["crop_object_key"],
+                        row["crop_sha256"],
+                        row["crop_size"],
                         row["text"],
                         json.dumps(row["business_metadata"], ensure_ascii=False),
                         json.dumps(row["source_trace"], ensure_ascii=False),

@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from .. import config, current_user, db, jobs, pdf
 from ..storage.object_store import get_object_store
+from ..storage.repositories import get_content_repository
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/files", tags=["files"])
@@ -164,6 +165,9 @@ async def upload(
 
 @router.get("")
 def list_files():
+    repository = get_content_repository()
+    if repository is not None:
+        return [_file_out(row, include_parse=True) for row in repository.list_files()]
     rows = db.get_conn().execute(
         "SELECT * FROM files WHERE workspace_id=? ORDER BY created_at DESC",
         (_workspace_id(),),
@@ -232,6 +236,9 @@ def update_file(file_id: str, body: FileUpdate):
 @router.get("/{file_id}/parses")
 def list_file_parses(file_id: str):
     _get_file(file_id)
+    repository = get_content_repository()
+    if repository is not None:
+        return repository.list_file_parses(file_id)
     rows = db.get_conn().execute(
         """SELECT * FROM document_parses
            WHERE file_id=? AND workspace_id=?
@@ -283,8 +290,9 @@ async def auto_chunk_file(file_id: str, body: AutoChunkBody | None = None):
     body = body or AutoChunkBody()
     parse = db.get_conn().execute(
         """SELECT id FROM document_parses
-           WHERE file_id=? AND workspace_id=? AND status='done' AND raw_zip_path IS NOT NULL
-             AND TRIM(raw_zip_path) != ''
+           WHERE file_id=? AND workspace_id=? AND status='done'
+             AND ((raw_zip_path IS NOT NULL AND TRIM(raw_zip_path) != '')
+                  OR (raw_zip_object_key IS NOT NULL AND TRIM(raw_zip_object_key) != ''))
            ORDER BY created_at DESC LIMIT 1""",
         (file_id, _workspace_id()),
     ).fetchone()
@@ -397,6 +405,12 @@ def delete_file(file_id: str):
 
 
 def _get_file(file_id: str):
+    repository = get_content_repository()
+    if repository is not None:
+        row = repository.get_file(file_id)
+        if not row:
+            raise HTTPException(404, "file not found")
+        return row
     row = db.get_conn().execute(
         "SELECT * FROM files WHERE id=? AND workspace_id=?",
         (file_id, _workspace_id()),
@@ -407,6 +421,10 @@ def _get_file(file_id: str):
 
 
 def _latest_parse(file_id: str) -> dict[str, Any] | None:
+    repository = get_content_repository()
+    if repository is not None:
+        row = repository.latest_parse(file_id)
+        return row
     row = db.get_conn().execute(
         """SELECT status, error, markdown_path, result FROM document_parses
            WHERE file_id=? AND workspace_id=?
@@ -417,18 +435,25 @@ def _latest_parse(file_id: str) -> dict[str, Any] | None:
 
 
 def _auto_chunk_error(parse_result: Any) -> str:
-    try:
-        result = json.loads(parse_result or "{}")
-    except Exception:
-        return ""
+    if isinstance(parse_result, dict):
+        result = parse_result
+    else:
+        try:
+            result = json.loads(parse_result or "{}")
+        except Exception:
+            return ""
     return str(result.get("auto_chunk_error") or "") if isinstance(result, dict) else ""
 
 
 def _file_out(row: dict, *, include_parse: bool = False):
-    try:
-        metadata = json.loads(row.get("metadata") or "{}")
-    except Exception:
-        metadata = {}
+    raw_metadata = row.get("metadata")
+    if isinstance(raw_metadata, dict):
+        metadata = raw_metadata
+    else:
+        try:
+            metadata = json.loads(raw_metadata or "{}")
+        except Exception:
+            metadata = {}
     out: dict[str, Any] = {
         "id": row["id"],
         "name": row["name"],
@@ -442,7 +467,9 @@ def _file_out(row: dict, *, include_parse: bool = False):
         out["parse_status"] = parse["status"] if parse else None
         out["parse_error"] = (parse.get("error") or "") if parse else ""
         out["parse_ready"] = bool(
-            parse and parse.get("status") == "done" and parse.get("markdown_path")
+            parse
+            and parse.get("status") == "done"
+            and (parse.get("markdown_path") or parse.get("markdown_object_key"))
         )
         # Parse jobs succeed even when post-parse auto-chunking fails; surface
         # that error so the UI can prompt a manual re-chunk.

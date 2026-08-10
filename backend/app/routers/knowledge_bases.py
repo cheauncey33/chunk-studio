@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import chunk_schema, current_user, db, retrieval
+from ..storage.repositories import get_content_repository
 
 
 router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"])
@@ -57,7 +58,9 @@ def _workspace_id() -> str:
     return current_user.get_current_user().workspace_id
 
 
-def _loads(value: str | None, fallback: Any) -> Any:
+def _loads(value: Any, fallback: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
     try:
         return json.loads(value or "")
     except (json.JSONDecodeError, TypeError):
@@ -120,6 +123,12 @@ def _kb_out(row: Any) -> dict[str, Any]:
 
 
 def _get_kb(knowledge_base_id: str) -> Any:
+    repository = get_content_repository()
+    if repository is not None:
+        row = repository.get_knowledge_base(knowledge_base_id)
+        if not row:
+            raise HTTPException(404, "knowledge base not found")
+        return row
     row = db.get_conn().execute(
         """SELECT kb.*,
                   nf.name AS default_naming_file_name,
@@ -152,6 +161,9 @@ def _get_kb(knowledge_base_id: str) -> Any:
 
 @router.get("")
 def list_knowledge_bases():
+    repository = get_content_repository()
+    if repository is not None:
+        return [_kb_out(row) for row in repository.list_knowledge_bases()]
     rows = db.get_conn().execute(
         """SELECT kb.*,
                   nf.name AS default_naming_file_name,
@@ -422,6 +434,9 @@ _KB_FILE_SELECT = """SELECT f.id, f.name, f.page_count, f.metadata, f.created_at
 
 def _kb_file_out(row: Any) -> dict[str, Any]:
     keys = set(row.keys()) if hasattr(row, "keys") else set()
+    parse_markdown_object_key = (
+        row["parse_markdown_object_key"] if "parse_markdown_object_key" in keys else ""
+    )
     corpus_kind = _normalize_corpus_kind(
         row["corpus_kind"] if "corpus_kind" in keys else None,
         row["role"] if "role" in keys else None,
@@ -440,7 +455,8 @@ def _kb_file_out(row: Any) -> dict[str, Any]:
         "parse_status": row["parse_status"],
         "parse_error": row["parse_error"] or "",
         "parse_ready": bool(
-            row["parse_status"] == "done" and row["parse_markdown_path"]
+            row["parse_status"] == "done"
+            and (row["parse_markdown_path"] or parse_markdown_object_key)
         ),
         # Auto-chunk failures don't fail the parse job; expose them here so the
         # files page can prompt a manual re-chunk.
@@ -456,6 +472,16 @@ def _auto_chunk_error_from_result(parse_result: Any) -> str:
 
 
 def _get_kb_file(knowledge_base_id: str, file_id: str) -> dict[str, Any]:
+    repository = get_content_repository()
+    if repository is not None:
+        rows = repository.list_knowledge_base_files(
+            knowledge_base_id,
+            file_id=file_id,
+            limit=1,
+        )
+        if not rows:
+            raise HTTPException(404, "knowledge base file not found")
+        return _kb_file_out(rows[0])
     row = db.get_conn().execute(
         f"""{_KB_FILE_SELECT}
             AND kbf.file_id=?
@@ -470,6 +496,12 @@ def _get_kb_file(knowledge_base_id: str, file_id: str) -> dict[str, Any]:
 @router.get("/{knowledge_base_id}/files")
 def list_knowledge_base_files(knowledge_base_id: str):
     _get_kb(knowledge_base_id)
+    repository = get_content_repository()
+    if repository is not None:
+        return [
+            _kb_file_out(row)
+            for row in repository.list_knowledge_base_files(knowledge_base_id)
+        ]
     rows = db.get_conn().execute(
         f"""{_KB_FILE_SELECT}
             GROUP BY f.id
@@ -591,6 +623,27 @@ def list_knowledge_base_chunks(
     _get_kb(knowledge_base_id)
     limit = min(max(limit, 1), 200)
     offset = max(offset, 0)
+    repository = get_content_repository()
+    if repository is not None:
+        rows = repository.list_knowledge_base_chunks(
+            knowledge_base_id,
+            limit=limit,
+            offset=offset,
+        )
+        return [
+            {
+                "id": row["id"],
+                "file_id": row["file_id"],
+                "file_name": row["file_name"],
+                "page": row["page"],
+                "text": row["text"] or "",
+                "status": row["status"],
+                "business_metadata": chunk_schema.parse_json_object(row["business_metadata"]),
+                "source_trace": chunk_schema.parse_json_object(row["source_trace"]),
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
     rows = db.get_conn().execute(
         """SELECT c.id, c.file_id, f.name AS file_name, c.page, c.text,
                   c.status, c.business_metadata, c.source_trace, c.updated_at

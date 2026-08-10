@@ -161,37 +161,44 @@ def _apply(dsn: str, rows: dict[str, list[dict[str, Any]]]) -> None:
             for row in rows["files"]:
                 cursor.execute(
                     """INSERT INTO files
-                       (id, workspace_id, name, path, sha, object_key, page_count, metadata, created_at)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,COALESCE(%s, now()))
+                       (id, workspace_id, name, path, sha, object_key, object_sha256, object_size,
+                        page_count, metadata, created_at)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,COALESCE(%s, now()))
                        ON CONFLICT (id) DO UPDATE SET
                          workspace_id=EXCLUDED.workspace_id, name=EXCLUDED.name,
                          path=EXCLUDED.path, sha=EXCLUDED.sha, object_key=EXCLUDED.object_key,
+                         object_sha256=EXCLUDED.object_sha256, object_size=EXCLUDED.object_size,
                          page_count=EXCLUDED.page_count, metadata=EXCLUDED.metadata,
                          created_at=EXCLUDED.created_at""",
                     (row["id"], row["workspace_id"], row["name"], row["path"], row.get("sha"),
-                     row.get("object_key") or "", row.get("page_count"), _jsonb(row.get("metadata")),
+                     row.get("object_key") or "", row.get("object_sha256") or "",
+                     row.get("object_size") or 0, row.get("page_count"), _jsonb(row.get("metadata")),
                      row.get("created_at")),
                 )
             for row in rows["chunks"]:
                 cursor.execute(
                     """INSERT INTO chunks
-                       (id,workspace_id,file_id,page,bbox,rotation,crop_path,text,text_source,
+                       (id,workspace_id,file_id,page,bbox,rotation,crop_path,crop_object_key,crop_sha256,crop_size,
+                        text,text_source,
                         metadata,business_metadata,metadata_llm,source_trace,chunk_logic,relations,
                         ui_state,indexing,status,created_at,updated_at)
-                       VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,
+                       VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,
                                %s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s,
                                COALESCE(%s, now()),COALESCE(%s, now()))
                        ON CONFLICT (id) DO UPDATE SET
                          workspace_id=EXCLUDED.workspace_id, file_id=EXCLUDED.file_id,
                          page=EXCLUDED.page, bbox=EXCLUDED.bbox, rotation=EXCLUDED.rotation,
-                         crop_path=EXCLUDED.crop_path, text=EXCLUDED.text, text_source=EXCLUDED.text_source,
+                         crop_path=EXCLUDED.crop_path, crop_object_key=EXCLUDED.crop_object_key,
+                         crop_sha256=EXCLUDED.crop_sha256, crop_size=EXCLUDED.crop_size,
+                         text=EXCLUDED.text, text_source=EXCLUDED.text_source,
                          metadata=EXCLUDED.metadata, business_metadata=EXCLUDED.business_metadata,
                          metadata_llm=EXCLUDED.metadata_llm, source_trace=EXCLUDED.source_trace,
                          chunk_logic=EXCLUDED.chunk_logic, relations=EXCLUDED.relations,
                          ui_state=EXCLUDED.ui_state, indexing=EXCLUDED.indexing, status=EXCLUDED.status,
                          updated_at=EXCLUDED.updated_at""",
                     (row["id"], row["workspace_id"], row["file_id"], row["page"], _jsonb(row.get("bbox")),
-                     row.get("rotation") or 0, row.get("crop_path"), row.get("text"),
+                     row.get("rotation") or 0, row.get("crop_path"), row.get("crop_object_key") or "",
+                     row.get("crop_sha256") or "", row.get("crop_size") or 0, row.get("text"),
                      row.get("text_source") or "pending", _jsonb(row.get("metadata")),
                      _jsonb(row.get("business_metadata")), _jsonb(row.get("metadata_llm")),
                      _jsonb(row.get("source_trace")), _jsonb(row.get("chunk_logic")),
@@ -202,17 +209,26 @@ def _apply(dsn: str, rows: dict[str, list[dict[str, Any]]]) -> None:
                 cursor.execute(
                     """INSERT INTO document_parses
                        (id,workspace_id,file_id,provider,status,markdown_path,raw_zip_path,
-                        markdown_object_key,raw_zip_object_key,result,error,created_at,updated_at)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,'','',%s::jsonb,%s,
+                        markdown_object_key,markdown_sha256,markdown_size,raw_zip_object_key,
+                        raw_zip_sha256,raw_zip_size,result,error,created_at,updated_at)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,
                                COALESCE(%s, now()),COALESCE(%s, now()))
                        ON CONFLICT (id) DO UPDATE SET
                          workspace_id=EXCLUDED.workspace_id, file_id=EXCLUDED.file_id,
                          provider=EXCLUDED.provider, status=EXCLUDED.status,
                          markdown_path=EXCLUDED.markdown_path, raw_zip_path=EXCLUDED.raw_zip_path,
+                         markdown_object_key=EXCLUDED.markdown_object_key,
+                         markdown_sha256=EXCLUDED.markdown_sha256, markdown_size=EXCLUDED.markdown_size,
+                         raw_zip_object_key=EXCLUDED.raw_zip_object_key,
+                         raw_zip_sha256=EXCLUDED.raw_zip_sha256, raw_zip_size=EXCLUDED.raw_zip_size,
                          result=EXCLUDED.result, error=EXCLUDED.error, updated_at=EXCLUDED.updated_at""",
                     (row["id"], row["workspace_id"], row["file_id"], row["provider"], row["status"],
-                     row.get("markdown_path"), row.get("raw_zip_path"), _jsonb(row.get("result")),
-                     row.get("error") or "", row.get("created_at"), row.get("updated_at")),
+                     row.get("markdown_path"), row.get("raw_zip_path"),
+                     row.get("markdown_object_key") or "", row.get("markdown_sha256") or "",
+                     row.get("markdown_size") or 0, row.get("raw_zip_object_key") or "",
+                     row.get("raw_zip_sha256") or "", row.get("raw_zip_size") or 0,
+                     _jsonb(row.get("result")), row.get("error") or "", row.get("created_at"),
+                     row.get("updated_at")),
                 )
             for row in rows["knowledge_bases"]:
                 cursor.execute(

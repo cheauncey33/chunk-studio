@@ -3,8 +3,10 @@
 from .object_store import LocalObjectStore, ObjectInfo, ObjectStore, S3ObjectStore, get_object_store
 from .repositories import (
     PostgresChatRepository,
+    PostgresContentRepository,
     PostgresJobRepository,
     get_chat_repository,
+    get_content_repository,
     get_job_repository,
     postgres_content_schema_sql,
     postgres_schema_sql,
@@ -22,8 +24,10 @@ __all__ = [
     "S3ObjectStore",
     "get_object_store",
     "PostgresChatRepository",
+    "PostgresContentRepository",
     "PostgresJobRepository",
     "get_chat_repository",
+    "get_content_repository",
     "get_job_repository",
     "postgres_content_schema_sql",
     "postgres_schema_sql",

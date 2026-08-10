@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS files (
     path        TEXT NOT NULL,          -- rel to DATA_DIR, forward slashes
     sha         TEXT,
     object_key  TEXT NOT NULL DEFAULT '',
+    object_sha256 TEXT NOT NULL DEFAULT '',
+    object_size INTEGER NOT NULL DEFAULT 0,
     page_count  INTEGER,
     metadata    TEXT NOT NULL DEFAULT '{}',
     created_at  TEXT NOT NULL
@@ -102,6 +104,9 @@ CREATE TABLE IF NOT EXISTS chunks (
     bbox           TEXT NOT NULL,        -- JSON {x,y,w,h} 0-1 normalized
     rotation       INTEGER DEFAULT 0,
     crop_path     TEXT,                  -- rel to DATA_DIR
+    crop_object_key TEXT NOT NULL DEFAULT '',
+    crop_sha256   TEXT NOT NULL DEFAULT '',
+    crop_size     INTEGER NOT NULL DEFAULT 0,
     text          TEXT,
     text_source   TEXT CHECK (text_source IN ('digital','manual','ocr','pending')) DEFAULT 'pending',
     metadata       TEXT NOT NULL DEFAULT '{}',
@@ -189,6 +194,12 @@ CREATE TABLE IF NOT EXISTS document_parses (
     status         TEXT NOT NULL DEFAULT 'queued',
     markdown_path  TEXT,
     raw_zip_path   TEXT,
+    markdown_object_key TEXT NOT NULL DEFAULT '',
+    markdown_sha256 TEXT NOT NULL DEFAULT '',
+    markdown_size INTEGER NOT NULL DEFAULT 0,
+    raw_zip_object_key TEXT NOT NULL DEFAULT '',
+    raw_zip_sha256 TEXT NOT NULL DEFAULT '',
+    raw_zip_size INTEGER NOT NULL DEFAULT 0,
     result         TEXT NOT NULL DEFAULT '{}',
     error          TEXT NOT NULL DEFAULT '',
     created_at     TEXT NOT NULL,
@@ -358,6 +369,7 @@ def init_db() -> None:
     _conn.commit()
     _migrate_workspace_columns()
     _migrate_file_object_key()
+    _migrate_artifact_object_keys()
     _migrate_job_runtime_columns()
     _migrate_audit_case_review_scope_key()
     _seed_local_identity()
@@ -499,6 +511,35 @@ def _migrate_file_object_key() -> None:
     }
     if "object_key" not in cols:
         _conn.execute("ALTER TABLE files ADD COLUMN object_key TEXT NOT NULL DEFAULT ''")
+    if "object_sha256" not in cols:
+        _conn.execute("ALTER TABLE files ADD COLUMN object_sha256 TEXT NOT NULL DEFAULT ''")
+    if "object_size" not in cols:
+        _conn.execute("ALTER TABLE files ADD COLUMN object_size INTEGER NOT NULL DEFAULT 0")
+
+
+def _migrate_artifact_object_keys() -> None:
+    """Add object keys and checksums for parse outputs and crop images."""
+    assert _conn is not None
+    additions = {
+        "chunks": {
+            "crop_object_key": "TEXT NOT NULL DEFAULT ''",
+            "crop_sha256": "TEXT NOT NULL DEFAULT ''",
+            "crop_size": "INTEGER NOT NULL DEFAULT 0",
+        },
+        "document_parses": {
+            "markdown_object_key": "TEXT NOT NULL DEFAULT ''",
+            "markdown_sha256": "TEXT NOT NULL DEFAULT ''",
+            "markdown_size": "INTEGER NOT NULL DEFAULT 0",
+            "raw_zip_object_key": "TEXT NOT NULL DEFAULT ''",
+            "raw_zip_sha256": "TEXT NOT NULL DEFAULT ''",
+            "raw_zip_size": "INTEGER NOT NULL DEFAULT 0",
+        },
+    }
+    for table, fields in additions.items():
+        cols = {row["name"] for row in _conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        for name, definition in fields.items():
+            if name not in cols:
+                _conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
 def _migrate_job_runtime_columns() -> None:
