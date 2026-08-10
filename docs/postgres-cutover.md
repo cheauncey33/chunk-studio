@@ -1,17 +1,24 @@
 # PostgreSQL staged cutover
 
-The current application keeps SQLite as the default content read/write path.
-The first production-like slice is opt-in and read-only for knowledge bases,
-files, chunks, and parse metadata:
+The local profile keeps SQLite as the zero-dependency default. After the
+comparison gates pass, use the explicit `postgres` deployment profile so the
+backend defaults are selected consistently instead of being assembled by hand:
 
 ```powershell
+$env:CHUNK_STUDIO_DEPLOYMENT_PROFILE = 'postgres'
+$env:CHUNK_STUDIO_DATABASE_BACKEND = 'postgres'
 $env:CHUNK_STUDIO_CONTENT_READ_BACKEND = 'postgres'
+$env:CHUNK_STUDIO_VECTOR_BACKEND = 'pgvector'
 $env:CHUNK_STUDIO_OBJECT_STORAGE_BACKEND = 'minio'
 $env:CHUNK_STUDIO_OBJECT_STORAGE_BUCKET = 'chunk-studio'
 $env:CHUNK_STUDIO_OBJECT_STORAGE_ENDPOINT_URL = 'http://127.0.0.1:59000'
 $env:CHUNK_STUDIO_REDIS_URL = 'redis://:chunkstudio_dev_only@127.0.0.1:56379/0'
 $env:CHUNK_STUDIO_RUN_IN_PROCESS_WORKER = '0'
 ```
+
+The explicit backend lines are shown for readability and may be omitted when
+`CHUNK_STUDIO_DEPLOYMENT_PROFILE=postgres` is used. The profile still requires
+the PostgreSQL DSN, Redis URL, MinIO/S3 bucket and credentials below.
 
 When PostgreSQL or trusted-proxy authentication is enabled, distributed
 runtime guardrails are enabled by default: Redis, shared S3/MinIO storage, and

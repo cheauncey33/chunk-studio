@@ -37,13 +37,22 @@ PARSES_DIR = DATA_DIR / "parses"
 DB_PATH = DATA_DIR / "chunkstudio.db"
 
 # --- Deployable service backends ---
-# SQLite/local files remain the default so existing checkouts keep working.
-# Production deployments opt in explicitly to PostgreSQL/pgvector, Redis and
-# object storage; these values are configuration boundaries, not connection
-# side effects during module import.
+# The local profile keeps SQLite/local files for a zero-dependency checkout.
+# The postgres profile is the explicit post-cutover default: it selects
+# PostgreSQL/pgvector, shared object storage and an external Worker, while
+# credentials/endpoints still come from environment variables.
+DEPLOYMENT_PROFILE = os.environ.get(
+    "CHUNK_STUDIO_DEPLOYMENT_PROFILE",
+    os.environ.get("DEPLOYMENT_PROFILE", "local"),
+).strip().casefold() or "local"
+if DEPLOYMENT_PROFILE not in {"local", "postgres"}:
+    raise RuntimeError(
+        "CHUNK_STUDIO_DEPLOYMENT_PROFILE must be either 'local' or 'postgres'"
+    )
+_postgres_profile = DEPLOYMENT_PROFILE == "postgres"
 DATABASE_BACKEND = os.environ.get(
     "CHUNK_STUDIO_DATABASE_BACKEND",
-    os.environ.get("DATABASE_BACKEND", "sqlite"),
+    os.environ.get("DATABASE_BACKEND", "postgres" if _postgres_profile else "sqlite"),
 ).strip().casefold() or "sqlite"
 DATABASE_URL = (
     os.environ.get("CHUNK_STUDIO_DATABASE_URL")
@@ -64,7 +73,7 @@ REDIS_URL = (
 ).strip()
 OBJECT_STORAGE_BACKEND = os.environ.get(
     "CHUNK_STUDIO_OBJECT_STORAGE_BACKEND",
-    os.environ.get("OBJECT_STORAGE_BACKEND", "local"),
+    os.environ.get("OBJECT_STORAGE_BACKEND", "minio" if _postgres_profile else "local"),
 ).strip().casefold() or "local"
 OBJECT_STORAGE_BUCKET = (
     os.environ.get("CHUNK_STUDIO_OBJECT_STORAGE_BUCKET")
@@ -91,13 +100,16 @@ OBJECT_STORAGE_SECRET_KEY = (
     or os.environ.get("OBJECT_STORAGE_SECRET_KEY")
     or ""
 ).strip()
-# API content writes remain on SQLite during the staged migration. Worker-owned
-# parse/chunk/OCR mutations, audit/init paths, and embedding writes switch with
-# DATABASE_BACKEND=postgres; API CRUD and legacy lexical/settings paths remain
-# on the next migration boundary.
+# In the local profile, SQLite remains the compatibility fallback. In the
+# postgres profile, content reads/writes and worker-owned mutations use the
+# PostgreSQL repositories; explicit backend variables can still override a
+# profile for staged rollback or comparison runs.
 CONTENT_READ_BACKEND = os.environ.get(
     "CHUNK_STUDIO_CONTENT_READ_BACKEND",
-    os.environ.get("CONTENT_READ_BACKEND", "sqlite"),
+    os.environ.get(
+        "CONTENT_READ_BACKEND",
+        "postgres" if _postgres_profile else "sqlite",
+    ),
 ).strip().casefold() or "sqlite"
 
 # The local mode supplies one explicit current-user identity for development. A deployed
@@ -158,7 +170,7 @@ AGENT_LEASE_SECONDS = _positive_int_env(
 )
 RUN_IN_PROCESS_WORKER = os.environ.get(
     "CHUNK_STUDIO_RUN_IN_PROCESS_WORKER",
-    "1",
+    "0" if _postgres_profile else "1",
 ).strip().casefold() in {"1", "true", "yes", "on"}
 
 HOST = "127.0.0.1"
@@ -200,6 +212,7 @@ def validate_deployment_config() -> None:
 def deployment_config() -> dict[str, str | bool]:
     """Return non-secret backend choices for health checks and diagnostics."""
     return {
+        "deployment_profile": DEPLOYMENT_PROFILE,
         "database_backend": DATABASE_BACKEND,
         "vector_backend": VECTOR_BACKEND,
         "redis_configured": bool(REDIS_URL),

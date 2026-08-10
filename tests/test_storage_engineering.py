@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import subprocess
 import sys
 
 import pytest
@@ -66,6 +68,44 @@ def test_distributed_runtime_requires_shared_services(monkeypatch) -> None:
 
     monkeypatch.setattr(config, "RUN_IN_PROCESS_WORKER", False)
     config.validate_deployment_config()
+
+
+def test_postgres_profile_selects_post_cutover_defaults() -> None:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "backend")
+    env["CHUNK_STUDIO_DEPLOYMENT_PROFILE"] = "postgres"
+    for name in (
+        "CHUNK_STUDIO_DATABASE_BACKEND",
+        "DATABASE_BACKEND",
+        "CHUNK_STUDIO_VECTOR_BACKEND",
+        "VECTOR_BACKEND",
+        "CHUNK_STUDIO_CONTENT_READ_BACKEND",
+        "CONTENT_READ_BACKEND",
+        "CHUNK_STUDIO_OBJECT_STORAGE_BACKEND",
+        "OBJECT_STORAGE_BACKEND",
+        "CHUNK_STUDIO_RUN_IN_PROCESS_WORKER",
+    ):
+        env.pop(name, None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from app import config; "
+                "print(config.DEPLOYMENT_PROFILE, config.DATABASE_BACKEND, "
+                "config.CONTENT_READ_BACKEND, config.VECTOR_BACKEND, "
+                "config.OBJECT_STORAGE_BACKEND, config.RUN_IN_PROCESS_WORKER)"
+            ),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "postgres postgres postgres pgvector minio False"
 
 
 def test_sqlite_vector_store_preserves_legacy_behavior(monkeypatch) -> None:
