@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import chunk_schema, current_user, db, retrieval
-from ..storage.repositories import get_content_repository
+from ..storage.repositories import get_content_repository, get_content_write_repository
 
 
 router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"])
@@ -199,6 +199,41 @@ def create_knowledge_base(body: KnowledgeBaseCreate):
     knowledge_base_id = f"kb_{uuid.uuid4().hex}"
     from .. import chunk_pipeline
 
+    content = get_content_write_repository()
+    if content is not None:
+        try:
+            content.create_knowledge_base({
+                "id": knowledge_base_id,
+                "workspace_id": _workspace_id(),
+                "name": body.name.strip(),
+                "description": body.description.strip(),
+                "parser_config": chunk_pipeline.DEFAULT_PARSER_CONFIG,
+                "retrieval_config": {
+                    "top_k": 10,
+                    "dense_threshold": 0.0,
+                    "rerank_threshold": 0.2,
+                    "agentic_rag_enabled": True,
+                    "agentic_rag_max_rounds": 3,
+                    "agentic_rag_max_search_calls": 3,
+                    "agentic_rag_timeout_seconds": 30.0,
+                    "content_type": "all",
+                },
+                "manual_rules": {},
+                "few_shot_rules": {},
+                "created_at": now,
+                "updated_at": now,
+            })
+            content.ensure_assistant_for_knowledge_base(
+                knowledge_base_id,
+                name=f"{body.name.strip()} audit",
+                description=body.description.strip(),
+            )
+        except Exception as exc:
+            if "UNIQUE" in str(exc).upper():
+                raise HTTPException(409, "knowledge base name already exists") from exc
+            raise HTTPException(500, f"knowledge base creation failed: {exc}") from exc
+        return _kb_out(_get_kb(knowledge_base_id))
+
     try:
         with db.transaction() as conn:
             conn.execute(
@@ -339,6 +374,27 @@ def delete_knowledge_base(knowledge_base_id: str):
 @router.patch("/{knowledge_base_id}")
 def update_knowledge_base(knowledge_base_id: str, body: KnowledgeBaseUpdate):
     _get_kb(knowledge_base_id)
+    content = get_content_write_repository()
+    if content is not None:
+        values: dict[str, Any] = {}
+        for key in ("name", "description"):
+            value = getattr(body, key)
+            if value is not None:
+                values[key] = value.strip()
+        for key in ("retrieval_config", "parser_config", "manual_rules", "few_shot_rules"):
+            value = getattr(body, key)
+            if value is not None:
+                values[key] = retrieval.normalize_retrieval_config(value) if key == "retrieval_config" else value
+        if body.clear_default_naming_file:
+            values["default_naming_file_id"] = None
+        elif body.default_naming_file_id is not None:
+            file_id = body.default_naming_file_id.strip()
+            if file_id and not content.get_file(file_id):
+                raise HTTPException(400, "naming-rule file not found")
+            values["default_naming_file_id"] = file_id or None
+        if values:
+            content.update_knowledge_base(knowledge_base_id, values)
+        return _kb_out(_get_kb(knowledge_base_id))
     updates: list[str] = []
     params: list[Any] = []
     for key in ("name", "description"):
@@ -514,10 +570,15 @@ def list_knowledge_base_files(knowledge_base_id: str):
 @router.put("/{knowledge_base_id}/files/{file_id}")
 def add_file_to_knowledge_base(knowledge_base_id: str, file_id: str):
     _get_kb(knowledge_base_id)
-    file_row = db.get_conn().execute(
-        "SELECT metadata FROM files WHERE id=? AND workspace_id=?",
-        (file_id, _workspace_id()),
-    ).fetchone()
+    content = get_content_write_repository()
+    file_row = (
+        content.get_file(file_id)
+        if content is not None
+        else db.get_conn().execute(
+            "SELECT metadata FROM files WHERE id=? AND workspace_id=?",
+            (file_id, _workspace_id()),
+        ).fetchone()
+    )
     if not file_row:
         raise HTTPException(404, "file not found")
     metadata = _loads(file_row["metadata"], {})
@@ -526,6 +587,14 @@ def add_file_to_knowledge_base(knowledge_base_id: str, file_id: str):
     corpus_kind = _normalize_corpus_kind(
         str((metadata or {}).get("corpus_kind") or "") if isinstance(metadata, dict) else "",
     )
+    if content is not None:
+        content.attach_file_to_knowledge_base(
+            knowledge_base_id,
+            file_id,
+            role="source",
+            corpus_kind=corpus_kind,
+        )
+        return {"ok": True}
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     with db.transaction() as conn:
         conn.execute(
@@ -550,6 +619,19 @@ def update_knowledge_base_file(
     body: KnowledgeBaseFileUpdate,
 ):
     _get_kb(knowledge_base_id)
+    content = get_content_write_repository()
+    if content is not None:
+        values: dict[str, Any] = {}
+        if body.enabled is not None:
+            values["enabled"] = body.enabled
+        if body.corpus_kind is not None:
+            values["corpus_kind"] = body.corpus_kind
+        elif body.role is not None:
+            values["role"] = body.role
+            values["corpus_kind"] = "spec" if body.role == "reference" else "standard"
+        if not content.update_knowledge_base_file(knowledge_base_id, file_id, values):
+            raise HTTPException(404, "knowledge base file not found")
+        return _get_kb_file(knowledge_base_id, file_id)
     if not db.get_conn().execute(
         """SELECT 1 FROM knowledge_base_files
            WHERE knowledge_base_id=? AND file_id=? AND workspace_id=?""",
@@ -592,6 +674,11 @@ def remove_file_from_knowledge_base(knowledge_base_id: str, file_id: str):
     kb = _get_kb(knowledge_base_id)
     if kb["is_default"]:
         raise HTTPException(409, "move the file to another knowledge base before removing it")
+    content = get_content_write_repository()
+    if content is not None:
+        if not content.remove_file_from_knowledge_base(knowledge_base_id, file_id):
+            raise HTTPException(404, "knowledge base file not found")
+        return {"ok": True}
     with db.transaction() as conn:
         conn.execute(
             "DELETE FROM knowledge_base_files WHERE knowledge_base_id=? AND file_id=? AND workspace_id=?",

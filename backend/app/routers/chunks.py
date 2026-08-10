@@ -6,14 +6,15 @@ import json
 import logging
 import time
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from .. import chunk_schema, config, current_user, db, extractors, jobs, pdf
+from .. import artifacts, chunk_schema, config, current_user, db, extractors, jobs, pdf
 from ..models import BBox, ChunkCreate, ChunkOut, ChunkUpdate
 from ..storage.object_store import get_object_store
-from ..storage.repositories import get_content_repository
+from ..storage.repositories import get_content_repository, get_content_write_repository
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +46,15 @@ def _workspace_id() -> str:
 @router.post("")
 async def create_chunk(body: ChunkCreate):
     """Box-select endpoint: crop region at 300DPI, extract embedded text, store chunk."""
-    f = db.get_conn().execute(
-        "SELECT * FROM files WHERE id=? AND workspace_id=?",
-        (body.file_id, _workspace_id()),
-    ).fetchone()
+    content = get_content_write_repository()
+    f = (
+        content.get_file(body.file_id)
+        if content is not None
+        else db.get_conn().execute(
+            "SELECT * FROM files WHERE id=? AND workspace_id=?",
+            (body.file_id, _workspace_id()),
+        ).fetchone()
+    )
     if not f:
         raise HTTPException(404, "file not found")
     f = dict(f)
@@ -56,16 +62,31 @@ async def create_chunk(body: ChunkCreate):
         raise HTTPException(404, "page out of range")
 
     # crop + extract in a thread so we don't block the loop
+    pdf_rel = str(f.get("path") or "")
+    if not pdf_rel or not config.from_rel(pdf_rel).is_file():
+        materialized = artifacts.materialize_artifact(
+            f.get("path"),
+            f.get("object_key"),
+            cache_name=f"{body.file_id}-source",
+            suffix=".pdf",
+        )
+        if materialized is None:
+            raise HTTPException(404, "stored file missing")
+        pdf_rel = config.to_rel(materialized)
     result = await asyncio.to_thread(
-        pdf.crop_region, f["path"], body.page - 1, body.bbox.model_dump()
+        pdf.crop_region, pdf_rel, body.page - 1, body.bbox.model_dump()
     )
 
     cid = uuid.uuid4().hex
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
-    try:
-        meta = json.loads(f.get("metadata") or "{}")
-    except Exception:
-        meta = {}
+    raw_metadata = f.get("metadata")
+    if isinstance(raw_metadata, dict):
+        meta = dict(raw_metadata)
+    else:
+        try:
+            meta = json.loads(raw_metadata or "{}")
+        except Exception:
+            meta = {}
     # Auto-extract deterministic metadata (standard_no from filename, plus
     # content_type/table_* from any embedded <table>). Merged into an empty
     # file-level metadata copy, so all derived keys fill only empty slots;
@@ -73,24 +94,55 @@ async def create_chunk(body: ChunkCreate):
     meta = extractors.merge_auto_metadata(meta, result.text, f["name"])
     source_trace = chunk_schema.source_trace_for_region(body.page, body.bbox.model_dump())
     chunk_logic = chunk_schema.chunk_logic_for_manual()
-    with db.transaction() as conn:
-        conn.execute(
-            """INSERT INTO chunks
-               (id, workspace_id, file_id, page, bbox, rotation, crop_path, text, text_source,
-                metadata, business_metadata, metadata_llm, source_trace, chunk_logic, relations,
-                status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                cid, _workspace_id(), body.file_id, body.page,
-                json.dumps(body.bbox.model_dump()),
-                0, result.crop_rel, result.text, result.text_source,
-                "{}", json.dumps(meta, ensure_ascii=False), "{}",
-                json.dumps(source_trace, ensure_ascii=False),
-                json.dumps(chunk_logic, ensure_ascii=False),
-                "{}",
-                "pending", now, now,
-            ),
+    crop_info = None
+    if content is not None:
+        crop_path = config.from_rel(result.crop_rel)
+        crop_info = get_object_store().put_bytes(
+            artifacts.crop_artifact_key(_workspace_id(), body.file_id, cid),
+            crop_path.read_bytes(),
+            content_type="image/png",
         )
+        content.create_chunk({
+            "id": cid,
+            "workspace_id": _workspace_id(),
+            "file_id": body.file_id,
+            "page": body.page,
+            "bbox": body.bbox.model_dump(),
+            "rotation": 0,
+            "crop_path": result.crop_rel,
+            "crop_object_key": crop_info.key,
+            "crop_sha256": crop_info.sha256,
+            "crop_size": crop_info.size,
+            "text": result.text,
+            "text_source": result.text_source,
+            "metadata": {},
+            "business_metadata": meta,
+            "metadata_llm": {},
+            "source_trace": source_trace,
+            "chunk_logic": chunk_logic,
+            "relations": {},
+            "status": "pending",
+            "created_at": now,
+            "updated_at": now,
+        })
+    else:
+        with db.transaction() as conn:
+            conn.execute(
+                """INSERT INTO chunks
+                   (id, workspace_id, file_id, page, bbox, rotation, crop_path, text, text_source,
+                    metadata, business_metadata, metadata_llm, source_trace, chunk_logic, relations,
+                    status, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    cid, _workspace_id(), body.file_id, body.page,
+                    json.dumps(body.bbox.model_dump()),
+                    0, result.crop_rel, result.text, result.text_source,
+                    "{}", json.dumps(meta, ensure_ascii=False), "{}",
+                    json.dumps(source_trace, ensure_ascii=False),
+                    json.dumps(chunk_logic, ensure_ascii=False), "{}",
+                    "pending", now, now,
+                ),
+            )
     if (
         result.text_source == "pending"
         and db.get_setting("ocr.auto_on_create", "false") == "true"
@@ -169,6 +221,48 @@ def get_chunk_crop(chunk_id: str):
 
 @router.patch("/{chunk_id}")
 def update_chunk(chunk_id: str, body: ChunkUpdate):
+    content = get_content_write_repository()
+    if content is not None:
+        current = content.get_chunk(chunk_id)
+        if not current:
+            raise HTTPException(404, "chunk not found")
+        content_changed = _review_sensitive_change(current, body)
+        if body.status is not None:
+            if content_changed:
+                raise HTTPException(409, "content and review status must be updated separately")
+            _validate_status_transition(current["status"], body.status)
+        values: dict[str, Any] = {}
+        if body.text is not None and body.text != current.get("text"):
+            values.update({"text": body.text, "text_source": "manual"})
+        if body.metadata is not None:
+            business_metadata, source_trace, chunk_logic, relations = (
+                chunk_schema.split_flat_metadata_for_write(body.metadata)
+            )
+            values.update({
+                "metadata": body.metadata,
+                "business_metadata": business_metadata,
+                "source_trace": source_trace,
+                "chunk_logic": chunk_logic,
+                "relations": relations,
+            })
+        for field in (
+            "business_metadata", "metadata_llm", "source_trace", "chunk_logic", "relations",
+            "ui_state", "indexing", "text_source",
+        ):
+            value = getattr(body, field)
+            if value is not None:
+                values[field] = value
+        if body.status is not None:
+            values["status"] = body.status
+        elif content_changed and current["status"] != "pending":
+            values["status"] = "pending"
+        content.update_chunk(chunk_id, values)
+        if body.status == "approved":
+            try:
+                jobs.enqueue_build_embeddings()
+            except Exception:
+                logger.exception("failed to queue embedding build after approval")
+        return _get_chunk(chunk_id)
     cur = db.get_conn().execute(
         "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
         (chunk_id, _workspace_id()),
@@ -268,6 +362,22 @@ def update_chunk(chunk_id: str, body: ChunkUpdate):
 
 @router.delete("/{chunk_id}")
 def delete_chunk(chunk_id: str):
+    content = get_content_write_repository()
+    if content is not None:
+        deleted = content.delete_chunk(chunk_id)
+        if not deleted:
+            raise HTTPException(404, "chunk not found")
+        if deleted.get("crop_path"):
+            try:
+                config.from_rel(deleted["crop_path"]).unlink(missing_ok=True)
+            except Exception:
+                pass
+        if deleted.get("crop_object_key"):
+            try:
+                get_object_store().delete(deleted["crop_object_key"])
+            except Exception:
+                logger.exception("failed to delete object %s", deleted["crop_object_key"])
+        return {"ok": True}
     cur = db.get_conn().execute(
         "SELECT crop_path FROM chunks WHERE id=? AND workspace_id=?",
         (chunk_id, _workspace_id()),

@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from .. import config, current_user, db, jobs, pdf
 from ..storage.object_store import get_object_store
-from ..storage.repositories import get_content_repository
+from ..storage.repositories import get_content_repository, get_content_write_repository
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/files", tags=["files"])
@@ -64,13 +64,18 @@ async def upload(
     and naming uploads stay outside knowledge_base_files; naming updates
     default_naming_file_id.
     """
+    content = get_content_write_repository()
     target_kb = None
     if knowledge_base_id:
-        target_kb = db.get_conn().execute(
-            """SELECT id FROM knowledge_bases
-               WHERE id=? AND workspace_id=? AND status='active'""",
-            (knowledge_base_id, _workspace_id()),
-        ).fetchone()
+        target_kb = (
+            content.get_knowledge_base(knowledge_base_id)
+            if content is not None
+            else db.get_conn().execute(
+                """SELECT id FROM knowledge_bases
+                   WHERE id=? AND workspace_id=? AND status='active'""",
+                (knowledge_base_id, _workspace_id()),
+            ).fetchone()
+        )
         if not target_kb:
             raise HTTPException(404, "knowledge base not found")
 
@@ -110,43 +115,74 @@ async def upload(
     file_rel = config.to_rel(dest)
     n_pages = await asyncio.to_thread(pdf.page_count, file_rel)
     created = time.strftime("%Y-%m-%dT%H:%M:%S")
-    with db.transaction() as conn:
-        conn.execute(
-            """INSERT INTO files
-               (id,workspace_id,name,path,sha,object_key,page_count,metadata,created_at)
-               VALUES(?,?,?,?,?,?,?,?,?)""",
-            (
-                file_id, _workspace_id(), safe_name, file_rel, sha, object_info.key, n_pages,
-                json.dumps(file_meta, ensure_ascii=False), created,
-            ),
-        )
+    if content is not None:
+        content.create_file({
+            "id": file_id,
+            "workspace_id": _workspace_id(),
+            "name": safe_name,
+            "path": file_rel,
+            "sha": sha,
+            "object_key": object_info.key,
+            "object_size": len(raw),
+            "page_count": n_pages,
+            "metadata": file_meta,
+            "created_at": created,
+        })
         if doc_role == "naming":
             if not target_kb:
                 raise HTTPException(400, "naming upload requires knowledge_base_id")
-            conn.execute(
-                """UPDATE knowledge_bases
-                   SET default_naming_file_id=?, updated_at=?
-                   WHERE id=? AND workspace_id=?""",
-                (file_id, created, target_kb["id"], _workspace_id()),
-            )
-        elif doc_role in {"report", "sample_report"}:
-            # Audit / init inputs only; do not attach to a knowledge base.
-            pass
-        else:
-            relation_kb = target_kb or conn.execute(
-                """SELECT id FROM knowledge_bases
-                   WHERE is_default=1 AND workspace_id=? ORDER BY created_at LIMIT 1""",
-                (_workspace_id(),),
-            ).fetchone()
-            if relation_kb:
-                corpus_kind = _resolve_corpus_kind(file_meta)
-                conn.execute(
-                    """INSERT OR IGNORE INTO knowledge_base_files
-                       (knowledge_base_id, file_id, workspace_id, role, corpus_kind,
-                        enabled, created_at)
-                       VALUES (?,?,?, 'source', ?, 1, ?)""",
-                    (relation_kb["id"], file_id, _workspace_id(), corpus_kind, created),
+            content.set_default_naming_file(target_kb["id"], file_id)
+        elif doc_role not in {"report", "sample_report"}:
+            relation_kb = target_kb
+            if relation_kb is None:
+                relation_kb = next(
+                    (item for item in content.list_knowledge_bases() if item.get("is_default")),
+                    None,
                 )
+            if relation_kb:
+                content.attach_file_to_knowledge_base(
+                    relation_kb["id"],
+                    file_id,
+                    role="source",
+                    corpus_kind=_resolve_corpus_kind(file_meta),
+                )
+    else:
+        with db.transaction() as conn:
+            conn.execute(
+                """INSERT INTO files
+                   (id,workspace_id,name,path,sha,object_key,page_count,metadata,created_at)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                (
+                    file_id, _workspace_id(), safe_name, file_rel, sha, object_info.key, n_pages,
+                    json.dumps(file_meta, ensure_ascii=False), created,
+                ),
+            )
+            if doc_role == "naming":
+                if not target_kb:
+                    raise HTTPException(400, "naming upload requires knowledge_base_id")
+                conn.execute(
+                    """UPDATE knowledge_bases
+                       SET default_naming_file_id=?, updated_at=?
+                       WHERE id=? AND workspace_id=?""",
+                    (file_id, created, target_kb["id"], _workspace_id()),
+                )
+            elif doc_role in {"report", "sample_report"}:
+                pass
+            else:
+                relation_kb = target_kb or conn.execute(
+                    """SELECT id FROM knowledge_bases
+                       WHERE is_default=1 AND workspace_id=? ORDER BY created_at LIMIT 1""",
+                    (_workspace_id(),),
+                ).fetchone()
+                if relation_kb:
+                    corpus_kind = _resolve_corpus_kind(file_meta)
+                    conn.execute(
+                        """INSERT OR IGNORE INTO knowledge_base_files
+                           (knowledge_base_id, file_id, workspace_id, role, corpus_kind,
+                            enabled, created_at)
+                           VALUES (?,?,?, 'source', ?, 1, ?)""",
+                        (relation_kb["id"], file_id, _workspace_id(), corpus_kind, created),
+                    )
     try:
         jobs.enqueue_parse_file(file_id)
     except Exception:
@@ -209,6 +245,7 @@ def get_file_content(file_id: str):
 @router.patch("/{file_id}")
 def update_file(file_id: str, body: FileUpdate):
     row = _get_file(file_id)
+    content = get_content_write_repository()
     updates: list[str] = []
     params: list[Any] = []
     if body.name is not None:
@@ -223,6 +260,15 @@ def update_file(file_id: str, body: FileUpdate):
         metadata = {k: v for k, v in body.metadata.items() if v not in ("", None, [], {})}
         updates.append("metadata=?")
         params.append(json.dumps(metadata, ensure_ascii=False))
+    if content is not None:
+        values: dict[str, Any] = {}
+        if body.name is not None:
+            values["name"] = safe_name
+        if body.metadata is not None:
+            values["metadata"] = metadata
+        if values:
+            content.update_file(file_id, values)
+        return _file_out(_get_file(file_id), include_parse=True)
     if updates:
         params.extend([file_id, _workspace_id()])
         with db.transaction() as conn:
@@ -288,19 +334,32 @@ async def auto_chunk_file(file_id: str, body: AutoChunkBody | None = None):
 
     _get_file(file_id)
     body = body or AutoChunkBody()
-    parse = db.get_conn().execute(
-        """SELECT id FROM document_parses
-           WHERE file_id=? AND workspace_id=? AND status='done'
-             AND ((raw_zip_path IS NOT NULL AND TRIM(raw_zip_path) != '')
-                  OR (raw_zip_object_key IS NOT NULL AND TRIM(raw_zip_object_key) != ''))
-           ORDER BY created_at DESC LIMIT 1""",
-        (file_id, _workspace_id()),
-    ).fetchone()
+    content = get_content_write_repository()
+    parse = (
+        content.latest_parse(file_id)
+        if content is not None
+        else db.get_conn().execute(
+            """SELECT id FROM document_parses
+               WHERE file_id=? AND workspace_id=? AND status='done'
+                 AND ((raw_zip_path IS NOT NULL AND TRIM(raw_zip_path) != '')
+                      OR (raw_zip_object_key IS NOT NULL AND TRIM(raw_zip_object_key) != ''))
+               ORDER BY created_at DESC LIMIT 1""",
+            (file_id, _workspace_id()),
+        ).fetchone()
+    )
     if not parse:
+        raise HTTPException(400, "file has no completed parse with layout zip")
+    if content is not None and (
+        parse.get("status") != "done"
+        or not (
+            str(parse.get("raw_zip_path") or "").strip()
+            or str(parse.get("raw_zip_object_key") or "").strip()
+        )
+    ):
         raise HTTPException(400, "file has no completed parse with layout zip")
 
     if body.persist_override and body.chunk_config is not None:
-        row = db.get_conn().execute(
+        row = content.get_file(file_id) if content is not None else db.get_conn().execute(
             "SELECT metadata FROM files WHERE id=? AND workspace_id=?",
             (file_id, _workspace_id()),
         ).fetchone()
@@ -311,11 +370,14 @@ async def auto_chunk_file(file_id: str, body: AutoChunkBody | None = None):
         if not isinstance(metadata, dict):
             metadata = {}
         metadata["chunk_config"] = body.chunk_config
-        with db.transaction() as conn:
-            conn.execute(
-                "UPDATE files SET metadata=? WHERE id=? AND workspace_id=?",
-                (json.dumps(metadata, ensure_ascii=False), file_id, _workspace_id()),
-            )
+        if content is not None:
+            content.update_file(file_id, {"metadata": metadata})
+        else:
+            with db.transaction() as conn:
+                conn.execute(
+                    "UPDATE files SET metadata=? WHERE id=? AND workspace_id=?",
+                    (json.dumps(metadata, ensure_ascii=False), file_id, _workspace_id()),
+                )
 
     config = (
         chunk_pipeline.normalize_parser_config(body.chunk_config)
@@ -377,6 +439,27 @@ def locate_text(
 @router.delete("/{file_id}")
 def delete_file(file_id: str):
     f = _get_file(file_id)
+    content = get_content_write_repository()
+    if content is not None:
+        deleted = content.delete_file(file_id)
+        if not deleted:
+            raise HTTPException(404, "file not found")
+        for crop_path in deleted.get("crop_paths") or []:
+            if crop_path:
+                try:
+                    config.from_rel(crop_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+        try:
+            config.from_rel(f["path"]).unlink(missing_ok=True)
+        except Exception:
+            pass
+        if f.get("object_key"):
+            try:
+                get_object_store().delete(f["object_key"])
+            except Exception:
+                logger.exception("failed to delete object %s", f["object_key"])
+        return {"ok": True}
     with db.transaction() as conn:
         conn.execute(
             """UPDATE knowledge_bases

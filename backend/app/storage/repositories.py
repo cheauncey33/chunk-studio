@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import time
 from typing import Any, Callable, Protocol
 import uuid
 
@@ -58,11 +59,55 @@ class ContentRepository(Protocol):
 
     def list_knowledge_bases(self, *, limit: int = 100) -> list[dict[str, Any]]: ...
 
+    def create_knowledge_base(self, values: dict[str, Any]) -> dict[str, Any]: ...
+
+    def update_knowledge_base(
+        self, knowledge_base_id: str, values: dict[str, Any]
+    ) -> dict[str, Any] | None: ...
+
+    def ensure_assistant_for_knowledge_base(
+        self,
+        knowledge_base_id: str,
+        *,
+        name: str,
+        description: str,
+    ) -> dict[str, Any]: ...
+
     def get_knowledge_base(self, knowledge_base_id: str) -> dict[str, Any] | None: ...
 
     def list_files(self, *, limit: int = 500) -> list[dict[str, Any]]: ...
 
     def get_file(self, file_id: str) -> dict[str, Any] | None: ...
+
+    def create_file(self, values: dict[str, Any]) -> dict[str, Any]: ...
+
+    def update_file(self, file_id: str, values: dict[str, Any]) -> dict[str, Any] | None: ...
+
+    def delete_file(self, file_id: str) -> dict[str, Any] | None: ...
+
+    def attach_file_to_knowledge_base(
+        self,
+        knowledge_base_id: str,
+        file_id: str,
+        *,
+        role: str,
+        corpus_kind: str,
+        enabled: bool = True,
+    ) -> None: ...
+
+    def update_knowledge_base_file(
+        self, knowledge_base_id: str, file_id: str, values: dict[str, Any]
+    ) -> bool: ...
+
+    def remove_file_from_knowledge_base(self, knowledge_base_id: str, file_id: str) -> bool: ...
+
+    def set_default_naming_file(self, knowledge_base_id: str, file_id: str | None) -> None: ...
+
+    def create_chunk(self, values: dict[str, Any]) -> dict[str, Any]: ...
+
+    def update_chunk(self, chunk_id: str, values: dict[str, Any]) -> dict[str, Any] | None: ...
+
+    def delete_chunk(self, chunk_id: str) -> dict[str, Any] | None: ...
 
     def latest_parse(self, file_id: str) -> dict[str, Any] | None: ...
 
@@ -774,6 +819,145 @@ class PostgresContentRepository:
             ).fetchone()
         return dict(row) if row else None
 
+    def create_knowledge_base(self, values: dict[str, Any]) -> dict[str, Any]:
+        workspace = self._scope(values.get("workspace_id"))
+        encoded = {
+            key: json.dumps(values.get(key) or {}, ensure_ascii=False)
+            for key in ("parser_config", "retrieval_config", "manual_rules", "few_shot_rules")
+        }
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO knowledge_bases
+                   (id, workspace_id, name, description, status, is_default,
+                    parser_config, retrieval_config, manual_rules, few_shot_rules,
+                    default_naming_file_id, created_at, updated_at)
+                   VALUES (%s,%s,%s,%s,'active',%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s)""",
+                (
+                    values["id"], workspace, values["name"], values.get("description") or "",
+                    bool(values.get("is_default", False)), encoded["parser_config"],
+                    encoded["retrieval_config"], encoded["manual_rules"], encoded["few_shot_rules"],
+                    values.get("default_naming_file_id"), values.get("created_at"),
+                    values.get("updated_at"),
+                ),
+            )
+        return self.get_knowledge_base(str(values["id"])) or {}
+
+    def update_knowledge_base(
+        self, knowledge_base_id: str, values: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        workspace = self._scope()
+        allowed = {
+            "name", "description", "retrieval_config", "parser_config", "manual_rules",
+            "few_shot_rules", "default_naming_file_id", "is_default", "status",
+        }
+        json_fields = {"retrieval_config", "parser_config", "manual_rules", "few_shot_rules"}
+        fields = {key: value for key, value in values.items() if key in allowed}
+        if fields:
+            assignments: list[str] = []
+            params: list[Any] = []
+            for key, value in fields.items():
+                assignments.append(f"{key}=%s" + ("::jsonb" if key in json_fields else ""))
+                params.append(json.dumps(value or {}, ensure_ascii=False) if key in json_fields else value)
+            assignments.append("updated_at=now()")
+            params.extend([knowledge_base_id, workspace])
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE knowledge_bases SET " + ", ".join(assignments)
+                    + " WHERE id=%s AND workspace_id=%s",
+                    params,
+                )
+        return self.get_knowledge_base(knowledge_base_id)
+
+    def ensure_assistant_for_knowledge_base(
+        self,
+        knowledge_base_id: str,
+        *,
+        name: str,
+        description: str,
+    ) -> dict[str, Any]:
+        workspace = self._scope()
+        with self._connect() as conn:
+            kb = conn.execute(
+                "SELECT id, name, description FROM knowledge_bases WHERE id=%s AND workspace_id=%s",
+                (knowledge_base_id, workspace),
+            ).fetchone()
+            if not kb:
+                raise KeyError(f"knowledge base not found: {knowledge_base_id}")
+            existing = conn.execute(
+                """SELECT a.*, v.version AS active_version
+                   FROM assistant_knowledge_bases akb
+                   JOIN audit_assistants a ON a.id=akb.assistant_id
+                   LEFT JOIN assistant_versions v ON v.id=a.active_version_id
+                   WHERE akb.knowledge_base_id=%s AND akb.workspace_id=%s AND akb.enabled
+                   LIMIT 1""",
+                (knowledge_base_id, workspace),
+            ).fetchone()
+            if existing:
+                return dict(existing)
+            template = conn.execute(
+                """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema
+                   FROM assistant_versions WHERE id='assistant_audit_template_v1'"""
+            ).fetchone()
+            if not template:
+                raise RuntimeError("generic assistant version template is missing")
+            assistant_id = f"assistant_{uuid.uuid4().hex}"
+            version_id = f"{assistant_id}_v1"
+            assistant_name = name.strip() or f"{kb['name']} audit"
+            conflict = conn.execute(
+                "SELECT 1 FROM audit_assistants WHERE workspace_id=%s AND name=%s",
+                (workspace, assistant_name),
+            ).fetchone()
+            if conflict:
+                assistant_name = f"{assistant_name} ({uuid.uuid4().hex[:8]})"
+            now = time.strftime("%Y-%m-%dT%H:%M:%S")
+            provenance = json.dumps(
+                {
+                    "source": "template_snapshot",
+                    "template_version_id": "assistant_audit_template_v1",
+                    "copied_at": now,
+                },
+                ensure_ascii=False,
+            )
+            conn.execute(
+                """INSERT INTO audit_assistants
+                   (id, workspace_id, name, description, status, active_version_id, created_at, updated_at)
+                   VALUES (%s,%s,%s,%s,'active',NULL,%s,%s)""",
+                (assistant_id, workspace, assistant_name, description or kb["description"] or "", now, now),
+            )
+            conn.execute(
+                """INSERT INTO assistant_versions
+                   (id, assistant_id, version, name, status, model_config, node_prompts, rules,
+                    retrieval_config, parameter_schema, category_profile, initialization_provenance,
+                    created_at, activated_at)
+                   VALUES (%s,%s,1,'','active',%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,'{}'::jsonb,%s::jsonb,%s,%s)""",
+                (
+                    version_id, assistant_id,
+                    json.dumps(template["model_config"] or {}, ensure_ascii=False),
+                    json.dumps(template["node_prompts"] or {}, ensure_ascii=False),
+                    json.dumps(template["rules"] or {}, ensure_ascii=False),
+                    json.dumps(template["retrieval_config"] or {}, ensure_ascii=False),
+                    json.dumps(template["parameter_schema"] or {}, ensure_ascii=False),
+                    provenance, now, now,
+                ),
+            )
+            conn.execute(
+                "UPDATE audit_assistants SET active_version_id=%s WHERE id=%s",
+                (version_id, assistant_id),
+            )
+            conn.execute(
+                """INSERT INTO assistant_knowledge_bases
+                   (assistant_id, knowledge_base_id, workspace_id, priority, enabled)
+                   VALUES (%s,%s,%s,0,TRUE)""",
+                (assistant_id, knowledge_base_id, workspace),
+            )
+            row = conn.execute(
+                """SELECT a.*, v.version AS active_version
+                   FROM audit_assistants a JOIN assistant_versions v ON v.id=a.active_version_id
+                   WHERE a.id=%s AND a.workspace_id=%s""",
+                (assistant_id, workspace),
+            ).fetchone()
+        return dict(row)
+
     @staticmethod
     def _file_select() -> str:
         return """SELECT f.*,
@@ -824,6 +1008,218 @@ class PostgresContentRepository:
                 (file_id, workspace),
             ).fetchone()
         return dict(row) if row else None
+
+    def create_file(self, values: dict[str, Any]) -> dict[str, Any]:
+        workspace = self._scope(values.get("workspace_id"))
+        metadata = json.dumps(values.get("metadata") or {}, ensure_ascii=False)
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO files
+                   (id, workspace_id, name, path, sha, object_key, object_sha256,
+                    object_size, page_count, metadata, created_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)""",
+                (
+                    values["id"], workspace, values["name"], values["path"],
+                    values.get("sha"), values.get("object_key") or "",
+                    values.get("object_sha256") or "", int(values.get("object_size") or 0),
+                    values.get("page_count"), metadata, values.get("created_at"),
+                ),
+            )
+        return self.get_file(str(values["id"])) or {}
+
+    def update_file(self, file_id: str, values: dict[str, Any]) -> dict[str, Any] | None:
+        workspace = self._scope()
+        allowed = {"name", "metadata", "object_key", "object_sha256", "object_size", "page_count"}
+        fields = {key: value for key, value in values.items() if key in allowed}
+        if fields:
+            assignments: list[str] = []
+            params: list[Any] = []
+            json_fields = {"metadata"}
+            for key, value in fields.items():
+                assignments.append(f"{key}=%s" + ("::jsonb" if key in json_fields else ""))
+                params.append(
+                    json.dumps(value or {}, ensure_ascii=False) if key in json_fields else value
+                )
+            assignments.append("updated_at=now()")
+            params.extend([file_id, workspace])
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE files SET " + ", ".join(assignments)
+                    + " WHERE id=%s AND workspace_id=%s",
+                    params,
+                )
+        return self.get_file(file_id)
+
+    def delete_file(self, file_id: str) -> dict[str, Any] | None:
+        workspace = self._scope()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM files WHERE id=%s AND workspace_id=%s",
+                (file_id, workspace),
+            ).fetchone()
+            if not row:
+                return None
+            crops = conn.execute(
+                "SELECT crop_path FROM chunks WHERE file_id=%s AND workspace_id=%s",
+                (file_id, workspace),
+            ).fetchall()
+            conn.execute(
+                "UPDATE knowledge_bases SET default_naming_file_id=NULL, updated_at=now()"
+                " WHERE default_naming_file_id=%s AND workspace_id=%s",
+                (file_id, workspace),
+            )
+            conn.execute(
+                "DELETE FROM chunk_vector_index WHERE file_id=%s AND workspace_id=%s",
+                (file_id, workspace),
+            )
+            conn.execute(
+                "DELETE FROM files WHERE id=%s AND workspace_id=%s",
+                (file_id, workspace),
+            )
+        result = dict(row)
+        result["crop_paths"] = [str(item["crop_path"] or "") for item in crops]
+        return result
+
+    def attach_file_to_knowledge_base(
+        self,
+        knowledge_base_id: str,
+        file_id: str,
+        *,
+        role: str,
+        corpus_kind: str,
+        enabled: bool = True,
+    ) -> None:
+        workspace = self._scope()
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO knowledge_base_files
+                   (knowledge_base_id, file_id, workspace_id, role, corpus_kind, enabled)
+                   VALUES (%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (knowledge_base_id, file_id) DO UPDATE SET
+                     role=EXCLUDED.role, corpus_kind=EXCLUDED.corpus_kind,
+                     enabled=EXCLUDED.enabled""",
+                (knowledge_base_id, file_id, workspace, role, corpus_kind, enabled),
+            )
+
+    def update_knowledge_base_file(
+        self, knowledge_base_id: str, file_id: str, values: dict[str, Any]
+    ) -> bool:
+        workspace = self._scope()
+        allowed = {"enabled", "role", "corpus_kind"}
+        fields = {key: value for key, value in values.items() if key in allowed}
+        with self._connect() as conn:
+            exists = conn.execute(
+                """SELECT 1 FROM knowledge_base_files
+                   WHERE knowledge_base_id=%s AND file_id=%s AND workspace_id=%s""",
+                (knowledge_base_id, file_id, workspace),
+            ).fetchone()
+            if not exists:
+                return False
+            if fields:
+                assignments = [f"{key}=%s" for key in fields]
+                params = list(fields.values()) + [knowledge_base_id, file_id, workspace]
+                conn.execute(
+                    "UPDATE knowledge_base_files SET " + ", ".join(assignments)
+                    + " WHERE knowledge_base_id=%s AND file_id=%s AND workspace_id=%s",
+                    params,
+                )
+            return True
+
+    def remove_file_from_knowledge_base(self, knowledge_base_id: str, file_id: str) -> bool:
+        workspace = self._scope()
+        with self._connect() as conn:
+            result = conn.execute(
+                """DELETE FROM knowledge_base_files
+                   WHERE knowledge_base_id=%s AND file_id=%s AND workspace_id=%s""",
+                (knowledge_base_id, file_id, workspace),
+            )
+        return result.rowcount > 0
+
+    def set_default_naming_file(self, knowledge_base_id: str, file_id: str | None) -> None:
+        workspace = self._scope()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE knowledge_bases SET default_naming_file_id=%s, updated_at=now()"
+                " WHERE id=%s AND workspace_id=%s",
+                (file_id, knowledge_base_id, workspace),
+            )
+
+    def create_chunk(self, values: dict[str, Any]) -> dict[str, Any]:
+        workspace = self._scope(values.get("workspace_id"))
+        json_fields = {
+            "bbox", "metadata", "business_metadata", "metadata_llm", "source_trace",
+            "chunk_logic", "relations", "ui_state", "indexing",
+        }
+        columns = [
+            "id", "workspace_id", "file_id", "page", "bbox", "rotation", "crop_path",
+            "crop_object_key", "crop_sha256", "crop_size", "text", "text_source",
+            "metadata", "business_metadata", "metadata_llm", "source_trace", "chunk_logic",
+            "relations", "status", "created_at", "updated_at",
+        ]
+        params: list[Any] = []
+        placeholders: list[str] = []
+        for column in columns:
+            value = workspace if column == "workspace_id" else values.get(column)
+            if column in json_fields:
+                placeholders.append("%s::jsonb")
+                params.append(json.dumps(value or {}, ensure_ascii=False))
+            else:
+                placeholders.append("%s")
+                params.append(value)
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO chunks (" + ",".join(columns) + ") VALUES ("
+                + ",".join(placeholders) + ")",
+                params,
+            )
+        return self.get_chunk(str(values["id"])) or {}
+
+    def update_chunk(self, chunk_id: str, values: dict[str, Any]) -> dict[str, Any] | None:
+        workspace = self._scope()
+        allowed = {
+            "text", "text_source", "metadata", "business_metadata", "metadata_llm",
+            "source_trace", "chunk_logic", "relations", "ui_state", "indexing", "status",
+            "crop_object_key", "crop_sha256", "crop_size",
+        }
+        json_fields = {
+            "metadata", "business_metadata", "metadata_llm", "source_trace", "chunk_logic",
+            "relations", "ui_state", "indexing",
+        }
+        fields = {key: value for key, value in values.items() if key in allowed}
+        if fields:
+            assignments: list[str] = []
+            params: list[Any] = []
+            for key, value in fields.items():
+                assignments.append(f"{key}=%s" + ("::jsonb" if key in json_fields else ""))
+                params.append(json.dumps(value or {}, ensure_ascii=False) if key in json_fields else value)
+            assignments.append("updated_at=now()")
+            params.extend([chunk_id, workspace])
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE chunks SET " + ", ".join(assignments)
+                    + " WHERE id=%s AND workspace_id=%s",
+                    params,
+                )
+        return self.get_chunk(chunk_id)
+
+    def delete_chunk(self, chunk_id: str) -> dict[str, Any] | None:
+        workspace = self._scope()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM chunks WHERE id=%s AND workspace_id=%s",
+                (chunk_id, workspace),
+            ).fetchone()
+            if not row:
+                return None
+            conn.execute(
+                "DELETE FROM chunk_vector_index WHERE chunk_id=%s AND workspace_id=%s",
+                (chunk_id, workspace),
+            )
+            conn.execute(
+                "DELETE FROM chunks WHERE id=%s AND workspace_id=%s",
+                (chunk_id, workspace),
+            )
+        return dict(row)
 
     def latest_parse(
         self,
