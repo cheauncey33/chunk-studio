@@ -757,10 +757,15 @@ def assistant_chat(assistant_id: str, body: AssistantChatRequest):
     assistant = _assistant_row(assistant_id)
     if not assistant["active_version_id"]:
         raise HTTPException(400, "assistant has no active version")
-    version = db.get_conn().execute(
-        "SELECT * FROM assistant_versions WHERE id=?",
-        (assistant["active_version_id"],),
-    ).fetchone()
+    repository = get_content_repository() or get_content_write_repository()
+    version = (
+        repository.get_active_assistant_version(assistant_id)
+        if repository is not None
+        else db.get_conn().execute(
+            "SELECT * FROM assistant_versions WHERE id=?",
+            (assistant["active_version_id"],),
+        ).fetchone()
+    )
     if not version:
         raise HTTPException(404, "active version not found")
 
@@ -768,7 +773,11 @@ def assistant_chat(assistant_id: str, body: AssistantChatRequest):
     retrieval_config = retrieval.normalize_retrieval_config(
         _loads(version["retrieval_config"])
     )
-    file_ids = db.assistant_scoped_file_ids(assistant_id)
+    file_ids = (
+        repository.assistant_scoped_file_ids(assistant_id)
+        if repository is not None
+        else db.assistant_scoped_file_ids(assistant_id)
+    )
     if not file_ids:
         raise HTTPException(400, "请先绑定知识库，并确保库内有已启用的文件")
 
@@ -896,16 +905,25 @@ def _prepare_agent_context(
     assistant = _assistant_row(assistant_id)
     if not assistant["active_version_id"]:
         raise HTTPException(400, "assistant has no active version")
-    version = db.get_conn().execute(
-        "SELECT * FROM assistant_versions WHERE id=?",
-        (assistant["active_version_id"],),
-    ).fetchone()
+    repository = get_content_repository() or get_content_write_repository()
+    version = (
+        repository.get_active_assistant_version(assistant_id)
+        if repository is not None
+        else db.get_conn().execute(
+            "SELECT * FROM assistant_versions WHERE id=?",
+            (assistant["active_version_id"],),
+        ).fetchone()
+    )
     if not version:
         raise HTTPException(404, "active version not found")
 
     # Business-only Agent turns are valid without enabled KB files. In that
     # case chat_agent omits the document-search tool and explains the limit.
-    current_file_ids = db.assistant_scoped_file_ids(assistant_id)
+    current_file_ids = (
+        repository.assistant_scoped_file_ids(assistant_id)
+        if repository is not None
+        else db.assistant_scoped_file_ids(assistant_id)
+    )
     current_model_config = _loads(version["model_config"])
     current_retrieval_config = retrieval.normalize_retrieval_config(
         _loads(version["retrieval_config"])
