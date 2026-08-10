@@ -1590,7 +1590,6 @@ class PostgresContentRepository:
         if len(documents) != len(vectors):
             raise ValueError("document and vector counts differ")
         workspace = self._scope()
-        per_document_tokens = (int(token_count) + len(documents) - 1) // len(documents) if documents else 0
         rows: list[tuple[Any, ...]] = []
         with self._connect() as conn:
             for document, vector in zip(documents, vectors, strict=True):
@@ -1625,25 +1624,25 @@ class PostgresContentRepository:
                         chunk["text"] or "",
                         json.dumps(chunk["business_metadata"] or {}, ensure_ascii=False),
                         json.dumps(chunk["source_trace"] or {}, ensure_ascii=False),
-                        per_document_tokens,
                     )
                 )
             if rows:
-                conn.executemany(
-                    """INSERT INTO chunk_vector_index
-                       (workspace_id, chunk_id, model, dimension, text_sha256, embedding,
-                        file_id, file_name, page, crop_path, crop_object_key, crop_sha256,
-                        crop_size, text, business_metadata, source_trace, status)
-                       VALUES (%s,%s,%s,%s,%s,%s::vector,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,'approved')
-                       ON CONFLICT (workspace_id, chunk_id, model, dimension) DO UPDATE SET
-                         text_sha256=EXCLUDED.text_sha256, embedding=EXCLUDED.embedding,
-                         file_id=EXCLUDED.file_id, file_name=EXCLUDED.file_name, page=EXCLUDED.page,
-                         crop_path=EXCLUDED.crop_path, crop_object_key=EXCLUDED.crop_object_key,
-                         crop_sha256=EXCLUDED.crop_sha256, crop_size=EXCLUDED.crop_size,
-                         text=EXCLUDED.text, business_metadata=EXCLUDED.business_metadata,
-                         source_trace=EXCLUDED.source_trace, updated_at=now()""",
-                    rows,
-                )
+                with conn.cursor() as cursor:
+                    cursor.executemany(
+                        """INSERT INTO chunk_vector_index
+                           (workspace_id, chunk_id, model, dimension, text_sha256, embedding,
+                            file_id, file_name, page, crop_path, crop_object_key, crop_sha256,
+                            crop_size, text, business_metadata, source_trace, status)
+                           VALUES (%s,%s,%s,%s,%s,%s::vector,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,'approved')
+                           ON CONFLICT (workspace_id, chunk_id, model, dimension) DO UPDATE SET
+                             text_sha256=EXCLUDED.text_sha256, embedding=EXCLUDED.embedding,
+                             file_id=EXCLUDED.file_id, file_name=EXCLUDED.file_name, page=EXCLUDED.page,
+                             crop_path=EXCLUDED.crop_path, crop_object_key=EXCLUDED.crop_object_key,
+                             crop_sha256=EXCLUDED.crop_sha256, crop_size=EXCLUDED.crop_size,
+                             text=EXCLUDED.text, business_metadata=EXCLUDED.business_metadata,
+                             source_trace=EXCLUDED.source_trace, updated_at=now()""",
+                        rows,
+                    )
 
     def get_active_assistant_version(self, assistant_id: str) -> dict[str, Any] | None:
         workspace = self._scope()

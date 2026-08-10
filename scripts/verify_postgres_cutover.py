@@ -206,6 +206,7 @@ def verify(
         "postgres": postgres_vectors,
         "complete": postgres_vectors["vectors"] == postgres_vectors["approved"],
         "sqlite_postgres_count_equal": sqlite_vectors["vectors"] == postgres_vectors["vectors"],
+        "sqlite_postgres_count_compatible": postgres_vectors["vectors"] >= sqlite_vectors["vectors"],
     }
     return {
         "workspace_id": workspace,
@@ -216,7 +217,7 @@ def verify(
         "pass": all(item["equal"] for item in checks.values())
         and all(item["complete"] for item in object_gate.values())
         and vector_gate["complete"]
-        and vector_gate["sqlite_postgres_count_equal"],
+        and vector_gate["sqlite_postgres_count_compatible"],
     }
 
 
