@@ -35,6 +35,10 @@ The gate must pass together with the existing pgvector top-K comparison. A
 non-empty `failed` queue count is reported for operations review; it is not
 silently treated as a successful migration.
 
+The gate also requires every workspace-approved chunk to have a matching
+pgvector row for the selected model and dimension. A count match alone is not
+enough for switching: the existing top-K comparison must still pass.
+
 ## Worker boundary
 
 When `CHUNK_STUDIO_DATABASE_BACKEND=postgres`, the PostgreSQL queue and the
