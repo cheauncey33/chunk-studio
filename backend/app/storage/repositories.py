@@ -192,6 +192,14 @@ class ContentRepository(Protocol):
 
     def delete_case_review(self, report_name: str, case_id: str) -> bool: ...
 
+    def exact_search(
+        self,
+        terms: list[str],
+        file_ids: list[str],
+        standard_no: str | None,
+        limit: int,
+    ) -> list[dict[str, Any]]: ...
+
     def list_lexical_rows(
         self,
         *,
@@ -1866,6 +1874,42 @@ class PostgresContentRepository:
                 (report_name, case_id, workspace),
             )
         return result.rowcount > 0
+
+    def exact_search(
+        self,
+        terms: list[str],
+        file_ids: list[str],
+        standard_no: str | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        workspace = self._scope()
+        bounded_limit = max(1, min(int(limit), 100))
+        clauses = [
+            "c.workspace_id=%s",
+            "f.workspace_id=%s",
+            "c.file_id = ANY(%s)",
+        ]
+        params: list[Any] = [workspace, workspace, file_ids]
+        term_clauses: list[str] = []
+        for term in terms:
+            term_clauses.append("(c.text ILIKE %s OR c.business_metadata::text ILIKE %s)")
+            params.extend((f"%{term}%", f"%{term}%"))
+        if term_clauses:
+            clauses.append("(" + " OR ".join(term_clauses) + ")")
+        if standard_no:
+            clauses.append("c.business_metadata->>'standard_no'=%s")
+            params.append(standard_no)
+        params.append(bounded_limit)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT c.id AS chunk_id, c.file_id, c.page, c.bbox, c.text,
+                          c.business_metadata, c.source_trace, f.name AS file_name
+                   FROM chunks c JOIN files f ON f.id=c.file_id
+                   WHERE """ + " AND ".join(clauses) + """
+                   ORDER BY c.file_id, c.page, c.id LIMIT %s""",
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def list_lexical_rows(
         self,

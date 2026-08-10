@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from app import current_user, db, llm, retrieval
 from app.agent_runtime.models import ToolDefinition
+from app.storage.repositories import get_content_repository, get_content_write_repository
 
 
 CandidateSearch = Callable[..., dict[str, Any]]
@@ -106,43 +107,58 @@ def _default_exact_search(
     if not file_ids:
         return {"hits": [], "candidate_count": 0, "degraded": []}
     workspace_id = current_user.get_current_user().workspace_id
-    clauses = [
-        "c.workspace_id=?",
-        "f.workspace_id=?",
-        f"c.file_id IN ({','.join('?' for _ in file_ids)})",
-    ]
-    params: list[Any] = [workspace_id, workspace_id, *file_ids]
-    term_clauses = []
-    for term in terms:
-        term_clauses.append("(c.text LIKE ? OR c.business_metadata LIKE ?)")
-        params.extend((f"%{term}%", f"%{term}%"))
-    if term_clauses:
-        clauses.append("(" + " OR ".join(term_clauses) + ")")
-    if standard_no:
-        clauses.append("json_extract(c.business_metadata, '$.standard_no') = ?")
-        params.append(standard_no)
-    params.append(limit)
-    rows = db.get_conn().execute(
-        f"""SELECT c.id AS chunk_id, c.file_id, c.page, c.bbox, c.text,
-                   c.business_metadata, c.source_trace, f.name AS file_name
-              FROM chunks c
-              JOIN files f ON f.id=c.file_id
-             WHERE {' AND '.join(clauses)}
-             ORDER BY c.file_id, c.page, c.id
-             LIMIT ?""",
-        params,
-    ).fetchall()
+    repository = get_content_repository() or get_content_write_repository()
+    if repository is not None:
+        rows = repository.exact_search(terms, file_ids, standard_no, limit)
+    else:
+        clauses = [
+            "c.workspace_id=?",
+            "f.workspace_id=?",
+            f"c.file_id IN ({','.join('?' for _ in file_ids)})",
+        ]
+        params: list[Any] = [workspace_id, workspace_id, *file_ids]
+        term_clauses = []
+        for term in terms:
+            term_clauses.append("(c.text LIKE ? OR c.business_metadata LIKE ?)")
+            params.extend((f"%{term}%", f"%{term}%"))
+        if term_clauses:
+            clauses.append("(" + " OR ".join(term_clauses) + ")")
+        if standard_no:
+            clauses.append("json_extract(c.business_metadata, '$.standard_no') = ?")
+            params.append(standard_no)
+        params.append(limit)
+        rows = db.get_conn().execute(
+            f"""SELECT c.id AS chunk_id, c.file_id, c.page, c.bbox, c.text,
+                       c.business_metadata, c.source_trace, f.name AS file_name
+                  FROM chunks c
+                  JOIN files f ON f.id=c.file_id
+                 WHERE {' AND '.join(clauses)}
+                 ORDER BY c.file_id, c.page, c.id
+                 LIMIT ?""",
+            params,
+        ).fetchall()
     hits = []
     for rank, row in enumerate(rows, start=1):
+        bbox = row["bbox"] if isinstance(row["bbox"], dict) else json.loads(row["bbox"] or "{}")
+        business_metadata = (
+            row["business_metadata"]
+            if isinstance(row["business_metadata"], dict)
+            else json.loads(row["business_metadata"] or "{}")
+        )
+        source_trace = (
+            row["source_trace"]
+            if isinstance(row["source_trace"], dict)
+            else json.loads(row["source_trace"] or "{}")
+        )
         hit = {
             "chunk_id": row["chunk_id"],
             "file_id": row["file_id"],
             "file_name": row["file_name"],
             "page": row["page"],
-            "bbox": json.loads(row["bbox"] or "{}"),
+            "bbox": bbox,
             "text": row["text"] or "",
-            "business_metadata": json.loads(row["business_metadata"] or "{}"),
-            "source_trace": json.loads(row["source_trace"] or "{}"),
+            "business_metadata": business_metadata,
+            "source_trace": source_trace,
             "score": 1.0,
             "rerank_score": None,
             "rrf_score": 1 / (retrieval.RRF_K + rank),
