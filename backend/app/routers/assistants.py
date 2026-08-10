@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .. import chat_agent, chat_sessions, config, current_user, db, jobs, llm, retrieval, runtime
+from ..storage.repositories import get_content_repository, get_content_write_repository
 
 
 router = APIRouter(prefix="/assistants", tags=["assistants"])
@@ -94,7 +95,9 @@ class AgentChatRequest(BaseModel):
     conversation_id: str | None = Field(default=None, max_length=100)
 
 
-def _loads(value: str | None) -> dict[str, Any]:
+def _loads(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
     try:
         parsed = json.loads(value or "{}")
         return parsed if isinstance(parsed, dict) else {}
@@ -164,6 +167,12 @@ def _version_out(row: Any) -> dict[str, Any]:
 
 
 def _assistant_row(assistant_id: str):
+    repository = get_content_repository() or get_content_write_repository()
+    if repository is not None:
+        row = repository.get_assistant(assistant_id)
+        if not row:
+            raise HTTPException(404, "assistant not found")
+        return row
     row = db.get_conn().execute(
         """SELECT a.*, v.version AS active_version
            FROM audit_assistants a
@@ -177,7 +186,11 @@ def _assistant_row(assistant_id: str):
 
 
 def _assistant_out(row: Any) -> dict[str, Any]:
-    kb_rows = db.get_conn().execute(
+    repository = get_content_repository() or get_content_write_repository()
+    kb_rows = (
+        repository.assistant_bound_knowledge_bases(row["id"])
+        if repository is not None
+        else db.get_conn().execute(
         """SELECT kb.id, kb.name
            FROM assistant_knowledge_bases akb
            JOIN knowledge_bases kb ON kb.id=akb.knowledge_base_id
@@ -186,7 +199,8 @@ def _assistant_out(row: Any) -> dict[str, Any]:
            ORDER BY akb.priority, kb.name""",
         (row["id"], current_user.get_current_user().workspace_id,
          current_user.get_current_user().workspace_id),
-    ).fetchall()
+        ).fetchall()
+    )
     return {
         "id": row["id"],
         "name": row["name"],
@@ -201,6 +215,12 @@ def _assistant_out(row: Any) -> dict[str, Any]:
 
 
 def _initial_version_template() -> Any:
+    repository = get_content_repository() or get_content_write_repository()
+    if repository is not None:
+        row = repository.get_assistant_template()
+        if not row:
+            raise RuntimeError("generic assistant version template is missing")
+        return row
     row = db.get_conn().execute(
         """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema
            FROM assistant_versions
@@ -213,6 +233,9 @@ def _initial_version_template() -> Any:
 
 @router.get("")
 def list_assistants():
+    repository = get_content_repository() or get_content_write_repository()
+    if repository is not None:
+        return [_assistant_out(row) for row in repository.list_assistants()]
     rows = db.get_conn().execute(
         """SELECT a.*, v.version AS active_version
            FROM audit_assistants a
@@ -228,13 +251,21 @@ def list_assistants():
 def create_assistant(body: AssistantCreate):
     from ..parameter_schema import resolve_parameter_schema
 
+    repository = get_content_write_repository()
     if body.knowledge_base_id:
         try:
-            created = db.ensure_assistant_for_knowledge_base(
-                body.knowledge_base_id.strip(),
-                name=body.name.strip(),
-                description=body.description.strip(),
-            )
+            if repository is not None:
+                created = repository.ensure_assistant_for_knowledge_base(
+                    body.knowledge_base_id.strip(),
+                    name=body.name.strip(),
+                    description=body.description.strip(),
+                )
+            else:
+                created = db.ensure_assistant_for_knowledge_base(
+                    body.knowledge_base_id.strip(),
+                    name=body.name.strip(),
+                    description=body.description.strip(),
+                )
         except KeyError as exc:
             raise HTTPException(404, str(exc)) from exc
         # If ensure returned an existing bind, optionally rename when caller provided a name.
@@ -246,6 +277,21 @@ def create_assistant(body: AssistantCreate):
     version_id = f"{assistant_id}_v1"
     template = _initial_version_template()
     parameter_schema = resolve_parameter_schema(_loads(template["parameter_schema"]))
+    if repository is not None:
+        try:
+            created = repository.create_assistant(
+                assistant_id=assistant_id,
+                name=body.name.strip(),
+                description=body.description.strip(),
+                template=dict(template),
+                parameter_schema=parameter_schema,
+                created_at=now,
+            )
+        except Exception as exc:
+            if "UNIQUE" in str(exc).upper():
+                raise HTTPException(409, "assistant name already exists") from exc
+            raise HTTPException(500, f"assistant creation failed: {exc}") from exc
+        return _assistant_out(created)
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO audit_assistants
@@ -344,6 +390,16 @@ def get_assistant(assistant_id: str):
 @router.patch("/{assistant_id}")
 def update_assistant(assistant_id: str, body: AssistantUpdate):
     _assistant_row(assistant_id)
+    repository = get_content_write_repository()
+    if repository is not None:
+        values: dict[str, Any] = {}
+        for key in ("name", "description", "status"):
+            value = getattr(body, key)
+            if value is not None:
+                values[key] = value.strip() if isinstance(value, str) else value
+        if values:
+            repository.update_assistant(assistant_id, values)
+        return _assistant_out(_assistant_row(assistant_id))
     updates: list[str] = []
     params: list[Any] = []
     for key in ("name", "description", "status"):
@@ -367,6 +423,12 @@ def get_active_version(assistant_id: str):
     assistant = _assistant_row(assistant_id)
     if not assistant["active_version_id"]:
         raise HTTPException(404, "assistant has no active version")
+    repository = get_content_repository() or get_content_write_repository()
+    if repository is not None:
+        row = repository.get_active_assistant_version(assistant_id)
+        if not row:
+            raise HTTPException(404, "assistant has no active version")
+        return _version_out(row)
     row = db.get_conn().execute(
         "SELECT * FROM assistant_versions WHERE id=?",
         (assistant["active_version_id"],),
@@ -396,6 +458,19 @@ def update_active_version(assistant_id: str, body: AssistantVersionConfigUpdate)
     # KB workflow UI stops nudging category init.
     if source in {"", "built_in_seed", "template_snapshot"}:
         provenance = {"source": "manual_config", "saved_at": now}
+    repository = get_content_write_repository()
+    if repository is not None:
+        row = repository.update_active_assistant_version(
+            assistant_id,
+            model_config=body.model_settings,
+            node_prompts=body.node_prompts,
+            rules=body.rules,
+            retrieval_config=normalized_retrieval_config,
+            parameter_schema=parameter_schema,
+            initialization_provenance=provenance,
+            updated_at=now,
+        )
+        return _version_out(row)
     with db.transaction() as conn:
         version_id = assistant["active_version_id"]
         if version_id:
@@ -477,6 +552,17 @@ def set_knowledge_bases(assistant_id: str, body: KnowledgeBaseSelection):
     unique_ids = list(dict.fromkeys(body.knowledge_base_ids))
     if len(unique_ids) > 1:
         raise HTTPException(422, "每个助手只能绑定一个知识库")
+    repository = get_content_write_repository()
+    if repository is not None:
+        try:
+            repository.set_assistant_knowledge_bases(assistant_id, unique_ids)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            message = str(exc)
+            status = 409 if "already bound" in message else 422
+            raise HTTPException(status, message) from exc
+        return _assistant_out(_assistant_row(assistant_id))
     if unique_ids:
         kb_id = unique_ids[0]
         row = db.get_conn().execute(

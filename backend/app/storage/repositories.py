@@ -177,6 +177,40 @@ class ContentRepository(Protocol):
 
     def get_assistant_name(self, assistant_id: str) -> str | None: ...
 
+    def list_assistants(self) -> list[dict[str, Any]]: ...
+
+    def get_assistant(self, assistant_id: str) -> dict[str, Any] | None: ...
+
+    def get_assistant_template(self) -> dict[str, Any] | None: ...
+
+    def create_assistant(
+        self,
+        *,
+        assistant_id: str,
+        name: str,
+        description: str,
+        template: dict[str, Any],
+        parameter_schema: dict[str, Any],
+        created_at: str,
+    ) -> dict[str, Any]: ...
+
+    def update_assistant(self, assistant_id: str, values: dict[str, Any]) -> dict[str, Any] | None: ...
+
+    def update_active_assistant_version(
+        self,
+        assistant_id: str,
+        *,
+        model_config: dict[str, Any],
+        node_prompts: dict[str, Any],
+        rules: dict[str, Any],
+        retrieval_config: dict[str, Any],
+        parameter_schema: dict[str, Any],
+        initialization_provenance: dict[str, Any],
+        updated_at: str,
+    ) -> dict[str, Any]: ...
+
+    def set_assistant_knowledge_bases(self, assistant_id: str, knowledge_base_ids: list[str]) -> None: ...
+
     def assistant_scoped_file_ids(self, assistant_id: str) -> list[str]: ...
 
     def assistant_bound_knowledge_bases(self, assistant_id: str) -> list[dict[str, Any]]: ...
@@ -1664,6 +1698,225 @@ class PostgresContentRepository:
                 (assistant_id, workspace),
             ).fetchone()
         return str(row["name"]) if row and row["name"] else None
+
+    def list_assistants(self) -> list[dict[str, Any]]:
+        workspace = self._scope()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT a.*, v.version AS active_version
+                   FROM audit_assistants a
+                   LEFT JOIN assistant_versions v ON v.id=a.active_version_id
+                   WHERE a.workspace_id=%s AND a.status <> 'archived'
+                   ORDER BY a.updated_at DESC, a.name""",
+                (workspace,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_assistant(self, assistant_id: str) -> dict[str, Any] | None:
+        workspace = self._scope()
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT a.*, v.version AS active_version
+                   FROM audit_assistants a
+                   LEFT JOIN assistant_versions v ON v.id=a.active_version_id
+                   WHERE a.id=%s AND a.workspace_id=%s""",
+                (assistant_id, workspace),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_assistant_template(self) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT model_config, node_prompts, rules, retrieval_config, parameter_schema
+                   FROM assistant_versions WHERE id='assistant_audit_template_v1'"""
+            ).fetchone()
+        return dict(row) if row else None
+
+    def create_assistant(
+        self,
+        *,
+        assistant_id: str,
+        name: str,
+        description: str,
+        template: dict[str, Any],
+        parameter_schema: dict[str, Any],
+        created_at: str,
+    ) -> dict[str, Any]:
+        workspace = self._scope()
+        version_id = f"{assistant_id}_v1"
+        provenance = json.dumps(
+            {
+                "source": "template_snapshot",
+                "template_version_id": "assistant_audit_template_v1",
+                "copied_at": created_at,
+            },
+            ensure_ascii=False,
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO audit_assistants
+                   (id, workspace_id, name, description, status, active_version_id, created_at, updated_at)
+                   VALUES (%s,%s,%s,%s,'active',NULL,%s,%s)""",
+                (assistant_id, workspace, name, description, created_at, created_at),
+            )
+            conn.execute(
+                """INSERT INTO assistant_versions
+                   (id, assistant_id, version, name, status, model_config, node_prompts, rules,
+                    retrieval_config, parameter_schema, category_profile, initialization_provenance,
+                    created_at, activated_at)
+                   VALUES (%s,%s,1,'','active',%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,'{}'::jsonb,%s::jsonb,%s,%s)""",
+                (
+                    version_id, assistant_id,
+                    json.dumps(template.get("model_config") or {}, ensure_ascii=False),
+                    json.dumps(template.get("node_prompts") or {}, ensure_ascii=False),
+                    json.dumps(template.get("rules") or {}, ensure_ascii=False),
+                    json.dumps(template.get("retrieval_config") or {}, ensure_ascii=False),
+                    json.dumps(parameter_schema or {}, ensure_ascii=False),
+                    provenance, created_at, created_at,
+                ),
+            )
+            conn.execute(
+                "UPDATE audit_assistants SET active_version_id=%s WHERE id=%s AND workspace_id=%s",
+                (version_id, assistant_id, workspace),
+            )
+        return self.get_assistant(assistant_id) or {}
+
+    def update_assistant(self, assistant_id: str, values: dict[str, Any]) -> dict[str, Any] | None:
+        workspace = self._scope()
+        fields = {key: value for key, value in values.items() if key in {"name", "description", "status"}}
+        if fields:
+            params = list(fields.values()) + [assistant_id, workspace]
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE audit_assistants SET "
+                    + ", ".join(f"{key}=%s" for key in fields)
+                    + ", updated_at=now() WHERE id=%s AND workspace_id=%s",
+                    params,
+                )
+        return self.get_assistant(assistant_id)
+
+    def update_active_assistant_version(
+        self,
+        assistant_id: str,
+        *,
+        model_config: dict[str, Any],
+        node_prompts: dict[str, Any],
+        rules: dict[str, Any],
+        retrieval_config: dict[str, Any],
+        parameter_schema: dict[str, Any],
+        initialization_provenance: dict[str, Any],
+        updated_at: str,
+    ) -> dict[str, Any]:
+        workspace = self._scope()
+        encoded = {
+            "model_config": json.dumps(model_config or {}, ensure_ascii=False),
+            "node_prompts": json.dumps(node_prompts or {}, ensure_ascii=False),
+            "rules": json.dumps(rules or {}, ensure_ascii=False),
+            "retrieval_config": json.dumps(retrieval_config or {}, ensure_ascii=False),
+            "parameter_schema": json.dumps(parameter_schema or {}, ensure_ascii=False),
+            "initialization_provenance": json.dumps(initialization_provenance or {}, ensure_ascii=False),
+        }
+        with self._connect() as conn:
+            assistant = conn.execute(
+                "SELECT active_version_id FROM audit_assistants WHERE id=%s AND workspace_id=%s FOR UPDATE",
+                (assistant_id, workspace),
+            ).fetchone()
+            if not assistant:
+                raise KeyError("assistant not found")
+            version_id = assistant["active_version_id"]
+            if version_id and not conn.execute(
+                "SELECT 1 FROM assistant_versions WHERE id=%s AND assistant_id=%s",
+                (version_id, assistant_id),
+            ).fetchone():
+                version_id = None
+            if not version_id:
+                latest = conn.execute(
+                    "SELECT id FROM assistant_versions WHERE assistant_id=%s ORDER BY version DESC LIMIT 1",
+                    (assistant_id,),
+                ).fetchone()
+                version_id = latest["id"] if latest else None
+            if version_id:
+                conn.execute(
+                    """UPDATE assistant_versions
+                       SET status='active', model_config=%s::jsonb, node_prompts=%s::jsonb,
+                           rules=%s::jsonb, retrieval_config=%s::jsonb, parameter_schema=%s::jsonb,
+                           category_profile='{}'::jsonb, initialization_provenance=%s::jsonb,
+                           activated_at=COALESCE(activated_at,%s)
+                       WHERE id=%s AND assistant_id=%s""",
+                    (
+                        encoded["model_config"], encoded["node_prompts"], encoded["rules"],
+                        encoded["retrieval_config"], encoded["parameter_schema"],
+                        encoded["initialization_provenance"], updated_at, version_id, assistant_id,
+                    ),
+                )
+                conn.execute(
+                    "DELETE FROM assistant_versions WHERE assistant_id=%s AND id<>%s",
+                    (assistant_id, version_id),
+                )
+            else:
+                version_id = f"{assistant_id}_v1_{uuid.uuid4().hex[:8]}"
+                conn.execute(
+                    """INSERT INTO assistant_versions
+                       (id,assistant_id,version,name,status,model_config,node_prompts,rules,
+                        retrieval_config,parameter_schema,category_profile,initialization_provenance,
+                        created_at,activated_at)
+                       VALUES (%s,%s,1,'','active',%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,'{}'::jsonb,%s::jsonb,%s,%s)""",
+                    (
+                        version_id, assistant_id, encoded["model_config"], encoded["node_prompts"],
+                        encoded["rules"], encoded["retrieval_config"], encoded["parameter_schema"],
+                        encoded["initialization_provenance"], updated_at, updated_at,
+                    ),
+                )
+            conn.execute(
+                "UPDATE audit_assistants SET active_version_id=%s, status='active', updated_at=%s WHERE id=%s AND workspace_id=%s",
+                (version_id, updated_at, assistant_id, workspace),
+            )
+        row = self.get_active_assistant_version(assistant_id)
+        if not row:
+            raise RuntimeError("active assistant version missing after update")
+        return row
+
+    def set_assistant_knowledge_bases(self, assistant_id: str, knowledge_base_ids: list[str]) -> None:
+        workspace = self._scope()
+        unique_ids = list(dict.fromkeys(knowledge_base_ids))
+        if len(unique_ids) > 1:
+            raise ValueError("assistant can bind at most one knowledge base")
+        with self._connect() as conn:
+            if not conn.execute(
+                "SELECT 1 FROM audit_assistants WHERE id=%s AND workspace_id=%s",
+                (assistant_id, workspace),
+            ).fetchone():
+                raise KeyError("assistant not found")
+            if unique_ids:
+                kb_id = unique_ids[0]
+                if not conn.execute(
+                    "SELECT 1 FROM knowledge_bases WHERE id=%s AND workspace_id=%s",
+                    (kb_id, workspace),
+                ).fetchone():
+                    raise ValueError("knowledge base does not exist")
+                conflict = conn.execute(
+                    """SELECT assistant_id FROM assistant_knowledge_bases
+                       WHERE knowledge_base_id=%s AND workspace_id=%s AND enabled AND assistant_id<>%s""",
+                    (kb_id, workspace, assistant_id),
+                ).fetchone()
+                if conflict:
+                    raise ValueError("knowledge base is already bound to another assistant")
+            conn.execute(
+                "DELETE FROM assistant_knowledge_bases WHERE assistant_id=%s AND workspace_id=%s",
+                (assistant_id, workspace),
+            )
+            if unique_ids:
+                kb_id = unique_ids[0]
+                conn.execute(
+                    "DELETE FROM assistant_knowledge_bases WHERE knowledge_base_id=%s AND workspace_id=%s",
+                    (kb_id, workspace),
+                )
+                conn.execute(
+                    """INSERT INTO assistant_knowledge_bases
+                       (assistant_id, knowledge_base_id, workspace_id, priority, enabled)
+                       VALUES (%s,%s,%s,0,TRUE)""",
+                    (assistant_id, kb_id, workspace),
+                )
 
     def assistant_scoped_file_ids(self, assistant_id: str) -> list[str]:
         workspace = self._scope()
