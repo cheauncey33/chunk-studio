@@ -63,6 +63,23 @@ def pending_documents(
     include_table_columns: bool = False,
     workspace_id: str | None = None,
 ) -> list[EmbeddingDocument]:
+    from .storage.repositories import get_content_write_repository
+
+    content = get_content_write_repository()
+    if content is not None:
+        rows = content.list_embedding_rows(model=model, dimension=dimension)
+        documents = [
+            build_document(row, include_table_columns=include_table_columns)
+            for row in rows
+        ]
+        if force:
+            return documents
+        indexed = {
+            str(row["id"]): str(row.get("indexed_text_sha256") or "")
+            for row in rows
+        }
+        return [doc for doc in documents if indexed.get(doc.chunk_id) != doc.text_sha256]
+
     workspace_clause = " AND c.workspace_id=?" if workspace_id else ""
     chunk_params: tuple[Any, ...] = (workspace_id,) if workspace_id else ()
     rows = db.get_conn().execute(
@@ -294,6 +311,19 @@ def store_embeddings(
     dimension: int,
     token_count: int = 0,
 ) -> None:
+    from .storage.repositories import get_content_write_repository
+
+    content = get_content_write_repository()
+    if content is not None:
+        content.upsert_embeddings(
+            documents,
+            vectors,
+            model=model,
+            dimension=dimension,
+            token_count=token_count,
+        )
+        return
+
     if len(documents) != len(vectors):
         raise ValueError("document and vector counts differ")
     now = time.strftime("%Y-%m-%dT%H:%M:%S")

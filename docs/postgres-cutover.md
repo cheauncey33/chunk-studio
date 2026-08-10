@@ -38,7 +38,8 @@ silently treated as a successful migration.
 ## Worker boundary
 
 When `CHUNK_STUDIO_DATABASE_BACKEND=postgres`, the PostgreSQL queue and the
-parse/chunk/OCR content mutations use the same workspace-scoped Repository.
-The audit/assistant-init and embedding writers are intentionally still on the
-next migration boundary; do not call this a full default cutover until those
-paths have their own Repository adapters and regression checks.
+parse/chunk/OCR content mutations and incremental Embedding writes use the same
+workspace-scoped PostgreSQL boundary (`chunk_vector_index` for vectors). The
+audit/assistant-init writers are intentionally still on the next migration
+boundary; do not call this a full default cutover until those paths have their
+own Repository adapters and regression checks.

@@ -108,6 +108,18 @@ class ContentRepository(Protocol):
 
     def update_chunk_ocr(self, chunk_id: str, *, text: str, business_metadata: dict[str, Any]) -> dict[str, Any] | None: ...
 
+    def list_embedding_rows(self, *, model: str, dimension: int) -> list[dict[str, Any]]: ...
+
+    def upsert_embeddings(
+        self,
+        documents: list[Any],
+        vectors: list[list[float]],
+        *,
+        model: str,
+        dimension: int,
+        token_count: int = 0,
+    ) -> None: ...
+
 
 def _decode(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
@@ -1075,6 +1087,89 @@ class PostgresContentRepository:
                 (text, json.dumps(business_metadata, ensure_ascii=False), chunk_id, workspace),
             ).fetchone()
         return dict(row) if row else None
+
+    def list_embedding_rows(self, *, model: str, dimension: int) -> list[dict[str, Any]]:
+        workspace = self._scope()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT c.id, c.text, c.business_metadata,
+                          vi.text_sha256 AS indexed_text_sha256
+                   FROM chunks c
+                   LEFT JOIN chunk_vector_index vi
+                     ON vi.workspace_id=c.workspace_id AND vi.chunk_id=c.id
+                    AND vi.model=%s AND vi.dimension=%s
+                   WHERE c.workspace_id=%s AND c.status='approved'
+                   ORDER BY c.file_id, c.page, c.created_at, c.id""",
+                (model, dimension, workspace),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def upsert_embeddings(
+        self,
+        documents: list[Any],
+        vectors: list[list[float]],
+        *,
+        model: str,
+        dimension: int,
+        token_count: int = 0,
+    ) -> None:
+        if len(documents) != len(vectors):
+            raise ValueError("document and vector counts differ")
+        workspace = self._scope()
+        per_document_tokens = (int(token_count) + len(documents) - 1) // len(documents) if documents else 0
+        rows: list[tuple[Any, ...]] = []
+        with self._connect() as conn:
+            for document, vector in zip(documents, vectors, strict=True):
+                if len(vector) != dimension:
+                    raise ValueError(f"unexpected vector dimension for {document.chunk_id}")
+                chunk = conn.execute(
+                    """SELECT c.id, c.file_id, c.page, c.crop_path, c.crop_object_key,
+                              c.crop_sha256, c.crop_size, c.text, c.business_metadata,
+                              c.source_trace, f.name AS file_name
+                       FROM chunks c JOIN files f ON f.id=c.file_id
+                       WHERE c.id=%s AND c.workspace_id=%s AND f.workspace_id=%s""",
+                    (str(document.chunk_id), workspace, workspace),
+                ).fetchone()
+                if not chunk:
+                    raise KeyError(f"chunk not found: {document.chunk_id}")
+                vector_literal = "[" + ",".join(format(float(value), ".9g") for value in vector) + "]"
+                rows.append(
+                    (
+                        workspace,
+                        chunk["id"],
+                        model,
+                        dimension,
+                        document.text_sha256,
+                        vector_literal,
+                        chunk["file_id"],
+                        chunk["file_name"] or "",
+                        chunk["page"],
+                        chunk["crop_path"],
+                        chunk["crop_object_key"] or "",
+                        chunk["crop_sha256"] or "",
+                        chunk["crop_size"] or 0,
+                        chunk["text"] or "",
+                        json.dumps(chunk["business_metadata"] or {}, ensure_ascii=False),
+                        json.dumps(chunk["source_trace"] or {}, ensure_ascii=False),
+                        per_document_tokens,
+                    )
+                )
+            if rows:
+                conn.executemany(
+                    """INSERT INTO chunk_vector_index
+                       (workspace_id, chunk_id, model, dimension, text_sha256, embedding,
+                        file_id, file_name, page, crop_path, crop_object_key, crop_sha256,
+                        crop_size, text, business_metadata, source_trace, status)
+                       VALUES (%s,%s,%s,%s,%s,%s::vector,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,'approved')
+                       ON CONFLICT (workspace_id, chunk_id, model, dimension) DO UPDATE SET
+                         text_sha256=EXCLUDED.text_sha256, embedding=EXCLUDED.embedding,
+                         file_id=EXCLUDED.file_id, file_name=EXCLUDED.file_name, page=EXCLUDED.page,
+                         crop_path=EXCLUDED.crop_path, crop_object_key=EXCLUDED.crop_object_key,
+                         crop_sha256=EXCLUDED.crop_sha256, crop_size=EXCLUDED.crop_size,
+                         text=EXCLUDED.text, business_metadata=EXCLUDED.business_metadata,
+                         source_trace=EXCLUDED.source_trace, updated_at=now()""",
+                    rows,
+                )
 
 def postgres_schema_sql() -> list[str]:
     """DDL for session/job tables; deployment runs it before switching adapters."""
