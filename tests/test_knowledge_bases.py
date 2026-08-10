@@ -423,6 +423,19 @@ def test_delete_knowledge_base_removes_exclusive_files(monkeypatch, tmp_path) ->
     pdf_path.write_bytes(b"%PDF-1.4\n%%EOF")
     shared_path = files_dir / "shared.pdf"
     shared_path.write_bytes(b"%PDF-1.4\n%%EOF")
+    crop_path = tmp_path / "crops" / "only.png"
+    crop_path.parent.mkdir(parents=True, exist_ok=True)
+    crop_path.write_bytes(b"png")
+
+    class FakeObjectStore:
+        def __init__(self):
+            self.deleted = []
+
+        def delete(self, key):
+            self.deleted.append(key)
+
+    object_store = FakeObjectStore()
+    monkeypatch.setattr(knowledge_bases, "get_object_store", lambda: object_store)
     monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(app_config, "FILES_DIR", files_dir)
 
@@ -444,6 +457,14 @@ def test_delete_knowledge_base_removes_exclusive_files(monkeypatch, tmp_path) ->
                       ('c2','f_shared',1,'{}','b','pending','now','now')"""
         )
         conn.execute(
+            """UPDATE files SET object_key=? WHERE id='f_only'""",
+            ("workspaces/local/files/f_only/content.pdf",),
+        )
+        conn.execute(
+            """UPDATE chunks SET crop_path=?, crop_object_key=? WHERE id='c1'""",
+            ("crops/only.png", "workspaces/local/files/f_only/chunks/c1/crop.png"),
+        )
+        conn.execute(
             """INSERT INTO knowledge_base_files
                (knowledge_base_id,file_id,role,enabled,created_at)
                VALUES ('kb_del','f_only','source',1,'now'),
@@ -463,7 +484,12 @@ def test_delete_knowledge_base_removes_exclusive_files(monkeypatch, tmp_path) ->
     assert "f_only" not in remaining
     assert "f_shared" in remaining
     assert not pdf_path.exists()
+    assert not crop_path.exists()
     assert shared_path.exists()
+    assert object_store.deleted == [
+        "workspaces/local/files/f_only/content.pdf",
+        "workspaces/local/files/f_only/chunks/c1/crop.png",
+    ]
 
     try:
         knowledge_bases.delete_knowledge_base("kb_uncategorized")

@@ -1258,7 +1258,8 @@ class PostgresContentRepository:
             if not row:
                 return None
             crops = conn.execute(
-                "SELECT crop_path FROM chunks WHERE file_id=%s AND workspace_id=%s",
+                """SELECT crop_path, crop_object_key
+                   FROM chunks WHERE file_id=%s AND workspace_id=%s""",
                 (file_id, workspace),
             ).fetchall()
             conn.execute(
@@ -1276,6 +1277,7 @@ class PostgresContentRepository:
             )
         result = dict(row)
         result["crop_paths"] = [str(item["crop_path"] or "") for item in crops]
+        result["crop_object_keys"] = [str(item["crop_object_key"] or "") for item in crops]
         return result
 
     def attach_file_to_knowledge_base(
@@ -1679,6 +1681,10 @@ class PostgresContentRepository:
                 "SELECT id, crop_path, crop_object_key FROM chunks WHERE file_id=%s AND workspace_id=%s",
                 (file_id, workspace),
             ).fetchall()
+            conn.execute(
+                "DELETE FROM chunk_vector_index WHERE file_id=%s AND workspace_id=%s",
+                (file_id, workspace),
+            )
             conn.execute(
                 "DELETE FROM chunks WHERE file_id=%s AND workspace_id=%s",
                 (file_id, workspace),

@@ -341,10 +341,17 @@ def delete_knowledge_base(knowledge_base_id: str):
         raise HTTPException(400, "默认知识库不可删除")
 
     owned = db.get_conn().execute(
-        """SELECT f.id, f.path,
+        """SELECT f.id, f.path, f.object_key,
                   (SELECT COUNT(*) FROM knowledge_base_files o
                    WHERE o.file_id=f.id AND o.workspace_id=? AND o.knowledge_base_id!=?) AS other_kbs,
-                  (SELECT COUNT(*) FROM chunks c WHERE c.file_id=f.id) AS chunk_count
+                  (SELECT COUNT(*) FROM chunks c
+                   WHERE c.file_id=f.id AND c.workspace_id=f.workspace_id) AS chunk_count,
+                  COALESCE((SELECT json_group_array(COALESCE(c.crop_path, ''))
+                            FROM chunks c
+                            WHERE c.file_id=f.id AND c.workspace_id=f.workspace_id), '[]') AS crop_paths,
+                  COALESCE((SELECT json_group_array(COALESCE(c.crop_object_key, ''))
+                            FROM chunks c
+                            WHERE c.file_id=f.id AND c.workspace_id=f.workspace_id), '[]') AS crop_object_keys
            FROM knowledge_base_files kbf
            JOIN files f ON f.id=kbf.file_id
            WHERE kbf.knowledge_base_id=? AND kbf.workspace_id=? AND f.workspace_id=?""",
@@ -363,6 +370,11 @@ def delete_knowledge_base(knowledge_base_id: str):
     with db.transaction() as conn:
         if exclusive_ids:
             placeholders = ",".join("?" for _ in exclusive_ids)
+            conn.execute(
+                f"DELETE FROM chunk_embeddings WHERE chunk_id IN "
+                f"(SELECT id FROM chunks WHERE workspace_id=? AND file_id IN ({placeholders}))",
+                [_workspace_id(), *exclusive_ids],
+            )
             conn.execute(
                 f"DELETE FROM chunks WHERE workspace_id=? AND file_id IN ({placeholders})",
                 [_workspace_id(), *exclusive_ids],
@@ -395,13 +407,26 @@ def delete_knowledge_base(knowledge_base_id: str):
             )
 
     for item in exclusive:
-        path = (item.get("path") or "").strip()
-        if not path:
-            continue
-        try:
-            config.from_rel(path).unlink(missing_ok=True)
-        except OSError:
-            pass
+        paths = [item.get("path")]
+        keys = [item.get("object_key")]
+        paths.extend(_loads(item.get("crop_paths"), []))
+        keys.extend(_loads(item.get("crop_object_keys"), []))
+        for path_value in paths:
+            path = str(path_value or "").strip()
+            if not path:
+                continue
+            try:
+                config.from_rel(path).unlink(missing_ok=True)
+            except OSError:
+                pass
+        for object_key in keys:
+            key = str(object_key or "").strip()
+            if not key:
+                continue
+            try:
+                get_object_store().delete(key)
+            except Exception:
+                logger.exception("failed to delete object %s", key)
 
     return {
         "ok": True,

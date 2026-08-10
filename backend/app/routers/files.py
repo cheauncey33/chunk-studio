@@ -463,6 +463,12 @@ def delete_file(file_id: str):
                     config.from_rel(crop_path).unlink(missing_ok=True)
                 except Exception:
                     pass
+        for crop_object_key in deleted.get("crop_object_keys") or []:
+            if crop_object_key:
+                try:
+                    get_object_store().delete(crop_object_key)
+                except Exception:
+                    logger.exception("failed to delete object %s", crop_object_key)
         try:
             config.from_rel(f["path"]).unlink(missing_ok=True)
         except Exception:
@@ -479,6 +485,16 @@ def delete_file(file_id: str):
                SET default_naming_file_id=NULL, updated_at=?
                WHERE default_naming_file_id=? AND workspace_id=?""",
             (time.strftime("%Y-%m-%dT%H:%M:%S"), file_id, _workspace_id()),
+        )
+        crop_rows = conn.execute(
+            """SELECT crop_path, crop_object_key FROM chunks
+               WHERE file_id=? AND workspace_id=?""",
+            (file_id, _workspace_id()),
+        ).fetchall()
+        conn.execute(
+            "DELETE FROM chunk_embeddings WHERE chunk_id IN "
+            "(SELECT id FROM chunks WHERE file_id=? AND workspace_id=?)",
+            (file_id, _workspace_id()),
         )
         conn.execute(
             "DELETE FROM chunks WHERE file_id=? AND workspace_id=?",
@@ -497,6 +513,17 @@ def delete_file(file_id: str):
             get_object_store().delete(f["object_key"])
         except Exception:
             logger.exception("failed to delete object %s", f["object_key"])
+    for crop in crop_rows:
+        if crop["crop_path"]:
+            try:
+                config.from_rel(crop["crop_path"]).unlink(missing_ok=True)
+            except Exception:
+                pass
+        if crop["crop_object_key"]:
+            try:
+                get_object_store().delete(crop["crop_object_key"])
+            except Exception:
+                logger.exception("failed to delete object %s", crop["crop_object_key"])
     return {"ok": True}
 
 

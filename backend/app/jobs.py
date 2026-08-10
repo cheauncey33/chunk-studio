@@ -287,19 +287,33 @@ def _delete_file_chunks(file_id: str) -> int:
         rows = content.delete_file_chunks(file_id)
     else:
         rows = db.get_conn().execute(
-            "SELECT id, crop_path FROM chunks WHERE file_id=?",
-            (file_id,),
+            """SELECT id, crop_path, crop_object_key FROM chunks
+               WHERE file_id=? AND workspace_id=?""",
+            (file_id, workspace_id()),
         ).fetchall()
         with db.transaction() as conn:
-            conn.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
+            conn.execute(
+                "DELETE FROM chunk_embeddings WHERE chunk_id IN "
+                "(SELECT id FROM chunks WHERE file_id=? AND workspace_id=?)",
+                (file_id, workspace_id()),
+            )
+            conn.execute(
+                "DELETE FROM chunks WHERE file_id=? AND workspace_id=?",
+                (file_id, workspace_id()),
+            )
     for row in rows:
         crop = (row["crop_path"] or "").strip()
-        if not crop:
-            continue
-        try:
-            config.from_rel(crop).unlink(missing_ok=True)
-        except OSError:
-            pass
+        if crop:
+            try:
+                config.from_rel(crop).unlink(missing_ok=True)
+            except OSError:
+                pass
+        object_key = str(row["crop_object_key"] or "").strip()
+        if object_key:
+            try:
+                get_object_store().delete(object_key)
+            except Exception:
+                logger.exception("failed to delete object %s", object_key)
     return len(rows)
 
 
