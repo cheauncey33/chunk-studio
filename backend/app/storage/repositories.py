@@ -652,6 +652,169 @@ def postgres_schema_sql() -> list[str]:
     ]
 
 
+def postgres_content_schema_sql() -> list[str]:
+    """DDL for the workspace-owned business content migration slice.
+
+    Chat/jobs and the vector index have their own migration boundaries.  This
+    slice keeps the source-compatible path columns while adding object keys
+    for the later MinIO/S3 cutover.  JSON text from SQLite is stored as JSONB
+    so the PostgreSQL repository can filter structured metadata without
+    reparsing every row in Python.
+    """
+    return [
+        """CREATE TABLE IF NOT EXISTS files (
+             id TEXT PRIMARY KEY,
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+             name TEXT NOT NULL,
+             path TEXT NOT NULL,
+             sha TEXT,
+             object_key TEXT NOT NULL DEFAULT '',
+             page_count INTEGER,
+             metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )""",
+        """CREATE TABLE IF NOT EXISTS chunks (
+             id TEXT PRIMARY KEY,
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+             file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+             page INTEGER NOT NULL,
+             bbox JSONB NOT NULL DEFAULT '{}'::jsonb,
+             rotation INTEGER NOT NULL DEFAULT 0,
+             crop_path TEXT,
+             text TEXT,
+             text_source TEXT NOT NULL DEFAULT 'pending'
+               CHECK (text_source IN ('digital', 'manual', 'ocr', 'pending')),
+             metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+             business_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+             metadata_llm JSONB NOT NULL DEFAULT '{}'::jsonb,
+             source_trace JSONB NOT NULL DEFAULT '{}'::jsonb,
+             chunk_logic JSONB NOT NULL DEFAULT '{}'::jsonb,
+             relations JSONB NOT NULL DEFAULT '{}'::jsonb,
+             ui_state JSONB NOT NULL DEFAULT '{}'::jsonb,
+             indexing JSONB NOT NULL DEFAULT '{}'::jsonb,
+             status TEXT NOT NULL DEFAULT 'pending'
+               CHECK (status IN ('pending', 'reviewed', 'approved', 'rejected')),
+             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )""",
+        """CREATE TABLE IF NOT EXISTS document_parses (
+             id TEXT PRIMARY KEY,
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+             file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+             provider TEXT NOT NULL DEFAULT 'mineru',
+             status TEXT NOT NULL DEFAULT 'queued',
+             markdown_path TEXT,
+             raw_zip_path TEXT,
+             markdown_object_key TEXT NOT NULL DEFAULT '',
+             raw_zip_object_key TEXT NOT NULL DEFAULT '',
+             result JSONB NOT NULL DEFAULT '{}'::jsonb,
+             error TEXT NOT NULL DEFAULT '',
+             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )""",
+        """CREATE TABLE IF NOT EXISTS knowledge_bases (
+             id TEXT PRIMARY KEY,
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+             name TEXT NOT NULL,
+             description TEXT NOT NULL DEFAULT '',
+             status TEXT NOT NULL DEFAULT 'active'
+               CHECK (status IN ('active', 'archived')),
+             is_default BOOLEAN NOT NULL DEFAULT FALSE,
+             parser_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+             retrieval_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+             manual_rules JSONB NOT NULL DEFAULT '{}'::jsonb,
+             few_shot_rules JSONB NOT NULL DEFAULT '{}'::jsonb,
+             default_naming_file_id TEXT,
+             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             UNIQUE (workspace_id, name)
+        )""",
+        """CREATE TABLE IF NOT EXISTS knowledge_base_files (
+             knowledge_base_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+             file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+             role TEXT NOT NULL DEFAULT 'source'
+               CHECK (role IN ('source', 'reference')),
+             corpus_kind TEXT NOT NULL DEFAULT 'standard'
+               CHECK (corpus_kind IN ('standard', 'spec')),
+             enabled BOOLEAN NOT NULL DEFAULT TRUE,
+             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             PRIMARY KEY (knowledge_base_id, file_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS audit_assistants (
+             id TEXT PRIMARY KEY,
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+             name TEXT NOT NULL,
+             description TEXT NOT NULL DEFAULT '',
+             status TEXT NOT NULL DEFAULT 'active'
+               CHECK (status IN ('draft', 'active', 'archived')),
+             active_version_id TEXT,
+             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             UNIQUE (workspace_id, name)
+        )""",
+        """CREATE TABLE IF NOT EXISTS assistant_versions (
+             id TEXT PRIMARY KEY,
+             assistant_id TEXT NOT NULL REFERENCES audit_assistants(id) ON DELETE CASCADE,
+             version INTEGER NOT NULL,
+             name TEXT NOT NULL DEFAULT '',
+             status TEXT NOT NULL DEFAULT 'draft'
+               CHECK (status IN ('draft', 'active', 'retired')),
+             model_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+             node_prompts JSONB NOT NULL DEFAULT '{}'::jsonb,
+             rules JSONB NOT NULL DEFAULT '{}'::jsonb,
+             retrieval_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+             parameter_schema JSONB NOT NULL DEFAULT '{}'::jsonb,
+             category_profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+             initialization_provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             activated_at TIMESTAMPTZ,
+             UNIQUE (assistant_id, version)
+        )""",
+        """CREATE TABLE IF NOT EXISTS assistant_knowledge_bases (
+             assistant_id TEXT NOT NULL REFERENCES audit_assistants(id) ON DELETE CASCADE,
+             knowledge_base_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+             priority INTEGER NOT NULL DEFAULT 0,
+             enabled BOOLEAN NOT NULL DEFAULT TRUE,
+             PRIMARY KEY (assistant_id, knowledge_base_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS assistant_init_drafts (
+             assistant_id TEXT PRIMARY KEY REFERENCES audit_assistants(id) ON DELETE CASCADE,
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+             status TEXT NOT NULL DEFAULT 'ready'
+               CHECK (status IN ('generating', 'ready', 'failed', 'applied', 'discarded')),
+             payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+             job_id TEXT,
+             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )""",
+        """CREATE TABLE IF NOT EXISTS audit_case_reviews (
+             report_name TEXT NOT NULL,
+             case_id TEXT NOT NULL,
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+             status TEXT NOT NULL CHECK (status IN ('confirmed', 'corrected')),
+             corrected_status TEXT NOT NULL DEFAULT '',
+             note TEXT NOT NULL DEFAULT '',
+             reviewer TEXT NOT NULL DEFAULT '',
+             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             PRIMARY KEY (workspace_id, report_name, case_id)
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_files_scope_created ON files(workspace_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_chunks_scope_file_page ON chunks(workspace_id, file_id, page, created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_chunks_scope_status_updated ON chunks(workspace_id, status, updated_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_document_parses_scope_file ON document_parses(workspace_id, file_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_knowledge_bases_scope_status ON knowledge_bases(workspace_id, status, is_default DESC, updated_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_kb_files_scope_kb ON knowledge_base_files(workspace_id, knowledge_base_id, enabled, file_id)",
+        "CREATE INDEX IF NOT EXISTS ix_kb_files_scope_file ON knowledge_base_files(workspace_id, file_id, knowledge_base_id)",
+        "CREATE INDEX IF NOT EXISTS ix_assistants_scope_status ON audit_assistants(workspace_id, status, updated_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_assistant_versions_assistant ON assistant_versions(assistant_id, version DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_assistant_kbs_scope ON assistant_knowledge_bases(workspace_id, knowledge_base_id, enabled, priority)",
+        "CREATE INDEX IF NOT EXISTS ix_reviews_scope_report ON audit_case_reviews(workspace_id, report_name, updated_at DESC)",
+    ]
+
+
 def get_chat_repository() -> PostgresChatRepository | None:
     if config.DATABASE_BACKEND in {"postgres", "postgresql"}:
         if not config.DATABASE_URL:

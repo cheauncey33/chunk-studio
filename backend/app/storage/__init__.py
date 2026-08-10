@@ -6,6 +6,7 @@ from .repositories import (
     PostgresJobRepository,
     get_chat_repository,
     get_job_repository,
+    postgres_content_schema_sql,
     postgres_schema_sql,
 )
 from .vector_store import PgVectorStore, SQLiteVectorStore, VectorStore, get_vector_store
@@ -24,5 +25,6 @@ __all__ = [
     "PostgresJobRepository",
     "get_chat_repository",
     "get_job_repository",
+    "postgres_content_schema_sql",
     "postgres_schema_sql",
 ]

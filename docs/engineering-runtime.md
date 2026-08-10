@@ -29,6 +29,27 @@ uv run python scripts/migrate_sessions_jobs_to_postgres.py `
 
 迁移前先执行 dry-run。任务迁移使用 `ON CONFLICT DO NOTHING`，不会覆盖已经被 PostgreSQL Worker 领取的任务。
 
+## 分阶段切换边界
+
+当前按以下阶段推进，阶段之间不自动切流量：
+
+1. **阶段 1：数据基础**。迁移身份、会话、任务、文件、Chunk、知识库、助手和解析记录；Embedding 单独回填到 pgvector。SQLite 仍是业务读写源。
+2. **阶段 2：Repository 垂直切片**。先切知识库/文件/Chunk 的读路径，运行 SQLite 与 PostgreSQL 对照，再切写路径。
+3. **阶段 3：解析产物对象存储**。将 Markdown、layout ZIP、裁剪图迁移为 MinIO/S3 object key，数据库只保留 key、哈希和元数据。
+4. **阶段 4：Worker 与队列**。解析、切块、Embedding、审查任务使用 PostgreSQL 队列，API 多实例关闭进程内 Worker。
+5. **阶段 5：默认切换**。完成回归、尾部任务检查和回滚演练后，才将 PostgreSQL/pgvector 设为默认。
+
+阶段 1 的业务内容迁移命令：
+
+```powershell
+uv run python scripts/migrate_business_content_to_postgres.py `
+  --sqlite-path backend/data/chunkstudio.db `
+  --dsn $env:CHUNK_STUDIO_DATABASE_URL `
+  --apply
+```
+
+该命令默认 dry-run，重复执行时以 SQLite 为源同步同一批内容；不会迁移 Embedding，也不会删除 SQLite 数据。
+
 ## 服务与 Worker 分离
 
 API 多实例部署时关闭进程内 Worker：
