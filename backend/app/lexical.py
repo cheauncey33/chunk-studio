@@ -310,6 +310,79 @@ def _match_expression(tokens: list[str]) -> str:
     return " OR ".join(f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens)
 
 
+def _search_postgres(
+    query: str,
+    *,
+    content_type: str,
+    top_k: int,
+    file_ids: list[str] | None,
+) -> dict[str, Any]:
+    from .storage.repositories import get_content_repository, get_content_write_repository
+
+    repository = get_content_repository() or get_content_write_repository()
+    if repository is None:
+        raise RuntimeError("PostgreSQL lexical retrieval requires a content repository")
+    tokens = tokens_for_search(query)
+    if not tokens or file_ids is not None and not file_ids:
+        return {
+            "query": query,
+            "query_tokens": tokens,
+            "content_type": content_type,
+            "hits": [],
+            "sync": {"backend": "postgres"},
+        }
+    token_set = set(tokens)
+    scored: list[tuple[float, str, dict[str, Any], dict[str, list[str]]]] = []
+    for row in repository.list_lexical_rows(
+        content_type=content_type,
+        file_ids=file_ids,
+        limit=max(1000, top_k * 20),
+    ):
+        raw_fields = _raw_fields(row)
+        matched_fields = {
+            field: sorted(token_set & set(tokens_for_search(value)))
+            for field, value in raw_fields.items()
+            if value
+        }
+        matched_fields = {field: values for field, values in matched_fields.items() if values}
+        if not matched_fields:
+            continue
+        score = sum(
+            FIELD_WEIGHTS[field] * len(values)
+            for field, values in matched_fields.items()
+        )
+        scored.append((score, str(row["id"]), row, matched_fields))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    hits = []
+    for score, _, row, matched_fields in scored[:top_k]:
+        metadata = chunk_schema.parse_json_object(row["business_metadata"])
+        crop_object_key = str(row.get("crop_object_key") or "")
+        crop_path = row.get("crop_path")
+        hits.append({
+            "chunk_id": row["id"],
+            "score": float(score),
+            "file_id": row["file_id"],
+            "file_name": row["file_name"],
+            "page": row["page"],
+            "crop_url": (
+                f"/api/chunks/{row['id']}/crop"
+                if crop_object_key
+                else (f"/crops/{str(crop_path).split('/')[-1]}" if crop_path else None)
+            ),
+            "text": row["text"] or "",
+            "business_metadata": metadata,
+            "source_trace": chunk_schema.parse_json_object(row["source_trace"]),
+            "matched_fields": matched_fields,
+        })
+    return {
+        "query": query,
+        "query_tokens": tokens,
+        "content_type": content_type,
+        "hits": hits,
+        "sync": {"backend": "postgres"},
+    }
+
+
 def search(
     query: str,
     *,
@@ -320,6 +393,13 @@ def search(
 ) -> dict[str, Any]:
     if content_type not in CONTENT_TYPES:
         raise ValueError(f"unsupported lexical content type: {content_type}")
+    if config.DATABASE_BACKEND in {"postgres", "postgresql"}:
+        return _search_postgres(
+            query,
+            content_type=content_type,
+            top_k=top_k,
+            file_ids=file_ids,
+        )
     if sync:
         sync_result = sync_index()
     else:

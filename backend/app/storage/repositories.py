@@ -110,6 +110,14 @@ class ContentRepository(Protocol):
 
     def list_embedding_rows(self, *, model: str, dimension: int) -> list[dict[str, Any]]: ...
 
+    def list_lexical_rows(
+        self,
+        *,
+        content_type: str,
+        file_ids: list[str] | None = None,
+        limit: int = 5000,
+    ) -> list[dict[str, Any]]: ...
+
     def upsert_embeddings(
         self,
         documents: list[Any],
@@ -1136,6 +1144,41 @@ class PostgresContentRepository:
                    WHERE c.workspace_id=%s AND c.status='approved'
                    ORDER BY c.file_id, c.page, c.created_at, c.id""",
                 (model, dimension, workspace),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_lexical_rows(
+        self,
+        *,
+        content_type: str,
+        file_ids: list[str] | None = None,
+        limit: int = 5000,
+    ) -> list[dict[str, Any]]:
+        workspace = self._scope()
+        bounded_limit = max(1, min(int(limit), 50000))
+        clauses = [
+            "c.workspace_id=%s",
+            "f.workspace_id=%s",
+            "c.status='approved'",
+            "COALESCE(c.business_metadata->>'content_type', 'text')=%s",
+        ]
+        params: list[Any] = [workspace, workspace, content_type]
+        if file_ids is not None:
+            if not file_ids:
+                return []
+            clauses.append("c.file_id = ANY(%s)")
+            params.append(file_ids)
+        params.append(bounded_limit)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT c.id, c.file_id, f.name AS file_name, c.page,
+                          c.crop_path, c.crop_object_key, c.text,
+                          c.business_metadata, c.source_trace
+                   FROM chunks c
+                   JOIN files f ON f.id=c.file_id
+                   WHERE """ + " AND ".join(clauses) + """
+                   ORDER BY c.file_id, c.page, c.created_at, c.id LIMIT %s""",
+                params,
             ).fetchall()
         return [dict(row) for row in rows]
 

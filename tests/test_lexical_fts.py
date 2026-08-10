@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 from app import db, lexical
 from app.models import VectorSearchRequest
 from app.routers import search as search_router
+from app.storage import repositories
 
 
 def setup_isolated_db(monkeypatch, tmp_path) -> None:
@@ -168,3 +169,44 @@ def test_search_router_skips_shadow_when_lexical_is_in_production(monkeypatch) -
 
     assert result is response
     assert tasks.tasks == []
+
+
+def test_postgres_lexical_search_uses_content_repository(monkeypatch) -> None:
+    class FakeRepository:
+        def list_lexical_rows(self, *, content_type, file_ids=None, limit=5000):
+            assert content_type == "table"
+            assert file_ids == ["f"]
+            assert limit >= 1000
+            return [
+                {
+                    "id": "c",
+                    "file_id": "f",
+                    "file_name": "standard.pdf",
+                    "page": 1,
+                    "crop_path": "",
+                    "crop_object_key": "crops/f/c.png",
+                    "text": "200 kVA",
+                    "business_metadata": {
+                        "content_type": "table",
+                        "table_columns": ["rated capacity kVA"],
+                    },
+                    "source_trace": {},
+                }
+            ]
+
+    repository = FakeRepository()
+    monkeypatch.setattr(lexical.config, "DATABASE_BACKEND", "postgres")
+    monkeypatch.setattr(repositories, "get_content_repository", lambda: repository)
+    monkeypatch.setattr(repositories, "get_content_write_repository", lambda: None)
+
+    result = lexical.search(
+        "rated capacity kVA",
+        content_type="table",
+        top_k=3,
+        sync=False,
+        file_ids=["f"],
+    )
+
+    assert result["sync"] == {"backend": "postgres"}
+    assert result["hits"][0]["chunk_id"] == "c"
+    assert result["hits"][0]["crop_url"] == "/api/chunks/c/crop"
