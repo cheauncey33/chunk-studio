@@ -11,6 +11,7 @@ import {
   type ManualKnowledgeRules,
   type RetrievalShadowRun,
 } from './api'
+import { caseAuthorityLabel } from './lib/audit-status'
 
 type JsonRecord = Record<string, unknown>
 type ReportFilter = 'all' | 'end_to_end_audit' | 'retrieval_group_eval' | 'retrieval'
@@ -812,6 +813,7 @@ function ReportSummary({ report }: { report: AuditReportDetail }) {
   const payload = report.payload
   const summary = asRecord(payload.summary)
   const judgments = asRecord(summary.judgments)
+  const authority = asRecord(summary.authority)
   const statCandidates: Array<[string, unknown]> = [
     ['mode', summary.mode === 'full_report' ? '全量' : summary.mode],
     ['cases', summary.cases],
@@ -820,6 +822,8 @@ function ReportSummary({ report }: { report: AuditReportDetail }) {
     ['不符合', judgments.mismatch ?? judgments.incorrect],
     ['上下文不足', judgments.insufficient_context],
     ['未完成审查', judgments.not_audited ?? judgments.evidence_not_found],
+    ['程序闭合', authority.closed_count],
+    ['模型判定', authority.model_count],
   ]
   const stats = statCandidates.filter(([, value]) => value != null)
 
@@ -859,6 +863,7 @@ function CaseRow({ item, selected, onSelect }: {
         <strong>{caseId(item)}</strong>
         <StatusBadge status={status} />
       </div>
+      {caseAuthorityLabel(item) ? <span className="audit-authority">{caseAuthorityLabel(item)}</span> : null}
       <span>{String(testItem.project_name || item.group_id || '')}</span>
       <p>{String(requirement.text || '')}</p>
       <div className="audit-case-flags">
@@ -897,6 +902,9 @@ function CaseDetail({ item, review, onSaveReview, onRemoveReview }: {
         <div>
           <h3>{caseId(item)}</h3>
           <p>{String(asRecord(item.test_item).project_name || '')}</p>
+          {caseAuthorityLabel(item) ? (
+            <p className="audit-authority-line">{caseAuthorityLabel(item)}</p>
+          ) : null}
         </div>
         <StatusBadge status={status} />
       </div>

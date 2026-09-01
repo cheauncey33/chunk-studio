@@ -1,0 +1,333 @@
+{
+  "fail_kinds": {
+    "column_unbound": 34,
+    "conflicting_tables": 2,
+    "no_row_bind": 2,
+    "column_ambiguous": 2
+  },
+  "examples": {
+    "column_unbound": [
+      {
+        "project": "绕组电阻测量",
+        "text": "高压(线)电阻三相不平衡率最大值(%):≤2",
+        "decision": "no_authoritative_table_claim",
+        "bind": {
+          "skipped_non_table": 15,
+          "absent": 6,
+          "matched": 3,
+          "unresolved": 6
+        },
+        "prop": {
+          "unbound": 3
+        },
+        "compare": {},
+        "unique_headers": [],
+        "top_ranked": [
+          {
+            "score": 0.1,
+            "header": "电压组合及分接范围 / 高压kV",
+            "normalized_header": "电压组合及分接范围/高压kv"
+          },
+          {
+            "score": 0.09090909090909091,
+            "header": "电压组合及分接范围 / 高压分接范围%",
+            "normalized_header": "电压组合及分接范围/高压分接范围%"
+          },
+          {
+            "score": 0.0,
+            "header": "电压组合及分接范围 / 低压kV",
+            "normalized_header": "电压组合及分接范围/低压kv"
+          }
+        ]
+      },
+      {
+        "project": "绕组电阻测量",
+        "text": "低压(线)电阻三相不平衡率最大值(%):≤2",
+        "decision": "no_authoritative_table_claim",
+        "bind": {
+          "skipped_non_table": 15,
+          "absent": 6,
+          "matched": 3,
+          "unresolved": 6
+        },
+        "prop": {
+          "unbound": 3
+        },
+        "compare": {},
+        "unique_headers": [],
+        "top_ranked": [
+          {
+            "score": 0.1,
+            "header": "电压组合及分接范围 / 低压kV",
+            "normalized_header": "电压组合及分接范围/低压kv"
+          },
+          {
+            "score": 0.0,
+            "header": "电压组合及分接范围 / 高压kV",
+            "normalized_header": "电压组合及分接范围/高压kv"
+          },
+          {
+            "score": 0.0,
+            "header": "电压组合及分接范围 / 高压分接范围%",
+            "normalized_header": "电压组合及分接范围/高压分接范围%"
+          }
+        ]
+      },
+      {
+        "project": "绕组电阻测量",
+        "text": "低压(相)电阻三相不平衡率最大值(%):≤4",
+        "decision": "no_authoritative_table_claim",
+        "bind": {
+          "skipped_non_table": 15,
+          "absent": 7,
+          "matched": 3,
+          "unresolved": 5
+        },
+        "prop": {
+          "unbound": 3
+        },
+        "compare": {},
+        "unique_headers": [],
+        "top_ranked": [
+          {
+            "score": 0.1,
+            "header": "电压组合及分接范围 / 低压kV",
+            "normalized_header": "电压组合及分接范围/低压kv"
+          },
+          {
+            "score": 0.0,
+            "header": "电压组合及分接范围 / 高压kV",
+            "normalized_header": "电压组合及分接范围/高压kv"
+          },
+          {
+            "score": 0.0,
+            "header": "电压组合及分接范围 / 高压分接范围%",
+            "normalized_header": "电压组合及分接范围/高压分接范围%"
+          }
+        ]
+      },
+      {
+        "project": "短路阻抗和负载损耗测量",
+        "text": "总损耗P总(kW):≤3.985",
+        "decision": "no_authoritative_table_claim",
+        "bind": {
+          "skipped_non_table": 15,
+          "matched": 6,
+          "unresolved": 9
+        },
+        "prop": {
+          "unbound": 6
+        },
+        "compare": {},
+        "unique_headers": [],
+        "top_ranked": [
+          {
+            "score": 0.3333333333333333,
+            "header": "空载损耗kW / SZ13、SZ14",
+            "normalized_header": "空载损耗kw/sz13、sz14"
+          },
+          {
+            "score": 0.3333333333333333,
+            "header": "空载损耗kW / SZ20-NX2",
+            "normalized_header": "空载损耗kw/sz20-nx2"
+          },
+          {
+            "score": 0.3333333333333333,
+            "header": "负载损耗kW / SZ13",
+            "normalized_header": "负载损耗kw/sz13"
+          }
+        ]
+      }
+    ],
+    "conflicting_tables": [
+      {
+        "project": "电压比测量和联结组标号检定",
+        "text": "联结组标号:Dyn11",
+        "decision": "conflicting_table_bindings",
+        "bind": {
+          "skipped_non_table": 15,
+          "matched": 9,
+          "absent": 1,
+          "unresolved": 5
+        },
+        "prop": {
+          "unique": 9
+        },
+        "compare": {
+          "equal": 7,
+          "different": 2
+        },
+        "unique_headers": [
+          "联结组标号",
+          "联结组标号",
+          "联结组标号"
+        ],
+        "top_ranked": [
+          {
+            "score": 1.0,
+            "header": "联结组标号",
+            "normalized_header": "联结组标号"
+          },
+          {
+            "score": 0.0,
+            "header": "电压组合与分接范围 / 高压kV",
+            "normalized_header": "电压组合与分接范围/高压kv"
+          },
+          {
+            "score": 0.0,
+            "header": "电压组合与分接范围 / 高压分接范围%",
+            "normalized_header": "电压组合与分接范围/高压分接范围%"
+          }
+        ]
+      },
+      {
+        "project": "电压比测量和联结组标号检定",
+        "text": "联结组标号:Dyn11",
+        "decision": "conflicting_table_bindings",
+        "bind": {
+          "skipped_non_table": 15,
+          "matched": 9,
+          "absent": 1,
+          "unresolved": 5
+        },
+        "prop": {
+          "unique": 9
+        },
+        "compare": {
+          "equal": 7,
+          "different": 2
+        },
+        "unique_headers": [
+          "联结组标号",
+          "联结组标号",
+          "联结组标号"
+        ],
+        "top_ranked": [
+          {
+            "score": 1.0,
+            "header": "联结组标号",
+            "normalized_header": "联结组标号"
+          },
+          {
+            "score": 0.0,
+            "header": "电压组合与分接范围 / 高压kV",
+            "normalized_header": "电压组合与分接范围/高压kv"
+          },
+          {
+            "score": 0.0,
+            "header": "电压组合与分接范围 / 高压分接范围%",
+            "normalized_header": "电压组合与分接范围/高压分接范围%"
+          }
+        ]
+      }
+    ],
+    "no_row_bind": [
+      {
+        "project": "绝缘液试验",
+        "text": "介质损耗因数tanδ(90°C):≤1",
+        "decision": "no_authoritative_table_claim",
+        "bind": {
+          "skipped_non_table": 15,
+          "absent": 11,
+          "unresolved": 4
+        },
+        "prop": {},
+        "compare": {},
+        "unique_headers": [],
+        "top_ranked": null
+      },
+      {
+        "project": "绝缘液试验",
+        "text": "介质损耗因数tanδ(90°C)(%):≤1.0",
+        "decision": "no_authoritative_table_claim",
+        "bind": {
+          "skipped_non_table": 15,
+          "absent": 9,
+          "unresolved": 6
+        },
+        "prop": {},
+        "compare": {},
+        "unique_headers": [],
+        "top_ranked": null
+      }
+    ],
+    "column_ambiguous": [
+      {
+        "project": "声级测定",
+        "text": "声压级 LPA [dB(A)]:≤40",
+        "decision": "no_authoritative_table_claim",
+        "bind": {
+          "skipped_non_table": 15,
+          "unresolved": 6,
+          "matched": 5,
+          "absent": 4
+        },
+        "prop": {
+          "unique": 1,
+          "ambiguous": 2,
+          "unbound": 2
+        },
+        "compare": {
+          "unit_conversion_unavailable": 1,
+          "verdict_fallback:unit_conversion_unavailable": 1
+        },
+        "unique_headers": [
+          "声压级dB(A)"
+        ],
+        "top_ranked": [
+          {
+            "score": 1.0,
+            "header": "声压级dB(A)",
+            "normalized_header": "声压级db(a)"
+          },
+          {
+            "score": 0.0,
+            "header": "声功率级dB(A)",
+            "normalized_header": "声功率级db(a)"
+          }
+        ]
+      },
+      {
+        "project": "声级测定",
+        "text": "声功率级LWA[dB(A)]:≤46",
+        "decision": "no_authoritative_table_claim",
+        "bind": {
+          "matched": 5,
+          "skipped_non_table": 15,
+          "unresolved": 8,
+          "absent": 2
+        },
+        "prop": {
+          "ambiguous": 2,
+          "unique": 2,
+          "unbound": 1
+        },
+        "compare": {
+          "unit_conversion_unavailable": 2,
+          "verdict_fallback:unit_conversion_unavailable": 2
+        },
+        "unique_headers": [
+          "声功率级/dB(A)",
+          "声功率级dB(A)"
+        ],
+        "top_ranked": [
+          {
+            "score": 1.0,
+            "header": "三相电工钢叠铁心配电变压器 / 声功率级dB(A)",
+            "normalized_header": "三相电工钢叠铁心配电变压器/声功率级db(a)"
+          },
+          {
+            "score": 1.0,
+            "header": "三相电工钢闭口立体卷铁心变压器 / 声功率级dB(A)",
+            "normalized_header": "三相电工钢闭口立体卷铁心变压器/声功率级db(a)"
+          },
+          {
+            "score": 0.0,
+            "header": "三相电工钢叠铁心配电变压器 / 声压级dB(A)",
+            "normalized_header": "三相电工钢叠铁心配电变压器/声压级db(a)"
+          }
+        ]
+      }
+    ]
+  }
+}

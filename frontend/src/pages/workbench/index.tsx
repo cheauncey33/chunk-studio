@@ -12,6 +12,7 @@ import { useAssistants, useKnowledgeBases } from '@/hooks/use-knowledge-request'
 import { DEFAULT_OIL_ASSISTANT_ID } from '@/lib/assistants'
 import {
   AUDIT_STATUS_LABELS,
+  caseAuthorityLabel,
   caseJudgmentReason,
   caseJudgmentStatus,
   caseProjectName,
@@ -826,6 +827,11 @@ export default function WorkbenchPage() {
                                       未审查 {Number(run.judgments?.not_audited || 0)}
                                     </Badge>
                                   ) : null}
+                                  {run.authority && Number(run.authority.closed_count || 0) + Number(run.authority.model_count || 0) > 0 ? (
+                                    <Badge variant="secondary">
+                                      程序闭合 {Number(run.authority.closed_count || 0)} · 模型 {Number(run.authority.model_count || 0)}
+                                    </Badge>
+                                  ) : null}
                                 </span>
                                 <span className="flex shrink-0 items-center gap-1">
                                   <Button
@@ -876,12 +882,16 @@ export default function WorkbenchPage() {
                       const status = caseJudgmentStatus(item)
                       const title = caseProjectName(item, index)
                       const reason = caseJudgmentReason(item)
+                      const authorityLabel = caseAuthorityLabel(item)
                       return (
                         <article key={String(item.case_id || index)} className="rounded-xl border border-border-button p-4">
                           <div className="flex flex-wrap items-center gap-2">
                             <Badge variant={statusVariant(status)}>
                               {AUDIT_STATUS_LABELS[status] || status}
                             </Badge>
+                            {authorityLabel ? (
+                              <Badge variant="secondary">{authorityLabel}</Badge>
+                            ) : null}
                             <strong className="text-[15px]">{title}</strong>
                           </div>
                           {reason && (

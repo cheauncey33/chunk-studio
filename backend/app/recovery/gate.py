@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..audit_authority import layer_from_judgment
+
 
 def _strings(value: Any) -> list[str]:
     if not isinstance(value, list):
@@ -59,13 +61,38 @@ def decide_recovery(
         )
 
     if status in {"supported", "mismatch"}:
+        layer = layer_from_judgment(judgment)
+        authority = str(layer.get("authority") or "unknown")
+        if layer.get("closed"):
+            return _decision(
+                "accept_provisional",
+                "definitive_with_valid_evidence",
+                [f"judgment.status={status}", f"authority={authority}"],
+                failure_class="none",
+                resolution_state="definitive",
+                recoverable_by_agent=False,
+                authority=authority,
+                bind_state=layer.get("bind_state"),
+            )
+        if authority == "unknown":
+            return _decision(
+                "accept_provisional",
+                "definitive_with_valid_evidence",
+                [f"judgment.status={status}"],
+                failure_class="none",
+                resolution_state="definitive",
+                recoverable_by_agent=False,
+            )
         return _decision(
             "accept_provisional",
-            "definitive_with_valid_evidence",
-            [f"judgment.status={status}"],
+            "model_judgment_not_closed",
+            [f"judgment.status={status}", f"authority={authority}"],
             failure_class="none",
-            resolution_state="definitive",
+            resolution_state="model_provisional",
             recoverable_by_agent=False,
+            authority=authority,
+            bind_state=layer.get("bind_state"),
+            reason_bind=layer.get("reason_code"),
         )
 
     output = (

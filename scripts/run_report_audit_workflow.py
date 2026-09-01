@@ -36,11 +36,20 @@ from app.audit_policy import (  # noqa: E402
 )
 from app.evidence_locator import chunk_text_sha256  # noqa: E402
 from app.evidence_compression import compress_judge_input  # noqa: E402
+from app.audit_authority import (  # noqa: E402
+    apply_status_layer,
+    build_status_layer,
+    layer_from_judgment,
+    summarize_status_layers,
+)
 from app.audit_semantics import (  # noqa: E402
     annotate_candidates,
     build_deterministic_comparisons,
     evaluate_candidate_applicability,
+    evaluate_table_claims,
+    extract_requirement_claim,
     resolve_applicability,
+    resolve_table_claim_decision,
 )
 from app.parameter_schema import (  # noqa: E402
     normalize_extracted_parameters,
@@ -451,6 +460,36 @@ def _decode_model(
     return result
 
 
+_SEED_MANUAL_RULES_PATH = ROOT / "evaluation" / "manual_knowledge_rules_v1.json"
+
+
+def _overlay_seed_formulas(payload: dict[str, Any]) -> dict[str, Any]:
+    """Copy structured formulas from the versioned seed when live rules omit them."""
+    if not _SEED_MANUAL_RULES_PATH.exists():
+        return payload
+    try:
+        seed = json.loads(_SEED_MANUAL_RULES_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return payload
+    seed_formulas = {
+        str(rule.get("rule_id") or ""): rule.get("formula")
+        for rule in (seed.get("rules") or [])
+        if isinstance(rule, dict) and isinstance(rule.get("formula"), dict)
+    }
+    if not seed_formulas:
+        return payload
+    overlayed = []
+    for rule in payload.get("rules") or []:
+        if not isinstance(rule, dict):
+            continue
+        formula = seed_formulas.get(str(rule.get("rule_id") or ""))
+        if formula and not isinstance(rule.get("formula"), dict):
+            overlayed.append({**rule, "formula": formula})
+        else:
+            overlayed.append(rule)
+    return {**payload, "rules": overlayed}
+
+
 def _load_manual_knowledge_rules(
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -464,7 +503,7 @@ def _load_manual_knowledge_rules(
         raise ValueError("manual knowledge rule scope mismatch")
     if not isinstance(payload.get("rules"), list):
         raise ValueError("manual knowledge rules must contain a rules list")
-    return payload
+    return _overlay_seed_formulas(payload)
 
 
 def _select_manual_knowledge_rules(
@@ -1267,71 +1306,80 @@ def _validate_judgment(
     return judgment
 
 
-def _apply_deterministic_conflict(
-    judgment: dict[str, Any],
-    judge_input: dict[str, Any],
+def _template_table_reason(comparison: dict[str, Any], status: str) -> str:
+    tightness = str(comparison.get("tightness") or comparison.get("relation") or "")
+    report_value = comparison.get("report_value")
+    standard_value = comparison.get("standard_value")
+    column = comparison.get("target_column") or ""
+    units = comparison.get("unit_normalize") if isinstance(comparison.get("unit_normalize"), dict) else {}
+    unit = units.get("base") or units.get("left_unit") or units.get("right_unit") or ""
+    unit_note = f" {unit}" if unit else ""
+    if comparison.get("source") == "generic_derived_sum":
+        formula = column or "加项之和"
+        if status == "supported":
+            return (
+                f"程序按 {formula} 派生标准值后比较通过：报告 {report_value}{unit_note} 相对 "
+                f"{standard_value}{unit_note} 为 {tightness}。"
+            )
+        return (
+            f"程序按 {formula} 派生标准值后比较冲突：报告 {report_value}{unit_note} 相对 "
+            f"{standard_value}{unit_note} 为 {tightness}。"
+        )
+    if status == "supported":
+        return (
+            f"表格唯一绑定后程序比较通过：报告 {report_value}{unit_note} 相对标准 "
+            f"{standard_value}{unit_note} 为 {tightness}（列 {column}）。"
+        )
+    return (
+        f"表格唯一绑定后程序比较冲突：报告 {report_value}{unit_note} 相对标准 "
+        f"{standard_value}{unit_note} 为 {tightness}（列 {column}）。"
+    )
+
+
+def _judgment_from_table_decision(
+    decision: dict[str, Any],
     candidates: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Apply only high-confidence conflicts produced from retrieved evidence."""
-    comparisons = [
-        item
-        for item in judge_input.get("deterministic_comparisons") or []
-        if isinstance(item, dict)
-        and item.get("source") == "generic_bound_table_claim"
-        and isinstance(item.get("trace"), dict)
-        and item.get("relation") == "different"
-        and item.get("conclusion") == "conflicts"
+    comparison = decision.get("comparison") if isinstance(decision.get("comparison"), dict) else {}
+    status = str(decision.get("status") or "")
+    keys = [
+        str(item)
+        for item in (comparison.get("evidence_candidate_keys") or [])
+        if str(item).strip()
     ]
-    by_key = {str(item.get("candidate_key") or ""): item for item in candidates}
-    binding = next(
-        (
-            item
-            for item in comparisons
-            if str(item.get("candidate_key") or "") in by_key
-        ),
-        None,
-    )
-    if binding is None:
-        return judgment
-    key = str(binding["candidate_key"])
-    source = str(binding.get("source") or "deterministic_binding")
-    previous = {
-        "status": judgment.get("status"),
-        "reason": judgment.get("reason"),
-        "evidence_candidate_keys": list(judgment.get("evidence_candidate_keys") or []),
-    }
-    deterministic = {
-        **judgment,
-        "status": "mismatch",
-        "reason": (
-            "确定性证据绑定发现报告名义值与适用标准值冲突："
-            f"{binding.get('report_value')} != {binding.get('standard_value')}"
-            f"（{source}）。"
-        ),
-        "evidence_candidate_keys": [key],
+    key = str(decision.get("candidate_key") or comparison.get("candidate_key") or "")
+    if key and key not in keys:
+        keys = [key, *[item for item in keys if item != key]]
+    units = comparison.get("unit_normalize") if isinstance(comparison.get("unit_normalize"), dict) else {}
+    mode = str(decision.get("mode") or "programmatic_table")
+    judgment = {
+        "status": status,
+        "reason": _template_table_reason(comparison, status),
+        "evidence_candidate_keys": keys,
         "missing_context_fields": [],
         "comparison": {
-            "kind": str(binding.get("kind") or "exact"),
-            "report_value": str(binding.get("report_value") or ""),
-            "report_unit": "",
-            "report_operator": "eq",
-            "standard_value": str(binding.get("standard_value") or ""),
-            "standard_unit": "",
-            "standard_operator": "eq",
+            "kind": str(comparison.get("kind") or "exact"),
+            "report_value": str(comparison.get("report_value") or ""),
+            "report_unit": str(units.get("left_unit") or ""),
+            "report_operator": str(comparison.get("report_operator") or "eq"),
+            "standard_value": str(comparison.get("standard_value") or ""),
+            "standard_unit": str(units.get("right_unit") or ""),
+            "standard_operator": str(comparison.get("standard_operator") or "eq"),
             "report_tolerance": "",
             "standard_tolerance": "",
             "report_scope": "",
             "standard_scope": "",
-            "relation": "different",
-            "conclusion": "conflicts",
+            "relation": str(comparison.get("tightness") or comparison.get("relation") or ""),
+            "conclusion": str(comparison.get("conclusion") or ""),
         },
         "deterministic_judge": {
             "applied": True,
-            "binding": binding,
-            "previous_judgment": previous,
+            "mode": mode,
+            "reason_code": decision.get("reason_code"),
+            "binding": comparison,
         },
     }
-    return _validate_judgment(deterministic, candidates)
+    return _validate_judgment(judgment, candidates)
 
 
 def _run_audit_judge_with_consistency(
@@ -1342,18 +1390,97 @@ def _run_audit_judge_with_consistency(
     candidates: list[dict[str, Any]],
     sample_profile: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Call judge, validate contract, and rejudge once on consistency failures."""
+    """Prefer unique table-claim comparison; fall back to Judge with a path trace."""
+    comparisons = list(judge_input.get("deterministic_comparisons") or [])
+    execution = judge_input.get("table_claim_execution")
+    reported = (
+        judge_input.get("reported_requirement")
+        if isinstance(judge_input.get("reported_requirement"), dict)
+        else {}
+    )
+    requirement = str(reported.get("text") or "")
+    project = str((judge_input.get("test_item") or {}).get("project_name") or "")
+    if requirement and (not isinstance(execution, dict) or not comparisons):
+        extraction = reported.get("claim_extraction")
+        evaluated = evaluate_table_claims(
+            requirement,
+            project,
+            candidates,
+            unit=reported.get("unit"),
+            requirement_extraction=extraction if isinstance(extraction, dict) else None,
+            applicability=(
+                judge_input.get("deterministic_applicability")
+                if isinstance(judge_input.get("deterministic_applicability"), dict)
+                else None
+            ),
+            manual_knowledge_rules=(
+                judge_input.get("manual_knowledge_rules")
+                if isinstance(judge_input.get("manual_knowledge_rules"), (dict, list))
+                else None
+            ),
+        )
+        if not isinstance(execution, dict):
+            execution = evaluated["path"]
+        if not comparisons:
+            comparisons = evaluated["comparisons"]
+    if not isinstance(execution, dict):
+        execution = {"nodes": [], "attempts": []}
+    decision = resolve_table_claim_decision(comparisons)
+    path = {
+        **execution,
+        "mode": decision["mode"],
+        "reason_code": decision["reason_code"],
+        "status": decision.get("status"),
+    }
+    if decision.get("mode") in {
+        "programmatic_table",
+        "programmatic_formula",
+    } and decision.get("status") in {
+        "supported",
+        "mismatch",
+    }:
+        judgment = _judgment_from_table_decision(decision, candidates)
+        apply_status_layer(
+            judgment,
+            build_status_layer(
+                verdict=judgment.get("status"),
+                judge_source=decision["mode"],
+                reason_code=decision.get("reason_code"),
+            ),
+        )
+        return judgment, {
+            "input": judge_input,
+            "output": judgment,
+            "table_claim_path": path,
+            "judge_source": decision["mode"],
+        }
+
     judgment = _validate_judgment(
         _call_model(judge_prompt, judge_input, model=judge_model),
         candidates,
     )
-    judgment = _apply_deterministic_conflict(judgment, judge_input, candidates)
+    path = {**path, "fallback_applied": True, "judge_source": "llm"}
     trace: dict[str, Any] = {
         "input": judge_input,
         "output": judgment,
+        "table_claim_path": path,
+        "judge_source": "fallback_llm",
     }
     consistency_issues = _collect_judgment_consistency_issues(judgment, sample_profile)
     if not consistency_issues:
+        judgment["deterministic_judge"] = {
+            "applied": False,
+            "mode": "fallback_llm",
+            "reason_code": decision.get("reason_code"),
+        }
+        apply_status_layer(
+            judgment,
+            build_status_layer(
+                verdict=judgment.get("status"),
+                judge_source="fallback_llm",
+                reason_code=decision.get("reason_code"),
+            ),
+        )
         return judgment, trace
 
     previous = {
@@ -1400,8 +1527,26 @@ def _run_audit_judge_with_consistency(
         "previous_judgment": previous,
         "remaining_issues": remaining,
     }
+    judgment["deterministic_judge"] = {
+        "applied": False,
+        "mode": "fallback_llm_rejudge",
+        "reason_code": decision.get("reason_code"),
+    }
+    apply_status_layer(
+        judgment,
+        build_status_layer(
+            verdict=judgment.get("status"),
+            judge_source="fallback_llm_rejudge",
+            reason_code=decision.get("reason_code"),
+        ),
+    )
     trace["rejudge_input"] = feedback_input
     trace["output"] = judgment
+    trace["table_claim_path"] = {
+        **path,
+        "rejudge": True,
+        "remaining_issues": remaining,
+    }
     return judgment, trace
 
 
@@ -1783,6 +1928,18 @@ def _audit_one_case(
         if isinstance(sample_profile.get("from_report"), dict)
         else {}
     )
+    requirement_extraction = extract_requirement_claim(
+        str(fresh["requirement"].get("requirement_text") or ""),
+        unit=fresh["requirement"].get("unit"),
+        project_name=str(fresh["test_item"].get("project_name") or ""),
+    )
+    compact_extraction = {
+        "program_ready": requirement_extraction["program_ready"],
+        "reason_code": requirement_extraction["reason_code"],
+        "split_method": requirement_extraction["split_method"],
+        "claim": requirement_extraction["claim"],
+        "nodes": requirement_extraction["nodes"],
+    }
     # sample_context kept as report-extracted alias for production_query / UI.
     runtime_case = {
         "sample_profile": sample_profile,
@@ -1795,7 +1952,11 @@ def _audit_one_case(
         "reported_requirement": {
             "text": fresh["requirement"]["requirement_text"],
             "unit": fresh["requirement"]["unit"],
+            "claim": requirement_extraction["claim"],
+            "program_ready": requirement_extraction["program_ready"],
+            "reason_code": requirement_extraction["reason_code"],
         },
+        "requirement_extraction": compact_extraction,
     }
     peer_report_context = _build_peer_report_context(
         extracted,
@@ -1864,16 +2025,22 @@ def _audit_one_case(
         for candidate in candidates
         if isinstance(candidate.get("table_row_binding"), dict)
     ]
-    deterministic_comparisons = build_deterministic_comparisons(
+    table_claim_eval = evaluate_table_claims(
         runtime_case["reported_requirement"]["text"],
         runtime_case["test_item"]["project_name"],
         candidates,
+        unit=runtime_case["reported_requirement"].get("unit"),
+        requirement_extraction=requirement_extraction,
+        applicability=deterministic_applicability,
+        manual_knowledge_rules=selected_manual_knowledge_rules,
     )
+    deterministic_comparisons = table_claim_eval["comparisons"]
     raw_judge_input = {
         "sample_profile": sample_profile,
         "deterministic_applicability": deterministic_applicability,
         "deterministic_table_bindings": deterministic_table_bindings,
         "deterministic_comparisons": deterministic_comparisons,
+        "table_claim_execution": table_claim_eval["path"],
         "test_item": runtime_case["test_item"],
         "reported_requirement": runtime_case["reported_requirement"],
         "peer_report_context": peer_report_context,
@@ -1910,6 +2077,7 @@ def _audit_one_case(
         sample_profile=sample_profile,
     )
     judge_trace["evidence_compression"] = compression_trace
+    judge_trace["requirement_extraction"] = compact_extraction
     provisional_judgment = dict(judgment)
     recovery_decision = decide_recovery(
         judgment=provisional_judgment,
@@ -2051,17 +2219,22 @@ def _audit_one_case(
                 for candidate in recovered_candidates
                 if isinstance(candidate.get("table_row_binding"), dict)
             ]
-            recovered_deterministic_comparisons = build_deterministic_comparisons(
+            recovered_table_eval = evaluate_table_claims(
                 runtime_case["reported_requirement"]["text"],
                 runtime_case["test_item"]["project_name"],
                 recovered_candidates,
+                unit=runtime_case["reported_requirement"].get("unit"),
+                requirement_extraction=requirement_extraction,
+                applicability=recovered_applicability,
+                manual_knowledge_rules=selected_manual_knowledge_rules,
             )
             recovery_judge_input = {
                 **raw_judge_input,
                 "sample_profile": recovered_profile,
                 "deterministic_applicability": recovered_applicability,
                 "deterministic_table_bindings": recovered_table_bindings,
-                "deterministic_comparisons": recovered_deterministic_comparisons,
+                "deterministic_comparisons": recovered_table_eval["comparisons"],
+                "table_claim_execution": recovered_table_eval["path"],
                 "candidates": [
                     _compact_candidate(candidate)
                     for candidate in recovered_candidates
@@ -2119,6 +2292,7 @@ def _audit_one_case(
         "recovery_decision": recovery_decision,
         "agent_recovery": recovery_trace,
         "judgment": judgment,
+        "status_layer": layer_from_judgment(judgment, judge_source=(judge_trace or {}).get("judge_source")),
         "workflow_trace": {
             "query_planner": {
                 "input": planner_input,
@@ -2596,6 +2770,7 @@ def main() -> None:
             "mode": "full_report",
             "cases": len(results),
             "judgments": {status: sum(item["judgment"].get("status") == status for item in results) for status in JUDGE_STATUSES},
+            "authority": summarize_status_layers(results),
             "recovery": recovery_summary,
         },
         "cases": results,

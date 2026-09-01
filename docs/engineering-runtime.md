@@ -31,13 +31,13 @@ uv run python scripts/migrate_sessions_jobs_to_postgres.py `
 
 ## 分阶段切换边界
 
-当前按以下阶段推进，阶段之间不自动切流量：
+应用默认已是 PostgreSQL/pgvector。下面的阶段用于把已有 SQLite 工作区迁过来；阶段之间不自动改写源库：
 
-1. **阶段 1：数据基础**。迁移身份、会话、任务、文件、Chunk、知识库、助手和解析记录；Embedding 单独回填到 pgvector。SQLite 仍是业务读写源。
-2. **阶段 2：Repository 垂直切片**。先切知识库/文件/Chunk 的读路径，运行 SQLite 与 PostgreSQL 对照，再切写路径。
+1. **阶段 1：数据基础**。迁移身份、会话、任务、文件、Chunk、知识库、助手和解析记录；Embedding 单独回填到 pgvector。
+2. **阶段 2：Repository 垂直切片**。知识库/文件/Chunk 的读写默认走 PostgreSQL；SQLite 仅作为 `local` 回滚档。
 3. **阶段 3：解析产物对象存储**。将 Markdown、layout ZIP、裁剪图迁移为 MinIO/S3 object key，数据库只保留 key、哈希和元数据。
 4. **阶段 4：Worker 与队列**。解析、切块、Embedding、审查任务使用 PostgreSQL 队列，API 多实例关闭进程内 Worker。
-5. **阶段 5：默认切换**。完成回归、尾部任务检查和回滚演练后，才将 PostgreSQL/pgvector 设为默认。
+5. **阶段 5：默认运行时**。未设置 `CHUNK_STUDIO_DEPLOYMENT_PROFILE` 时即选择 PostgreSQL/pgvector。零依赖开发用 `local` 档回退到 SQLite。
 
 阶段 1 的业务内容迁移命令：
 
@@ -65,12 +65,12 @@ uv run python scripts/run_worker.py --types ocr,parse,chunk
 uv run python scripts/run_worker.py --types embed,audit,assistant_init
 ```
 
-PostgreSQL Worker 通过 `FOR UPDATE SKIP LOCKED` 领取任务；SQLite 仍然是本地开发兼容路径。
+PostgreSQL Worker 通过 `FOR UPDATE SKIP LOCKED` 领取任务；`CHUNK_STUDIO_DEPLOYMENT_PROFILE=local` 仍走 SQLite。
 
-## 切换前验收顺序
+## 已有 SQLite 工作区验收顺序
 
 1. 初始化 PostgreSQL/pgvector 和 Redis/MinIO。
 2. 对 SQLite 数据执行迁移脚本的 dry-run。
 3. 回填 Embedding，并用 `scripts/compare_vector_backends.py` 比较同一批 query 的候选数和 Top-K 重叠率。
 4. 通过真实 Redis smoke test，确认会话锁、幂等键、Stream 恢复和限流。
-5. 确认迁移数据、检索结果和任务尾部一致后，再设置 `DATABASE_BACKEND=postgres`、`VECTOR_BACKEND=pgvector` 和对象存储配置。
+5. 确认迁移数据、检索结果和任务尾部一致后，使用默认 postgres 档启动；需要回滚时再设 `CHUNK_STUDIO_DEPLOYMENT_PROFILE=local`。

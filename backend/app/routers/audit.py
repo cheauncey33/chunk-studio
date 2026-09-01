@@ -157,6 +157,7 @@ def _report_list_item(path: Path) -> dict[str, Any]:
         "job_status": None,
         "audit_mode": None,
         "judgments": None,
+        "authority": None,
     }
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -186,6 +187,8 @@ def _report_list_item(path: Path) -> dict[str, Any]:
         item["job_id"] = payload.get("job_id")
         if isinstance(summary, dict) and isinstance(summary.get("judgments"), dict):
             item["judgments"] = summary["judgments"]
+        if isinstance(summary, dict) and isinstance(summary.get("authority"), dict):
+            item["authority"] = summary["authority"]
         item["job_status"] = _job_status_for_report(
             path.name,
             str(payload.get("job_id") or "") or None,

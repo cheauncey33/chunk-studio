@@ -75,6 +75,10 @@ class ConversationLock:
                 self.key,
                 timeout=self.timeout_seconds,
                 blocking_timeout=self.blocking_timeout,
+                # Streaming requests acquire in the request thread and release
+                # in their background worker. redis-py otherwise hides the
+                # ownership token in thread-local storage.
+                thread_local=False,
             )
             return bool(self._redis_lock.acquire())
         with _LOCAL.mutex:

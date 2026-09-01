@@ -6,7 +6,16 @@ import json
 import time
 from typing import Any, Callable
 
-from . import agentic_rag, business_analytics, config, db, llm, mcp_client, retrieval
+from . import (
+    agentic_rag,
+    business_analytics,
+    config,
+    db,
+    llm,
+    mcp_client,
+    observability,
+    retrieval,
+)
 from .agent_runtime.models import ToolDefinition
 from .tool_registry import ToolContext, ToolFactory, ToolRegistry
 
@@ -493,6 +502,64 @@ def run_chat_agent(
     tool_calls = 0
     search_calls = 0
     started = time.monotonic()
+    first_token_ms: float | None = None
+    node_timings: list[dict[str, Any]] = []
+
+    def forward_llm_event(event: dict[str, Any]) -> None:
+        nonlocal first_token_ms
+        if event.get("type") == "token" and first_token_ms is None:
+            first_token_ms = round((time.monotonic() - started) * 1000, 3)
+            observability.metrics.observe(
+                "chunk_studio_agent_ttft_seconds",
+                first_token_ms / 1000,
+                model=model,
+            )
+            _emit(event_sink, {"type": "first_token", "ttft_ms": first_token_ms})
+        _emit(event_sink, event)
+
+    def record_node(
+        node: str,
+        node_started: float,
+        *,
+        status: str = "ok",
+        **details: Any,
+    ) -> None:
+        duration_ms = round((time.monotonic() - node_started) * 1000, 3)
+        timing = {"node": node, "duration_ms": duration_ms, "status": status, **details}
+        node_timings.append(timing)
+        observability.metrics.observe(
+            "chunk_studio_stage_duration_seconds",
+            duration_ms / 1000,
+            component="chat_agent",
+            stage=node,
+            status=status,
+        )
+        _emit(event_sink, {"type": "node_timing", **timing})
+
+    def record_run(stop_reason: str) -> float:
+        total_ms = round((time.monotonic() - started) * 1000, 3)
+        observability.metrics.observe(
+            "chunk_studio_agent_duration_seconds",
+            total_ms / 1000,
+            model=model,
+            stop_reason=stop_reason,
+        )
+        observability.metrics.increment(
+            "chunk_studio_agent_runs_total",
+            model=model,
+            stop_reason=stop_reason,
+        )
+        return total_ms
+
+    def finish(value: dict[str, Any]) -> dict[str, Any]:
+        total_ms = record_run(str(value.get("stop_reason") or "unknown"))
+        value["performance"] = {
+            "total_ms": total_ms,
+            "ttft_ms": first_token_ms,
+            "nodes": node_timings,
+        }
+        return value
+
     current_question = _latest_user_question(messages)
     knowledge_result: dict[str, Any] | None = None
     business_tool_used = False
@@ -508,7 +575,7 @@ def run_chat_agent(
 
     for turn in range(1, max_turns + 1):
         if time.monotonic() - started >= timeout_seconds:
-            return {
+            return finish({
                 "answer": "本次对话超出运行时限，请缩小问题范围后重试。",
                 "stop_reason": "timeout",
                 "new_messages": new_messages,
@@ -517,24 +584,31 @@ def run_chat_agent(
                 "charts": charts,
                 "turns": turn - 1,
                 "tool_calls": tool_calls,
-            }
+            })
         _emit(event_sink, {"type": "turn_started", "turn": turn})
         tool_schemas = [_tool_schema(tool) for tool in tools]
-        if stream_tokens:
-            response = llm.chat_tools_stream(
-                request_messages,
-                tool_schemas,
-                model=model,
-                temperature=temperature,
-                event_sink=event_sink,
-            )
-        else:
-            response = llm.chat_tools(
-                request_messages,
-                tool_schemas,
-                model=model,
-                temperature=temperature,
-            )
+        model_started = time.monotonic()
+        try:
+            if stream_tokens:
+                response = llm.chat_tools_stream(
+                    request_messages,
+                    tool_schemas,
+                    model=model,
+                    temperature=temperature,
+                    event_sink=forward_llm_event,
+                )
+            else:
+                response = llm.chat_tools(
+                    request_messages,
+                    tool_schemas,
+                    model=model,
+                    temperature=temperature,
+                )
+        except Exception:
+            record_node("llm", model_started, status="error", turn=turn, phase="agent_decision")
+            record_run("error")
+            raise
+        record_node("llm", model_started, turn=turn, phase="agent_decision")
         assistant_message = {
             "role": "assistant",
             "content": str(response.get("content") or ""),
@@ -558,7 +632,7 @@ def run_chat_agent(
                 answer = "知识库中没有检索到足够证据，暂时无法可靠回答。"
             elif not answer:
                 answer = "The model returned no displayable answer."
-            return {
+            return finish({
                 "answer": answer,
                 "stop_reason": "finished",
                 "new_messages": new_messages,
@@ -567,7 +641,7 @@ def run_chat_agent(
                 "charts": charts,
                 "turns": turn,
                 "tool_calls": tool_calls,
-            }
+            })
 
         for raw_call in raw_calls:
             parsed = _parse_tool_call(raw_call)
@@ -616,6 +690,7 @@ def run_chat_agent(
                 result = {"ok": False, "error": "duplicate tool call rejected"}
             else:
                 seen.add(_signature(tool_name, arguments))
+                tool_started = time.monotonic()
                 try:
                     if tool.validate:
                         tool.validate(arguments)
@@ -633,6 +708,13 @@ def run_chat_agent(
                     knowledge_result = dict(result)
                 else:
                     business_tool_used = True
+                record_node(
+                    "tool",
+                    tool_started,
+                    status="ok" if result.get("ok") else "error",
+                    turn=turn,
+                    tool=tool_name,
+                )
             _emit(event_sink, {
                 "type": "tool_result",
                 "turn": turn,
@@ -667,24 +749,31 @@ def run_chat_agent(
                 current_question,
                 knowledge_result,
             )
-            final_response = (
-                llm.chat_tools_stream(
-                    final_messages,
-                    tool_schemas,
-                    model=model,
-                    temperature=temperature,
-                    tool_choice="none",
-                    event_sink=event_sink,
+            model_started = time.monotonic()
+            try:
+                final_response = (
+                    llm.chat_tools_stream(
+                        final_messages,
+                        tool_schemas,
+                        model=model,
+                        temperature=temperature,
+                        tool_choice="none",
+                        event_sink=forward_llm_event,
+                    )
+                    if stream_tokens
+                    else llm.chat_tools(
+                        final_messages,
+                        tool_schemas,
+                        model=model,
+                        temperature=temperature,
+                        tool_choice="none",
+                    )
                 )
-                if stream_tokens
-                else llm.chat_tools(
-                    final_messages,
-                    tool_schemas,
-                    model=model,
-                    temperature=temperature,
-                    tool_choice="none",
-                )
-            )
+            except Exception:
+                record_node("llm", model_started, status="error", turn=turn, phase="final_answer")
+                record_run("error")
+                raise
+            record_node("llm", model_started, turn=turn, phase="final_answer")
             final_message = {
                 "role": "assistant",
                 "content": str(final_response.get("content") or "").strip(),
@@ -701,7 +790,7 @@ def run_chat_agent(
                 answer = "知识库中没有检索到足够证据，暂时无法可靠回答。"
             elif not answer:
                 answer = "The model returned no displayable answer."
-            return {
+            return finish({
                 "answer": answer,
                 "stop_reason": "finished",
                 "new_messages": new_messages,
@@ -710,9 +799,9 @@ def run_chat_agent(
                 "charts": charts,
                 "turns": turn,
                 "tool_calls": tool_calls,
-            }
+            })
 
-    return {
+    return finish({
         "answer": "工具调用次数达到上限，暂时无法完成这次回答。",
         "stop_reason": "max_turns",
         "new_messages": new_messages,
@@ -721,4 +810,4 @@ def run_chat_agent(
         "charts": charts,
         "turns": max_turns,
         "tool_calls": tool_calls,
-    }
+    })

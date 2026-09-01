@@ -1,0 +1,120 @@
+{
+  "manifest": {
+    "generated_at": "2026-08-31T15:29:26.061192+00:00",
+    "base_url": "http://127.0.0.1:8000",
+    "assistant_id": "assistant_oil_transformer_audit",
+    "requests": 6,
+    "concurrency": 2,
+    "question_count": 5,
+    "timeout_seconds": 180.0
+  },
+  "summary": {
+    "requests": 6,
+    "successes": 6,
+    "errors": 0,
+    "error_rate": 0.0,
+    "throughput_rps": 0.168,
+    "wall_seconds": 35.614,
+    "status_counts": {
+      "200": 6
+    },
+    "headers_ms": {
+      "count": 6,
+      "min": 113.874,
+      "p50": 133.783,
+      "p95": 508.094,
+      "p99": 508.094,
+      "max": 508.094,
+      "mean": 266.851
+    },
+    "first_event_ms": {
+      "count": 6,
+      "min": 114.056,
+      "p50": 134.003,
+      "p95": 508.395,
+      "p99": 508.395,
+      "max": 508.395,
+      "mean": 267.118
+    },
+    "ttft_ms": {
+      "count": 6,
+      "min": 924.305,
+      "p50": 1220.358,
+      "p95": 5788.559,
+      "p99": 5788.559,
+      "max": 5788.559,
+      "mean": 1984.792
+    },
+    "total_ms": {
+      "count": 6,
+      "min": 9285.009,
+      "p50": 11131.344,
+      "p95": 13699.962,
+      "p99": 13699.962,
+      "max": 13699.962,
+      "mean": 11397.718
+    }
+  },
+  "samples": [
+    {
+      "index": 0,
+      "status_code": 200,
+      "ok": true,
+      "headers_ms": 508.094,
+      "first_event_ms": 508.395,
+      "ttft_ms": 1289.807,
+      "total_ms": 13699.962,
+      "error": ""
+    },
+    {
+      "index": 1,
+      "status_code": 200,
+      "ok": true,
+      "headers_ms": 475.634,
+      "first_event_ms": 476.098,
+      "ttft_ms": 1220.358,
+      "total_ms": 12967.212,
+      "error": ""
+    },
+    {
+      "index": 2,
+      "status_code": 200,
+      "ok": true,
+      "headers_ms": 133.783,
+      "first_event_ms": 134.003,
+      "ttft_ms": 924.305,
+      "total_ms": 11131.344,
+      "error": ""
+    },
+    {
+      "index": 3,
+      "status_code": 200,
+      "ok": true,
+      "headers_ms": 113.874,
+      "first_event_ms": 114.056,
+      "ttft_ms": 1020.779,
+      "total_ms": 9285.009,
+      "error": ""
+    },
+    {
+      "index": 4,
+      "status_code": 200,
+      "ok": true,
+      "headers_ms": 130.902,
+      "first_event_ms": 131.135,
+      "ttft_ms": 5788.559,
+      "total_ms": 9952.985,
+      "error": ""
+    },
+    {
+      "index": 5,
+      "status_code": 200,
+      "ok": true,
+      "headers_ms": 238.817,
+      "first_event_ms": 239.021,
+      "ttft_ms": 1664.944,
+      "total_ms": 11349.797,
+      "error": ""
+    }
+  ]
+}

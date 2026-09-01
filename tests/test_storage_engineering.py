@@ -70,23 +70,45 @@ def test_distributed_runtime_requires_shared_services(monkeypatch) -> None:
     config.validate_deployment_config()
 
 
-def test_postgres_profile_selects_post_cutover_defaults() -> None:
+_PROFILE_ENV_KEYS = (
+    "CHUNK_STUDIO_DEPLOYMENT_PROFILE",
+    "DEPLOYMENT_PROFILE",
+    "CHUNK_STUDIO_DATABASE_BACKEND",
+    "DATABASE_BACKEND",
+    "CHUNK_STUDIO_DATABASE_URL",
+    "DATABASE_URL",
+    "CHUNK_STUDIO_VECTOR_BACKEND",
+    "VECTOR_BACKEND",
+    "CHUNK_STUDIO_CONTENT_READ_BACKEND",
+    "CONTENT_READ_BACKEND",
+    "CHUNK_STUDIO_OBJECT_STORAGE_BACKEND",
+    "OBJECT_STORAGE_BACKEND",
+    "CHUNK_STUDIO_OBJECT_STORAGE_BUCKET",
+    "OBJECT_STORAGE_BUCKET",
+    "CHUNK_STUDIO_OBJECT_STORAGE_ENDPOINT_URL",
+    "OBJECT_STORAGE_ENDPOINT_URL",
+    "CHUNK_STUDIO_OBJECT_STORAGE_ACCESS_KEY",
+    "OBJECT_STORAGE_ACCESS_KEY",
+    "CHUNK_STUDIO_OBJECT_STORAGE_SECRET_KEY",
+    "OBJECT_STORAGE_SECRET_KEY",
+    "CHUNK_STUDIO_REDIS_URL",
+    "REDIS_URL",
+    "CHUNK_STUDIO_RUN_IN_PROCESS_WORKER",
+    "CHUNK_STUDIO_REQUIRE_DISTRIBUTED_RUNTIME",
+    "REQUIRE_DISTRIBUTED_RUNTIME",
+)
+
+
+def _profile_env(**overrides: str) -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "backend")
-    env["CHUNK_STUDIO_DEPLOYMENT_PROFILE"] = "postgres"
-    for name in (
-        "CHUNK_STUDIO_DATABASE_BACKEND",
-        "DATABASE_BACKEND",
-        "CHUNK_STUDIO_VECTOR_BACKEND",
-        "VECTOR_BACKEND",
-        "CHUNK_STUDIO_CONTENT_READ_BACKEND",
-        "CONTENT_READ_BACKEND",
-        "CHUNK_STUDIO_OBJECT_STORAGE_BACKEND",
-        "OBJECT_STORAGE_BACKEND",
-        "CHUNK_STUDIO_RUN_IN_PROCESS_WORKER",
-    ):
+    for name in _PROFILE_ENV_KEYS:
         env.pop(name, None)
+    env.update(overrides)
+    return env
 
+
+def _read_profile(env: dict[str, str]) -> str:
     result = subprocess.run(
         [
             sys.executable,
@@ -95,7 +117,10 @@ def test_postgres_profile_selects_post_cutover_defaults() -> None:
                 "from app import config; "
                 "print(config.DEPLOYMENT_PROFILE, config.DATABASE_BACKEND, "
                 "config.CONTENT_READ_BACKEND, config.VECTOR_BACKEND, "
-                "config.OBJECT_STORAGE_BACKEND, config.RUN_IN_PROCESS_WORKER)"
+                "config.OBJECT_STORAGE_BACKEND, config.RUN_IN_PROCESS_WORKER); "
+                "print(config.DATABASE_URL); "
+                "print(config.REDIS_URL); "
+                "print(config.OBJECT_STORAGE_BUCKET)"
             ),
         ],
         cwd=Path(__file__).resolve().parents[1],
@@ -104,8 +129,25 @@ def test_postgres_profile_selects_post_cutover_defaults() -> None:
         text=True,
         check=True,
     )
+    return result.stdout.strip()
 
-    assert result.stdout.strip() == "postgres postgres postgres pgvector minio False"
+
+def test_default_profile_selects_postgres_pgvector() -> None:
+    lines = _read_profile(_profile_env()).splitlines()
+    assert lines[0] == "postgres postgres postgres pgvector minio False"
+    assert "127.0.0.1:55432" in lines[1]
+    assert "127.0.0.1:56379" in lines[2]
+    assert lines[3] == "chunk-studio"
+
+
+def test_postgres_profile_selects_post_cutover_defaults() -> None:
+    lines = _read_profile(_profile_env(CHUNK_STUDIO_DEPLOYMENT_PROFILE="postgres")).splitlines()
+    assert lines[0] == "postgres postgres postgres pgvector minio False"
+
+
+def test_local_profile_selects_sqlite_rollback() -> None:
+    lines = _read_profile(_profile_env(CHUNK_STUDIO_DEPLOYMENT_PROFILE="local")).splitlines()
+    assert lines[0] == "local sqlite sqlite sqlite local True"
 
 
 def test_sqlite_vector_store_preserves_legacy_behavior(monkeypatch) -> None:
@@ -230,6 +272,31 @@ def test_runtime_local_lock_idempotency_stream_and_limits() -> None:
     assert limiter.allow("user-1", limit=2, window_seconds=60)[0]
     assert limiter.allow("user-1", limit=2, window_seconds=60)[0]
     assert not limiter.allow("user-1", limit=2, window_seconds=60)[0]
+
+
+def test_redis_conversation_lock_allows_background_thread_release() -> None:
+    captured: dict[str, object] = {}
+
+    class RedisLock:
+        def acquire(self):
+            return True
+
+        def release(self):
+            captured["released"] = True
+
+    class RedisClient:
+        def lock(self, _key, **kwargs):
+            captured.update(kwargs)
+            return RedisLock()
+
+    lock = runtime.ConversationLock("workspace-1:chat-1", redis_client=RedisClient())
+    assert lock.acquire()
+    thread = __import__("threading").Thread(target=lock.release)
+    thread.start()
+    thread.join(timeout=1)
+
+    assert captured["thread_local"] is False
+    assert captured["released"] is True
 
 
 def test_object_store_factory_uses_local_backend(monkeypatch, tmp_path) -> None:

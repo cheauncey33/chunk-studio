@@ -1,0 +1,439 @@
+{
+  "manifest": {
+    "generated_at": "2026-08-31T15:30:21.821233+00:00",
+    "test_set_version": 2,
+    "modes": [
+      "single",
+      "dual",
+      "triple"
+    ],
+    "top_k": 10,
+    "cases": 5,
+    "query_generation": "deterministic_v1"
+  },
+  "modes": {
+    "single": {
+      "summary": {
+        "cases": 5,
+        "top_k": 10,
+        "strict_complete_recall": 0.0,
+        "evidence_group_recall": 0.16666666666666666,
+        "latency_ms": {
+          "mean": 3093.637,
+          "p95": 4071.845
+        },
+        "mean_candidate_count": 65.8,
+        "degraded_cases": 0
+      },
+      "cases": [
+        {
+          "case_id": "hbjc-4-r1",
+          "routes": {
+            "production": "空载损耗和空载电流测量"
+          },
+          "duration_ms": 4071.845,
+          "timings_ms": {
+            "query_planning": 0.006,
+            "query_embedding": 790.453,
+            "dense_retrieval": 201.434,
+            "lexical_retrieval": 2719.782,
+            "candidate_merge": 0.22,
+            "rerank": 344.75,
+            "total": 4071.013
+          },
+          "candidate_count": 72,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": false,
+            "recalled_groups": 0,
+            "required_groups": 1,
+            "strict_complete_hit": false
+          }
+        },
+        {
+          "case_id": "hbjc-4-r2",
+          "routes": {
+            "production": "空载损耗和空载电流测量"
+          },
+          "duration_ms": 2780.886,
+          "timings_ms": {
+            "query_planning": 0.005,
+            "query_embedding": 184.053,
+            "dense_retrieval": 74.371,
+            "lexical_retrieval": 2144.735,
+            "candidate_merge": 0.163,
+            "rerank": 362.209,
+            "total": 2779.877
+          },
+          "candidate_count": 72,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": false,
+            "recalled_groups": 0,
+            "required_groups": 1,
+            "strict_complete_hit": false
+          }
+        },
+        {
+          "case_id": "hbjc-5-r1",
+          "routes": {
+            "production": "短路阻抗和负载损耗测量"
+          },
+          "duration_ms": 2987.62,
+          "timings_ms": {
+            "query_planning": 0.006,
+            "query_embedding": 182.267,
+            "dense_retrieval": 54.265,
+            "lexical_retrieval": 2344.689,
+            "candidate_merge": 0.152,
+            "rerank": 391.437,
+            "total": 2986.166
+          },
+          "candidate_count": 65,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": false,
+            "recalled_groups": 0,
+            "required_groups": 1,
+            "strict_complete_hit": false
+          }
+        },
+        {
+          "case_id": "hbjc-7-r1",
+          "routes": {
+            "production": "外施耐压试验"
+          },
+          "duration_ms": 2880.923,
+          "timings_ms": {
+            "query_planning": 0.01,
+            "query_embedding": 204.818,
+            "dense_retrieval": 46.974,
+            "lexical_retrieval": 2283.618,
+            "candidate_merge": 0.199,
+            "rerank": 333.952,
+            "total": 2879.767
+          },
+          "candidate_count": 57,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": true,
+            "recalled_groups": 0,
+            "required_groups": 1,
+            "strict_complete_hit": false
+          }
+        },
+        {
+          "case_id": "hbjc-14-r1",
+          "routes": {
+            "production": "雷电冲击试验"
+          },
+          "duration_ms": 2746.91,
+          "timings_ms": {
+            "query_planning": 0.005,
+            "query_embedding": 192.817,
+            "dense_retrieval": 50.866,
+            "lexical_retrieval": 2167.789,
+            "candidate_merge": 0.274,
+            "rerank": 322.038,
+            "total": 2745.508
+          },
+          "candidate_count": 63,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": true,
+            "recalled_groups": 1,
+            "required_groups": 2,
+            "strict_complete_hit": false
+          }
+        }
+      ]
+    },
+    "dual": {
+      "summary": {
+        "cases": 5,
+        "top_k": 10,
+        "strict_complete_recall": 0.0,
+        "evidence_group_recall": 0.16666666666666666,
+        "latency_ms": {
+          "mean": 5459.96,
+          "p95": 5756.405
+        },
+        "mean_candidate_count": 67.4,
+        "degraded_cases": 0
+      },
+      "cases": [
+        {
+          "case_id": "hbjc-4-r1",
+          "routes": {
+            "production": "空载损耗和空载电流测量",
+            "keyword": "空载损耗和空载电流测量 空载损耗P0(kW):≤0.370"
+          },
+          "duration_ms": 5225.369,
+          "timings_ms": {
+            "query_planning": 0.007,
+            "query_embedding": 195.769,
+            "dense_retrieval": 86.275,
+            "lexical_retrieval": 4578.368,
+            "candidate_merge": 0.225,
+            "rerank": 350.78,
+            "total": 5223.963
+          },
+          "candidate_count": 72,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": false,
+            "recalled_groups": 0,
+            "required_groups": 1,
+            "strict_complete_hit": false
+          }
+        },
+        {
+          "case_id": "hbjc-4-r2",
+          "routes": {
+            "production": "空载损耗和空载电流测量",
+            "keyword": "空载损耗和空载电流测量 空载电流I0(%):≤0.16(1+30%)"
+          },
+          "duration_ms": 5150.314,
+          "timings_ms": {
+            "query_planning": 0.006,
+            "query_embedding": 199.786,
+            "dense_retrieval": 96.265,
+            "lexical_retrieval": 4488.106,
+            "candidate_merge": 0.154,
+            "rerank": 352.022,
+            "total": 5147.975
+          },
+          "candidate_count": 72,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": false,
+            "recalled_groups": 0,
+            "required_groups": 1,
+            "strict_complete_hit": false
+          }
+        },
+        {
+          "case_id": "hbjc-5-r1",
+          "routes": {
+            "production": "短路阻抗和负载损耗测量",
+            "keyword": "短路阻抗和负载损耗测量 负载损耗Pk(kW):≤3.615"
+          },
+          "duration_ms": 5610.215,
+          "timings_ms": {
+            "query_planning": 0.006,
+            "query_embedding": 176.61,
+            "dense_retrieval": 96.811,
+            "lexical_retrieval": 4987.372,
+            "candidate_merge": 0.181,
+            "rerank": 333.938,
+            "total": 5608.273
+          },
+          "candidate_count": 69,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": false,
+            "recalled_groups": 0,
+            "required_groups": 1,
+            "strict_complete_hit": false
+          }
+        },
+        {
+          "case_id": "hbjc-7-r1",
+          "routes": {
+            "production": "外施耐压试验",
+            "keyword": "外施耐压试验 高压对低压及地试验电压(kV):35"
+          },
+          "duration_ms": 5557.497,
+          "timings_ms": {
+            "query_planning": 0.007,
+            "query_embedding": 182.963,
+            "dense_retrieval": 88.275,
+            "lexical_retrieval": 4947.456,
+            "candidate_merge": 0.36,
+            "rerank": 322.431,
+            "total": 5555.018
+          },
+          "candidate_count": 63,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": true,
+            "recalled_groups": 0,
+            "required_groups": 1,
+            "strict_complete_hit": false
+          }
+        },
+        {
+          "case_id": "hbjc-14-r1",
+          "routes": {
+            "production": "雷电冲击试验",
+            "keyword": "雷电冲击试验 高压线端全波电压(kV): -75(1±3%)波前时间: T1: 1.2μs±30%半峰值时间: T2: 50μs±20%"
+          },
+          "duration_ms": 5756.405,
+          "timings_ms": {
+            "query_planning": 0.009,
+            "query_embedding": 219.555,
+            "dense_retrieval": 147.543,
+            "lexical_retrieval": 4868.429,
+            "candidate_merge": 0.164,
+            "rerank": 504.165,
+            "total": 5754.251
+          },
+          "candidate_count": 61,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": true,
+            "recalled_groups": 1,
+            "required_groups": 2,
+            "strict_complete_hit": false
+          }
+        }
+      ]
+    },
+    "triple": {
+      "summary": {
+        "cases": 5,
+        "top_k": 10,
+        "strict_complete_recall": 0.0,
+        "evidence_group_recall": 0.16666666666666666,
+        "latency_ms": {
+          "mean": 5515.23,
+          "p95": 5766.815
+        },
+        "mean_candidate_count": 67.6,
+        "degraded_cases": 0
+      },
+      "cases": [
+        {
+          "case_id": "hbjc-4-r1",
+          "routes": {
+            "production": "空载损耗和空载电流测量",
+            "keyword": "空载损耗和空载电流测量 空载损耗P0(kW):≤0.370",
+            "semantic": "空载损耗和空载电流测量 油浸式变压器 S20-M.RL-400/10-NX2 400 kVA 10/0.4 kV"
+          },
+          "duration_ms": 5657.05,
+          "timings_ms": {
+            "query_planning": 0.006,
+            "query_embedding": 285.698,
+            "dense_retrieval": 148.288,
+            "lexical_retrieval": 4879.986,
+            "candidate_merge": 0.217,
+            "rerank": 326.711,
+            "total": 5655.398
+          },
+          "candidate_count": 72,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": false,
+            "recalled_groups": 0,
+            "required_groups": 1,
+            "strict_complete_hit": false
+          }
+        },
+        {
+          "case_id": "hbjc-4-r2",
+          "routes": {
+            "production": "空载损耗和空载电流测量",
+            "keyword": "空载损耗和空载电流测量 空载电流I0(%):≤0.16(1+30%)",
+            "semantic": "空载损耗和空载电流测量 油浸式变压器 S20-M.RL-400/10-NX2 400 kVA 10/0.4 kV"
+          },
+          "duration_ms": 5344.454,
+          "timings_ms": {
+            "query_planning": 0.006,
+            "query_embedding": 222.776,
+            "dense_retrieval": 144.091,
+            "lexical_retrieval": 4625.037,
+            "candidate_merge": 0.26,
+            "rerank": 337.478,
+            "total": 5342.891
+          },
+          "candidate_count": 72,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": false,
+            "recalled_groups": 0,
+            "required_groups": 1,
+            "strict_complete_hit": false
+          }
+        },
+        {
+          "case_id": "hbjc-5-r1",
+          "routes": {
+            "production": "短路阻抗和负载损耗测量",
+            "keyword": "短路阻抗和负载损耗测量 负载损耗Pk(kW):≤3.615",
+            "semantic": "短路阻抗和负载损耗测量 油浸式变压器 S20-M.RL-400/10-NX2 400 kVA 10/0.4 kV"
+          },
+          "duration_ms": 5766.815,
+          "timings_ms": {
+            "query_planning": 0.007,
+            "query_embedding": 228.661,
+            "dense_retrieval": 160.158,
+            "lexical_retrieval": 5002.142,
+            "candidate_merge": 0.189,
+            "rerank": 361.337,
+            "total": 5765.028
+          },
+          "candidate_count": 68,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": false,
+            "recalled_groups": 0,
+            "required_groups": 1,
+            "strict_complete_hit": false
+          }
+        },
+        {
+          "case_id": "hbjc-7-r1",
+          "routes": {
+            "production": "外施耐压试验",
+            "keyword": "外施耐压试验 高压对低压及地试验电压(kV):35",
+            "semantic": "外施耐压试验 油浸式变压器 S20-M.RL-400/10-NX2 400 kVA 10/0.4 kV"
+          },
+          "duration_ms": 5083.289,
+          "timings_ms": {
+            "query_planning": 0.006,
+            "query_embedding": 242.212,
+            "dense_retrieval": 151.409,
+            "lexical_retrieval": 4304.164,
+            "candidate_merge": 0.192,
+            "rerank": 372.04,
+            "total": 5081.04
+          },
+          "candidate_count": 66,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": true,
+            "recalled_groups": 0,
+            "required_groups": 1,
+            "strict_complete_hit": false
+          }
+        },
+        {
+          "case_id": "hbjc-14-r1",
+          "routes": {
+            "production": "雷电冲击试验",
+            "keyword": "雷电冲击试验 高压线端全波电压(kV): -75(1±3%)波前时间: T1: 1.2μs±30%半峰值时间: T2: 50μs±20%",
+            "semantic": "雷电冲击试验 油浸式变压器 S20-M.RL-400/10-NX2 400 kVA 10/0.4 kV"
+          },
+          "duration_ms": 5724.54,
+          "timings_ms": {
+            "query_planning": 0.006,
+            "query_embedding": 207.189,
+            "dense_retrieval": 166.829,
+            "lexical_retrieval": 4975.122,
+            "candidate_merge": 0.209,
+            "rerank": 361.979,
+            "total": 5722.692
+          },
+          "candidate_count": 60,
+          "degraded": [],
+          "metrics": {
+            "lenient_relevance_hit": true,
+            "recalled_groups": 1,
+            "required_groups": 2,
+            "strict_complete_hit": false
+          }
+        }
+      ]
+    }
+  }
+}

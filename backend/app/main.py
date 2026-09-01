@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import asyncio
+import time
+import uuid
 
 # Load .env (PYTHONUTF8 / PYTHONIOENCODING) so the user doesn't have to set
 # env vars per-shell. Must happen before config import, since config reconfigures
@@ -20,11 +22,11 @@ except Exception:
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import JSONResponse
 
-from . import config, current_user, db, jobs as job_service, lexical
+from . import config, current_user, db, health as health_service, jobs as job_service, lexical, observability
 from .storage import repositories
 from .routers import (
     assistants,
@@ -65,7 +67,10 @@ app.add_middleware(
 @app.middleware("http")
 async def bind_current_user(request, call_next):
     """Resolve identity once so every router/repository sees one request user."""
-    if request.url.path in {"/api/health", "/docs", "/openapi.json"}:
+    if request.url.path in {
+        "/api/health", "/api/health/live", "/api/health/ready",
+        "/docs", "/openapi.json",
+    }:
         return await call_next(request)
     try:
         user = current_user.current_user_for_headers(request.headers)
@@ -96,6 +101,42 @@ async def bind_current_user(request, call_next):
         current_user.reset_current_user(token)
 
 
+@app.middleware("http")
+async def observe_http_request(request, call_next):
+    """Expose bounded-cardinality request latency, errors, and concurrency."""
+    started = time.perf_counter()
+    method = request.method
+    request_id = str(request.headers.get("X-Request-ID") or uuid.uuid4().hex)[:100]
+    observability.metrics.gauge_add("chunk_studio_http_requests_in_flight", 1)
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["X-Request-ID"] = request_id
+        duration = time.perf_counter() - started
+        response.headers["Server-Timing"] = f"app;dur={duration * 1000:.2f}"
+        return response
+    finally:
+        duration = time.perf_counter() - started
+        route = request.scope.get("route")
+        route_path = str(getattr(route, "path", "unmatched"))
+        status_class = f"{status_code // 100}xx"
+        observability.metrics.gauge_add("chunk_studio_http_requests_in_flight", -1)
+        observability.metrics.increment(
+            "chunk_studio_http_requests_total",
+            method=method,
+            route=route_path,
+            status=status_class,
+        )
+        observability.metrics.observe(
+            "chunk_studio_http_request_duration_seconds",
+            duration,
+            method=method,
+            route=route_path,
+            status=status_class,
+        )
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     config.validate_deployment_config()
@@ -110,6 +151,26 @@ async def _startup() -> None:
 @app.get("/api/health")
 def health():
     return {"ok": True, "deployment": config.deployment_config()}
+
+
+@app.get("/api/health/live")
+def liveness():
+    """Process liveness probe; it intentionally checks no dependencies."""
+    return {"ok": True}
+
+
+@app.get("/api/health/ready")
+def readiness():
+    """Readiness probe for the active database, Redis, and object storage."""
+    ready, checks = health_service.readiness_checks()
+    payload = {"ok": ready, "checks": checks}
+    return payload if ready else JSONResponse(payload, status_code=503)
+
+
+@app.get("/api/metrics", response_class=PlainTextResponse)
+def metrics() -> str:
+    """Prometheus text exposition; normal application authentication applies."""
+    return observability.metrics.render_prometheus()
 
 
 # API routers (mounted under /api for clarity)

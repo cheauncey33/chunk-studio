@@ -846,6 +846,10 @@ def test_retrieve_candidate_pool_skips_external_rerank() -> None:
     assert result["rerank_model"] is None
     assert result["hits"][0]["rerank_score"] is None
     assert result["hits"][0]["source_ranks"]
+    assert set(result["timings_ms"]) >= {
+        "query_planning", "query_embedding", "dense_retrieval", "candidate_merge", "rerank", "total",
+    }
+    assert result["timings_ms"]["total"] >= 0
 
 
 def test_merge_candidate_pools_deduplicates_text_and_reranks_once() -> None:

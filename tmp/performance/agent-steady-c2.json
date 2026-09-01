@@ -1,0 +1,121 @@
+{
+  "manifest": {
+    "generated_at": "2026-08-31T15:27:04.229428+00:00",
+    "base_url": "http://127.0.0.1:8000",
+    "assistant_id": "assistant_oil_transformer_audit",
+    "requests": 6,
+    "concurrency": 2,
+    "question_count": 5,
+    "timeout_seconds": 180.0
+  },
+  "summary": {
+    "requests": 6,
+    "successes": 1,
+    "errors": 5,
+    "error_rate": 0.833333,
+    "throughput_rps": 0.568,
+    "wall_seconds": 10.571,
+    "status_counts": {
+      "200": 1,
+      "409": 5
+    },
+    "headers_ms": {
+      "count": 6,
+      "min": 27.999,
+      "p50": 30.071,
+      "p95": 172.485,
+      "p99": 172.485,
+      "max": 172.485,
+      "mean": 64.21
+    },
+    "first_event_ms": {
+      "count": 1,
+      "min": 172.651,
+      "p50": 172.651,
+      "p95": 172.651,
+      "p99": 172.651,
+      "max": 172.651,
+      "mean": 172.651
+    },
+    "ttft_ms": {
+      "count": 1,
+      "min": 802.842,
+      "p50": 802.842,
+      "p95": 802.842,
+      "p99": 802.842,
+      "max": 802.842,
+      "mean": 802.842
+    },
+    "total_ms": {
+      "count": 6,
+      "min": 31.847,
+      "p50": 34.536,
+      "p95": 10421.627,
+      "p99": 10421.627,
+      "max": 10421.627,
+      "mean": 1775.494
+    }
+  },
+  "samples": [
+    {
+      "index": 0,
+      "status_code": 200,
+      "ok": true,
+      "headers_ms": 172.485,
+      "first_event_ms": 172.651,
+      "ttft_ms": 802.842,
+      "total_ms": 10421.627,
+      "error": ""
+    },
+    {
+      "index": 1,
+      "status_code": 409,
+      "ok": false,
+      "headers_ms": 80.88,
+      "first_event_ms": null,
+      "ttft_ms": null,
+      "total_ms": 84.319,
+      "error": "RuntimeError: HTTP 409: {\"detail\":\"conversation is already being processed\"}"
+    },
+    {
+      "index": 2,
+      "status_code": 409,
+      "ok": false,
+      "headers_ms": 28.978,
+      "first_event_ms": null,
+      "ttft_ms": null,
+      "total_ms": 32.622,
+      "error": "RuntimeError: HTTP 409: {\"detail\":\"conversation is already being processed\"}"
+    },
+    {
+      "index": 3,
+      "status_code": 409,
+      "ok": false,
+      "headers_ms": 27.999,
+      "first_event_ms": null,
+      "ttft_ms": null,
+      "total_ms": 31.847,
+      "error": "RuntimeError: HTTP 409: {\"detail\":\"conversation is already being processed\"}"
+    },
+    {
+      "index": 4,
+      "status_code": 409,
+      "ok": false,
+      "headers_ms": 30.071,
+      "first_event_ms": null,
+      "ttft_ms": null,
+      "total_ms": 34.536,
+      "error": "RuntimeError: HTTP 409: {\"detail\":\"conversation is already being processed\"}"
+    },
+    {
+      "index": 5,
+      "status_code": 409,
+      "ok": false,
+      "headers_ms": 44.845,
+      "first_event_ms": null,
+      "ttft_ms": null,
+      "total_ms": 48.011,
+      "error": "RuntimeError: HTTP 409: {\"detail\":\"conversation is already being processed\"}"
+    }
+  ]
+}

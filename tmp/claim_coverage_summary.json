@@ -1,0 +1,1016 @@
+{
+  "audit": {
+    "source": "C:\\Users\\zyh19\\chunk-studio\\backend\\data\\reports\\end_to_end_audit_oil_transformer_audit_20260726_220514.json",
+    "case_count": 73,
+    "program_ready": 44,
+    "extract_reasons": {
+      "unstructured_text": 16,
+      "scalar_quantity": 42,
+      "multiple_numbers": 11,
+      "categorical": 2,
+      "expression": 2
+    },
+    "decision_modes": {
+      "fallback_llm": 61,
+      "programmatic_table": 12
+    },
+    "decision_reasons": {
+      "requirement_not_program_ready": 29,
+      "unique_bound_comparable": 12,
+      "conflicting_table_bindings": 2,
+      "no_authoritative_table_claim": 30
+    },
+    "not_ready": [
+      {
+        "case_id": "item_c83ff28c6d4b",
+        "project_name": "绕组对地及绕组间直流绝缘电阻测量",
+        "requirement_text": "高压对低压及地绝缘电阻:提供试验数据",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_5b5239fe0799",
+        "project_name": "绕组对地及绕组间直流绝缘电阻测量",
+        "requirement_text": "低压对高压及地绝缘电阻:提供试验数据",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_539a716b3abf",
+        "project_name": "电压比测量和联结组标号检定",
+        "requirement_text": "主分接电压比偏差:±0.5%与实际阻抗电压百分数的±1/10中较低者",
+        "extract_reason": "multiple_numbers",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_8c0173569571",
+        "project_name": "电压比测量和联结组标号检定",
+        "requirement_text": "其他分接电压比偏差:变压器阻抗电压值(%)的1/10以内,且允许偏差应为±1%",
+        "extract_reason": "multiple_numbers",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_96e6d62d0412",
+        "project_name": "空载损耗和空载电流测量",
+        "requirement_text": "空载电流I0(%):≤0.16(1+30%)",
+        "extract_reason": "multiple_numbers",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_fa738449a418",
+        "project_name": "短路阻抗和负载损耗测量",
+        "requirement_text": "短路阻抗Zk(%):4.0(1±10%)",
+        "extract_reason": "multiple_numbers",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_ce2c2e08c158",
+        "project_name": "感应耐压试验",
+        "requirement_text": "持续时间(s):15≤t≤60",
+        "extract_reason": "multiple_numbers",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_0df6a53ca7de",
+        "project_name": "感应耐压试验",
+        "requirement_text": "试验电压应不出现突然下降",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_68c0ef9efa82",
+        "project_name": "外施耐压试验",
+        "requirement_text": "试验电压应不出现突然下降",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_3235813c4775",
+        "project_name": "压力密封试验",
+        "requirement_text": "应无渗漏、无损伤",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_8b7655c1c9c3",
+        "project_name": "短时过负载能力试验",
+        "requirement_text": "压力保护装置应不动作",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_34b96704afb1",
+        "project_name": "短时过负载能力试验",
+        "requirement_text": "油箱密封应无渗漏",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_5510027d6505",
+        "project_name": "短时过负载能力试验",
+        "requirement_text": "油箱波纹散热器变形应在规定范围内",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_0c768536ab6b",
+        "project_name": "短路承受能力试验",
+        "requirement_text": "持续时间(s):0.5±10%",
+        "extract_reason": "multiple_numbers",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_7c6ef44e4f31",
+        "project_name": "短路承受能力试验",
+        "requirement_text": "试验电压及电流波形应无异常迹象",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_400c295e2f01",
+        "project_name": "短路承受能力试验",
+        "requirement_text": "外观检查无异常",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_d114ce841d32",
+        "project_name": "雷电冲击试验",
+        "requirement_text": "高压线端全波电压(kV): -75(1±3%)波前时间: T1: 1.2μs±30%半峰值时间: T2: 50μs±20%",
+        "extract_reason": "expression",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_62fc4fd591b6",
+        "project_name": "雷电冲击试验",
+        "requirement_text": "在降低电压和全电压下的波形图比较应无明显差异",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_196d7673a239",
+        "project_name": "雷电冲击试验",
+        "requirement_text": "高压线端截波电压(kV): -85(1±3%)波前时间: T1: 1.2μs±30%截断时间: Tc: 3μs~6μs",
+        "extract_reason": "expression",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_89f893cf357c",
+        "project_name": "雷电冲击试验",
+        "requirement_text": "除截断时刻后,在降低电压和全电压下的波形图比较应无明显差异",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_78f6831d3b88",
+        "project_name": "绕组对地及绕组间直流绝缘电阻测量",
+        "requirement_text": "高压对低压及地绝缘电阻:提供试验数据",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_67b531902cc4",
+        "project_name": "绕组对地及绕组间直流绝缘电阻测量",
+        "requirement_text": "低压对高压及地绝缘电阻:提供试验数据",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_1c97d31dbcf0",
+        "project_name": "电压比测量和联结组标号检定",
+        "requirement_text": "主分接电压比偏差: ±0.5%与实际阻抗电压百分数的±1/10中较低者",
+        "extract_reason": "multiple_numbers",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_09b5d56f24a2",
+        "project_name": "电压比测量和联结组标号检定",
+        "requirement_text": "其他分接电压比偏差:变压器阻抗电压值(%)的1/10以内,且允许偏差应为±1%",
+        "extract_reason": "multiple_numbers",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_841cbed4d95f",
+        "project_name": "空载损耗和空载电流测量",
+        "requirement_text": "空载电流I0(%): ≤0.16 (1+30%)",
+        "extract_reason": "multiple_numbers",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_d0fc30b54586",
+        "project_name": "短路阻抗和负载损耗测量",
+        "requirement_text": "短路阻抗Zk(%): 4.0 (1±10%)",
+        "extract_reason": "multiple_numbers",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_77bf0643f572",
+        "project_name": "感应耐压试验",
+        "requirement_text": "持续时间(s):15≤t≤60",
+        "extract_reason": "multiple_numbers",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_33328bce81a0",
+        "project_name": "感应耐压试验",
+        "requirement_text": "试验电压应不出现突然下降",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      },
+      {
+        "case_id": "item_fce1d2358187",
+        "project_name": "外施耐压试验",
+        "requirement_text": "试验电压应不出现突然下降",
+        "extract_reason": "unstructured_text",
+        "decision_reason": "requirement_not_program_ready"
+      }
+    ],
+    "ready_but_fallback": [
+      {
+        "case_id": "item_cff00f28081d",
+        "project_name": "电压比测量和联结组标号检定",
+        "requirement_text": "联结组标号:Dyn11",
+        "decision_reason": "conflicting_table_bindings",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_024e7102ed96",
+        "project_name": "短路阻抗和负载损耗测量",
+        "requirement_text": "总损耗P总(kW):≤3.985",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_eeba2938daa9",
+        "project_name": "感应耐压试验",
+        "requirement_text": "高压试验电压:2Ur",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "insufficient_context"
+      },
+      {
+        "case_id": "item_1bf16cfa4832",
+        "project_name": "感应耐压试验",
+        "requirement_text": "低压试验电压:2Ur",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_c1af9edba713",
+        "project_name": "感应耐压试验",
+        "requirement_text": "频率(Hz):>50",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_79b87198c8b7",
+        "project_name": "外施耐压试验",
+        "requirement_text": "高压对低压及地试验电压(kV):35",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_ae16531a76d6",
+        "project_name": "外施耐压试验",
+        "requirement_text": "高压对低压及地持续时间(s):60",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_1b07f9ed196d",
+        "project_name": "外施耐压试验",
+        "requirement_text": "低压对高压及地试验电压(kV):5",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_2700ab352a16",
+        "project_name": "外施耐压试验",
+        "requirement_text": "低压对高压及地持续时间(s):60",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_d334f7d4ef06",
+        "project_name": "绝缘液试验",
+        "requirement_text": "介质损耗因数tanδ(90°C):≤1",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_6602ad7ed53d",
+        "project_name": "压力密封试验",
+        "requirement_text": "施加压力:15",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_a068086cd5ee",
+        "project_name": "压力密封试验",
+        "requirement_text": "持续时间:12",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_982fa430a5c1",
+        "project_name": "压力密封试验",
+        "requirement_text": "残余压力:不低于施压的70%",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "insufficient_context"
+      },
+      {
+        "case_id": "item_16a051fd0583",
+        "project_name": "温升试验",
+        "requirement_text": "顶层油温升:≤55",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_860f54915440",
+        "project_name": "温升试验",
+        "requirement_text": "高压绕组平均温升(K):≤60",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_0bc3a43f68bf",
+        "project_name": "温升试验",
+        "requirement_text": "低压绕组平均温升(K):≤60",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_5f041f72392b",
+        "project_name": "短时过负载能力试验",
+        "requirement_text": "油箱外壳最高温升:≤85",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_4062392576be",
+        "project_name": "短时过负载能力试验",
+        "requirement_text": "套管最高温升:≤85",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_3334a75c30e2",
+        "project_name": "声级测定",
+        "requirement_text": "声压级 LPA [dB(A)]:≤40",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "insufficient_context"
+      },
+      {
+        "case_id": "item_a08f4e966ce2",
+        "project_name": "声级测定",
+        "requirement_text": "声功率级LWA[dB(A)]:≤46",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_2b84e8888d7f",
+        "project_name": "短路承受能力试验",
+        "requirement_text": "试验次数:9次",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_5969f13d5129",
+        "project_name": "短路承受能力试验",
+        "requirement_text": "试验后相电抗差(%):≤2%",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_0ea73202ca08",
+        "project_name": "电压比测量和联结组标号检定",
+        "requirement_text": "联结组标号:Dyn11",
+        "decision_reason": "conflicting_table_bindings",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_cfc9a18b8528",
+        "project_name": "短路阻抗和负载损耗测量",
+        "requirement_text": "总损耗P总(kW): ≤3.985",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_624a908e67dc",
+        "project_name": "感应耐压试验",
+        "requirement_text": "高压试验电压: 2Ur",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "insufficient_context"
+      },
+      {
+        "case_id": "item_9e2cf3d2f3d7",
+        "project_name": "感应耐压试验",
+        "requirement_text": "低压试验电压: 2Ur",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "insufficient_context"
+      },
+      {
+        "case_id": "item_8c89b1d32f46",
+        "project_name": "感应耐压试验",
+        "requirement_text": "频率(Hz): >50",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_a9e15b39628b",
+        "project_name": "外施耐压试验",
+        "requirement_text": "高压对低压及地试验电压(kV):35",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_b561a023b046",
+        "project_name": "外施耐压试验",
+        "requirement_text": "高压对低压及地持续时间(s):60",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_8d29d49aa3e7",
+        "project_name": "外施耐压试验",
+        "requirement_text": "低压对高压及地试验电压(kV):5",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_bb6217260789",
+        "project_name": "外施耐压试验",
+        "requirement_text": "低压对高压及地持续时间(s):60",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_c3476142139f",
+        "project_name": "绝缘液试验",
+        "requirement_text": "介质损耗因数tanδ(90°C)(%):≤1.0",
+        "decision_reason": "no_authoritative_table_claim",
+        "n_tables": 15,
+        "historical_status": "not_audited"
+      }
+    ],
+    "programmatic": [
+      {
+        "case_id": "item_937127d7a86f",
+        "project_name": "绕组电阻测量",
+        "requirement_text": "高压(线)电阻三相不平衡率最大值(%):≤2",
+        "decision_status": "supported",
+        "decision_mode": "programmatic_table",
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_2a6a9e4363b5",
+        "project_name": "绕组电阻测量",
+        "requirement_text": "低压(线)电阻三相不平衡率最大值(%):≤2",
+        "decision_status": "supported",
+        "decision_mode": "programmatic_table",
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_e097bc313063",
+        "project_name": "绕组电阻测量",
+        "requirement_text": "低压(相)电阻三相不平衡率最大值(%):≤4",
+        "decision_status": "supported",
+        "decision_mode": "programmatic_table",
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_f3efe1250ca3",
+        "project_name": "空载损耗和空载电流测量",
+        "requirement_text": "空载损耗P0(kW):≤0.370",
+        "decision_status": "supported",
+        "decision_mode": "programmatic_table",
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_381fd9ed4c05",
+        "project_name": "短路阻抗和负载损耗测量",
+        "requirement_text": "负载损耗Pk(kW):≤3.615",
+        "decision_status": "supported",
+        "decision_mode": "programmatic_table",
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_ef767ad48531",
+        "project_name": "绝缘液试验",
+        "requirement_text": "击穿电压(kV):≥40",
+        "decision_status": "supported",
+        "decision_mode": "programmatic_table",
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_af0e9d573c09",
+        "project_name": "绕组电阻测量",
+        "requirement_text": "高压(线)电阻三相不平衡率最大值(%): ≤2",
+        "decision_status": "supported",
+        "decision_mode": "programmatic_table",
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_bd70e7e7d20e",
+        "project_name": "绕组电阻测量",
+        "requirement_text": "低压(线)电阻三相不平衡率最大值(%): ≤2",
+        "decision_status": "supported",
+        "decision_mode": "programmatic_table",
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_2950ae83ea0e",
+        "project_name": "绕组电阻测量",
+        "requirement_text": "低压(相)电阻三相不平衡率最大值(%): ≤4",
+        "decision_status": "supported",
+        "decision_mode": "programmatic_table",
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_c91c76c5f10e",
+        "project_name": "空载损耗和空载电流测量",
+        "requirement_text": "空载损耗P0(kW): ≤0.370",
+        "decision_status": "supported",
+        "decision_mode": "programmatic_table",
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_539591023595",
+        "project_name": "短路阻抗和负载损耗测量",
+        "requirement_text": "负载损耗Pk(kW): ≤3.615",
+        "decision_status": "supported",
+        "decision_mode": "programmatic_table",
+        "historical_status": "supported"
+      },
+      {
+        "case_id": "item_d9424a084a98",
+        "project_name": "绝缘液试验",
+        "requirement_text": "击穿电压(kV):≥40",
+        "decision_status": "supported",
+        "decision_mode": "programmatic_table",
+        "historical_status": "supported"
+      }
+    ],
+    "status_layer": {
+      "closed_count": 12,
+      "model_count": 61,
+      "closed_historical_verdicts": {
+        "supported": 12
+      },
+      "model_historical_verdicts": {
+        "supported": 53,
+        "insufficient_context": 6,
+        "mismatch": 1,
+        "not_audited": 1
+      },
+      "model_bind_reasons": {
+        "requirement_not_program_ready": 29,
+        "conflicting_table_bindings": 2,
+        "no_authoritative_table_claim": 30
+      },
+      "model_supported": [
+        {
+          "case_id": "item_c83ff28c6d4b",
+          "project_name": "绕组对地及绕组间直流绝缘电阻测量",
+          "requirement_text": "高压对低压及地绝缘电阻:提供试验数据",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_5b5239fe0799",
+          "project_name": "绕组对地及绕组间直流绝缘电阻测量",
+          "requirement_text": "低压对高压及地绝缘电阻:提供试验数据",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_539a716b3abf",
+          "project_name": "电压比测量和联结组标号检定",
+          "requirement_text": "主分接电压比偏差:±0.5%与实际阻抗电压百分数的±1/10中较低者",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_8c0173569571",
+          "project_name": "电压比测量和联结组标号检定",
+          "requirement_text": "其他分接电压比偏差:变压器阻抗电压值(%)的1/10以内,且允许偏差应为±1%",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_cff00f28081d",
+          "project_name": "电压比测量和联结组标号检定",
+          "requirement_text": "联结组标号:Dyn11",
+          "decision_reason": "conflicting_table_bindings"
+        },
+        {
+          "case_id": "item_96e6d62d0412",
+          "project_name": "空载损耗和空载电流测量",
+          "requirement_text": "空载电流I0(%):≤0.16(1+30%)",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_fa738449a418",
+          "project_name": "短路阻抗和负载损耗测量",
+          "requirement_text": "短路阻抗Zk(%):4.0(1±10%)",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_024e7102ed96",
+          "project_name": "短路阻抗和负载损耗测量",
+          "requirement_text": "总损耗P总(kW):≤3.985",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_1bf16cfa4832",
+          "project_name": "感应耐压试验",
+          "requirement_text": "低压试验电压:2Ur",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_c1af9edba713",
+          "project_name": "感应耐压试验",
+          "requirement_text": "频率(Hz):>50",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_ce2c2e08c158",
+          "project_name": "感应耐压试验",
+          "requirement_text": "持续时间(s):15≤t≤60",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_0df6a53ca7de",
+          "project_name": "感应耐压试验",
+          "requirement_text": "试验电压应不出现突然下降",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_79b87198c8b7",
+          "project_name": "外施耐压试验",
+          "requirement_text": "高压对低压及地试验电压(kV):35",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_ae16531a76d6",
+          "project_name": "外施耐压试验",
+          "requirement_text": "高压对低压及地持续时间(s):60",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_1b07f9ed196d",
+          "project_name": "外施耐压试验",
+          "requirement_text": "低压对高压及地试验电压(kV):5",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_2700ab352a16",
+          "project_name": "外施耐压试验",
+          "requirement_text": "低压对高压及地持续时间(s):60",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_68c0ef9efa82",
+          "project_name": "外施耐压试验",
+          "requirement_text": "试验电压应不出现突然下降",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_d334f7d4ef06",
+          "project_name": "绝缘液试验",
+          "requirement_text": "介质损耗因数tanδ(90°C):≤1",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_6602ad7ed53d",
+          "project_name": "压力密封试验",
+          "requirement_text": "施加压力:15",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_a068086cd5ee",
+          "project_name": "压力密封试验",
+          "requirement_text": "持续时间:12",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_3235813c4775",
+          "project_name": "压力密封试验",
+          "requirement_text": "应无渗漏、无损伤",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_16a051fd0583",
+          "project_name": "温升试验",
+          "requirement_text": "顶层油温升:≤55",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_860f54915440",
+          "project_name": "温升试验",
+          "requirement_text": "高压绕组平均温升(K):≤60",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_0bc3a43f68bf",
+          "project_name": "温升试验",
+          "requirement_text": "低压绕组平均温升(K):≤60",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_8b7655c1c9c3",
+          "project_name": "短时过负载能力试验",
+          "requirement_text": "压力保护装置应不动作",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_34b96704afb1",
+          "project_name": "短时过负载能力试验",
+          "requirement_text": "油箱密封应无渗漏",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_5510027d6505",
+          "project_name": "短时过负载能力试验",
+          "requirement_text": "油箱波纹散热器变形应在规定范围内",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_5f041f72392b",
+          "project_name": "短时过负载能力试验",
+          "requirement_text": "油箱外壳最高温升:≤85",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_4062392576be",
+          "project_name": "短时过负载能力试验",
+          "requirement_text": "套管最高温升:≤85",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_a08f4e966ce2",
+          "project_name": "声级测定",
+          "requirement_text": "声功率级LWA[dB(A)]:≤46",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_2b84e8888d7f",
+          "project_name": "短路承受能力试验",
+          "requirement_text": "试验次数:9次",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_0c768536ab6b",
+          "project_name": "短路承受能力试验",
+          "requirement_text": "持续时间(s):0.5±10%",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_7c6ef44e4f31",
+          "project_name": "短路承受能力试验",
+          "requirement_text": "试验电压及电流波形应无异常迹象",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_5969f13d5129",
+          "project_name": "短路承受能力试验",
+          "requirement_text": "试验后相电抗差(%):≤2%",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_400c295e2f01",
+          "project_name": "短路承受能力试验",
+          "requirement_text": "外观检查无异常",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_d114ce841d32",
+          "project_name": "雷电冲击试验",
+          "requirement_text": "高压线端全波电压(kV): -75(1±3%)波前时间: T1: 1.2μs±30%半峰值时间: T2: 50μs±20%",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_62fc4fd591b6",
+          "project_name": "雷电冲击试验",
+          "requirement_text": "在降低电压和全电压下的波形图比较应无明显差异",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_89f893cf357c",
+          "project_name": "雷电冲击试验",
+          "requirement_text": "除截断时刻后,在降低电压和全电压下的波形图比较应无明显差异",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_78f6831d3b88",
+          "project_name": "绕组对地及绕组间直流绝缘电阻测量",
+          "requirement_text": "高压对低压及地绝缘电阻:提供试验数据",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_67b531902cc4",
+          "project_name": "绕组对地及绕组间直流绝缘电阻测量",
+          "requirement_text": "低压对高压及地绝缘电阻:提供试验数据",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_1c97d31dbcf0",
+          "project_name": "电压比测量和联结组标号检定",
+          "requirement_text": "主分接电压比偏差: ±0.5%与实际阻抗电压百分数的±1/10中较低者",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_0ea73202ca08",
+          "project_name": "电压比测量和联结组标号检定",
+          "requirement_text": "联结组标号:Dyn11",
+          "decision_reason": "conflicting_table_bindings"
+        },
+        {
+          "case_id": "item_841cbed4d95f",
+          "project_name": "空载损耗和空载电流测量",
+          "requirement_text": "空载电流I0(%): ≤0.16 (1+30%)",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_d0fc30b54586",
+          "project_name": "短路阻抗和负载损耗测量",
+          "requirement_text": "短路阻抗Zk(%): 4.0 (1±10%)",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_cfc9a18b8528",
+          "project_name": "短路阻抗和负载损耗测量",
+          "requirement_text": "总损耗P总(kW): ≤3.985",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_8c89b1d32f46",
+          "project_name": "感应耐压试验",
+          "requirement_text": "频率(Hz): >50",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_77bf0643f572",
+          "project_name": "感应耐压试验",
+          "requirement_text": "持续时间(s):15≤t≤60",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_33328bce81a0",
+          "project_name": "感应耐压试验",
+          "requirement_text": "试验电压应不出现突然下降",
+          "decision_reason": "requirement_not_program_ready"
+        },
+        {
+          "case_id": "item_a9e15b39628b",
+          "project_name": "外施耐压试验",
+          "requirement_text": "高压对低压及地试验电压(kV):35",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_b561a023b046",
+          "project_name": "外施耐压试验",
+          "requirement_text": "高压对低压及地持续时间(s):60",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_8d29d49aa3e7",
+          "project_name": "外施耐压试验",
+          "requirement_text": "低压对高压及地试验电压(kV):5",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_bb6217260789",
+          "project_name": "外施耐压试验",
+          "requirement_text": "低压对高压及地持续时间(s):60",
+          "decision_reason": "no_authoritative_table_claim"
+        },
+        {
+          "case_id": "item_fce1d2358187",
+          "project_name": "外施耐压试验",
+          "requirement_text": "试验电压应不出现突然下降",
+          "decision_reason": "requirement_not_program_ready"
+        }
+      ]
+    }
+  },
+  "test_set": {
+    "source": "C:\\Users\\zyh19\\chunk-studio\\evaluation\\test_set.json",
+    "case_count": 40,
+    "program_ready": 27,
+    "extract_reasons": {
+      "scalar_quantity": 27,
+      "multiple_numbers": 10,
+      "expression": 3
+    },
+    "split_methods": {
+      "separator": 40
+    },
+    "not_ready": [
+      {
+        "case_id": "hbjc-4-r2",
+        "project_name": "空载损耗和空载电流测量",
+        "requirement_text": "空载电流I0(%):≤0.16(1+30%)",
+        "extract_reason": "multiple_numbers"
+      },
+      {
+        "case_id": "hbjc-14-r1",
+        "project_name": "雷电冲击试验",
+        "requirement_text": "高压线端全波电压(kV): -75(1±3%)波前时间: T1: 1.2μs±30%半峰值时间: T2: 50μs±20%",
+        "extract_reason": "expression"
+      },
+      {
+        "case_id": "hbjc-6-r4",
+        "project_name": "感应耐压试验",
+        "requirement_text": "持续时间(s):15≤t≤60",
+        "extract_reason": "multiple_numbers"
+      },
+      {
+        "case_id": "ezc-4-r2",
+        "project_name": "空载损耗和空载电流测量(例行试验)",
+        "requirement_text": "空载电流I0(%): ≤0.18(允许偏差+30%)",
+        "extract_reason": "multiple_numbers"
+      },
+      {
+        "case_id": "ezc-7-r4",
+        "project_name": "感应耐压试验(IVW)(例行试验)",
+        "requirement_text": "持续时间(s): 120*(额定频率/试验频率),但不少于15s",
+        "extract_reason": "expression"
+      },
+      {
+        "case_id": "whc-4-r2",
+        "project_name": "空载损耗和空载电流测量(例行试验)",
+        "requirement_text": "空载电流I0(%): ≤0.18(1+30%)",
+        "extract_reason": "multiple_numbers"
+      },
+      {
+        "case_id": "whc-10-r1",
+        "project_name": "线端雷电全波冲击试验(LI)(型式试验)",
+        "requirement_text": "高压线端全波电压(kV): -75(1±3%)波前时间:T1:1.2 μs±30% 半峰值时间:T2:50 μs±20%",
+        "extract_reason": "expression"
+      },
+      {
+        "case_id": "whc-7-r4",
+        "project_name": "感应耐压试验(IVW)(例行试验)",
+        "requirement_text": "持续时间(s): <eq>15 \\leq t \\leq 6</eq>0",
+        "extract_reason": "multiple_numbers"
+      },
+      {
+        "case_id": "xyc-5-r3",
+        "project_name": "短路阻抗和负载损耗测量(例行试验)",
+        "requirement_text": "短路阻抗Z☐(%): 4.0(1±10%)",
+        "extract_reason": "multiple_numbers"
+      },
+      {
+        "case_id": "xyc-6-r1",
+        "project_name": "外施耐压试验(AV)(例行试验)",
+        "requirement_text": "高压对低压及地试验电压(kV): 35(1±1%)",
+        "extract_reason": "multiple_numbers"
+      },
+      {
+        "case_id": "xyc-10-r1",
+        "project_name": "线端雷电全波冲击试验(LI)(型式试验)",
+        "requirement_text": "高压线端全波电压(kV): -75(1±3%)",
+        "extract_reason": "multiple_numbers"
+      },
+      {
+        "case_id": "xyc-7-r4",
+        "project_name": "感应耐压试验(IVW)(例行试验)",
+        "requirement_text": "持续时间(s): 15≤t≤60",
+        "extract_reason": "multiple_numbers"
+      },
+      {
+        "case_id": "xyc-3-r1",
+        "project_name": "电压比测量和联结组标号检定(例行试验)",
+        "requirement_text": "主分接电压比偏差: 规定电压比的±0.5%;与实际阻抗百分数的±1/10中的较低者",
+        "extract_reason": "multiple_numbers"
+      }
+    ]
+  }
+}

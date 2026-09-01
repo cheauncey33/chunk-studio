@@ -10,6 +10,21 @@ export const AUDIT_STATUS_LABELS: Record<string, string> = {
   unknown: '待确认',
 }
 
+export const AUTHORITY_LABELS: Record<string, string> = {
+  programmatic_table: '程序表格',
+  programmatic_formula: '程序公式',
+  model: '模型判定',
+  unknown: '',
+}
+
+export const BIND_STATE_LABELS: Record<string, string> = {
+  unique: '唯一绑定',
+  conflict: '绑定冲突',
+  unbound: '未绑定',
+  not_ready: '不可程序化',
+  unknown: '',
+}
+
 export type ProblemFilter = 'mismatch' | 'insufficient_context' | 'not_audited'
 
 export const PROBLEM_FILTERS: Array<{ id: ProblemFilter; label: string }> = [
@@ -86,6 +101,80 @@ export function caseJudgmentReason(item: Record<string, unknown>): string {
     ? item.judgment
     : {}) as Record<string, unknown>
   return String(judgment.reason || item.reason || '').trim()
+}
+
+export type CaseStatusLayer = {
+  verdict: string
+  authority: string
+  closed: boolean
+  bindState: string
+  reasonCode: string
+}
+
+function asLayerRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+export function caseStatusLayer(item: Record<string, unknown>): CaseStatusLayer {
+  const judgment = asLayerRecord(item.judgment)
+  const attached = asLayerRecord(item.status_layer || judgment.status_layer)
+  const deterministic = asLayerRecord(judgment.deterministic_judge)
+  const trace = asLayerRecord(asLayerRecord(item.workflow_trace).audit_judge)
+  const path = asLayerRecord(trace.table_claim_path)
+  const source = String(
+    attached.authority
+    || judgment.authority
+    || deterministic.mode
+    || trace.judge_source
+    || path.mode
+    || '',
+  ).trim()
+  const authority = source === 'programmatic_table' || source === 'programmatic_formula'
+    ? source
+    : source === 'fallback_llm' || source === 'fallback_llm_rejudge' || source === 'llm' || source === 'model'
+      ? 'model'
+      : source
+        ? 'model'
+        : 'unknown'
+  const verdict = caseJudgmentStatus(item)
+  const reasonCode = String(
+    attached.reason_code
+    || judgment.bind_reason_code
+    || deterministic.reason_code
+    || path.reason_code
+    || '',
+  ).trim()
+  const bindMap: Record<string, string> = {
+    unique_bound_comparable: 'unique',
+    derived_sum_comparable: 'unique',
+    conflicting_table_bindings: 'conflict',
+    no_authoritative_table_claim: 'unbound',
+    derived_sum_incomplete: 'unbound',
+    requirement_not_program_ready: 'not_ready',
+  }
+  const bindState = String(
+    attached.bind_state
+    || judgment.bind_state
+    || bindMap[reasonCode]
+    || '',
+  ).trim() || 'unknown'
+  const closed = (authority === 'programmatic_table' || authority === 'programmatic_formula')
+    && (verdict === 'supported' || verdict === 'mismatch')
+  return { verdict, authority, closed, bindState, reasonCode }
+}
+
+export function caseAuthorityLabel(item: Record<string, unknown>): string {
+  const layer = caseStatusLayer(item)
+  if (layer.closed) {
+    return AUTHORITY_LABELS[layer.authority] || '程序闭合'
+  }
+  if (layer.authority === 'model') {
+    const bind = BIND_STATE_LABELS[layer.bindState]
+    return bind ? `模型判定 · ${bind}` : '模型判定'
+  }
+  return ''
 }
 
 export type CaseEvidence = {

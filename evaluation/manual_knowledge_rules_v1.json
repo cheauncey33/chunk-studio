@@ -22,6 +22,14 @@
         "不能证明某个标准表适用于具体产品。",
         "不能覆盖候选证据中明确冲突的定义、适用条件或协议要求。"
       ],
+      "formula": {
+        "op": "sum",
+        "result_aliases": ["总损耗", "P总", "total loss"],
+        "addends": [
+          {"id": "p0", "aliases": ["空载损耗", "P0"]},
+          {"id": "pk", "aliases": ["负载损耗", "Pk"]}
+        ]
+      },
       "review_note": "这是项目人工规则，不是模型常识，也不是从当前候选 Chunk 临时推断出的规则。后续如有专家复核，应更新 status 或添加 reviewed_by 字段。"
     }
   ]

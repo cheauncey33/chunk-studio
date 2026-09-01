@@ -37,80 +37,98 @@ PARSES_DIR = DATA_DIR / "parses"
 DB_PATH = DATA_DIR / "chunkstudio.db"
 
 # --- Deployable service backends ---
-# The local profile keeps SQLite/local files for a zero-dependency checkout.
-# The postgres profile is the explicit post-cutover default: it selects
-# PostgreSQL/pgvector, shared object storage and an external Worker, while
-# credentials/endpoints still come from environment variables.
+# postgres is the default runtime: PostgreSQL/pgvector, MinIO, Redis, and an
+# external Worker. The local profile remains the zero-dependency SQLite
+# rollback path. Empty postgres-profile credentials fall back to the local
+# docker-compose.engineering.yml values and must be overridden in production.
+_ENGINEERING_DATABASE_URL = (
+    "postgresql://chunkstudio:chunkstudio_dev_only@127.0.0.1:55432/chunkstudio"
+)
+_ENGINEERING_REDIS_URL = "redis://:chunkstudio_dev_only@127.0.0.1:56379/0"
+_ENGINEERING_OBJECT_BUCKET = "chunk-studio"
+_ENGINEERING_OBJECT_ENDPOINT_URL = "http://127.0.0.1:59000"
+_ENGINEERING_OBJECT_ACCESS_KEY = "chunkstudio"
+_ENGINEERING_OBJECT_SECRET_KEY = "chunkstudio_dev_only"
+
+
+def _first_env(*names: str) -> str:
+    for name in names:
+        value = os.environ.get(name)
+        if value is not None and value.strip():
+            return value.strip()
+    return ""
+
+
 DEPLOYMENT_PROFILE = os.environ.get(
     "CHUNK_STUDIO_DEPLOYMENT_PROFILE",
-    os.environ.get("DEPLOYMENT_PROFILE", "local"),
-).strip().casefold() or "local"
+    os.environ.get("DEPLOYMENT_PROFILE", "postgres"),
+).strip().casefold() or "postgres"
 if DEPLOYMENT_PROFILE not in {"local", "postgres"}:
     raise RuntimeError(
         "CHUNK_STUDIO_DEPLOYMENT_PROFILE must be either 'local' or 'postgres'"
     )
 _postgres_profile = DEPLOYMENT_PROFILE == "postgres"
+_database_backend_default = "postgres" if _postgres_profile else "sqlite"
 DATABASE_BACKEND = os.environ.get(
     "CHUNK_STUDIO_DATABASE_BACKEND",
-    os.environ.get("DATABASE_BACKEND", "postgres" if _postgres_profile else "sqlite"),
-).strip().casefold() or "sqlite"
-DATABASE_URL = (
-    os.environ.get("CHUNK_STUDIO_DATABASE_URL")
-    or os.environ.get("DATABASE_URL")
-    or ""
-).strip()
+    os.environ.get("DATABASE_BACKEND", _database_backend_default),
+).strip().casefold() or _database_backend_default
+DATABASE_URL = _first_env("CHUNK_STUDIO_DATABASE_URL", "DATABASE_URL")
+if _postgres_profile and not DATABASE_URL:
+    DATABASE_URL = _ENGINEERING_DATABASE_URL
+_vector_backend_default = (
+    "pgvector" if DATABASE_BACKEND in {"postgres", "postgresql"} else "sqlite"
+)
 VECTOR_BACKEND = os.environ.get(
     "CHUNK_STUDIO_VECTOR_BACKEND",
-    os.environ.get(
-        "VECTOR_BACKEND",
-        "pgvector" if DATABASE_BACKEND in {"postgres", "postgresql"} else "sqlite",
-    ),
-).strip().casefold() or "sqlite"
-REDIS_URL = (
-    os.environ.get("CHUNK_STUDIO_REDIS_URL")
-    or os.environ.get("REDIS_URL")
-    or ""
-).strip()
+    os.environ.get("VECTOR_BACKEND", _vector_backend_default),
+).strip().casefold() or _vector_backend_default
+REDIS_URL = _first_env("CHUNK_STUDIO_REDIS_URL", "REDIS_URL")
+if _postgres_profile and not REDIS_URL:
+    REDIS_URL = _ENGINEERING_REDIS_URL
+_object_storage_default = "minio" if _postgres_profile else "local"
 OBJECT_STORAGE_BACKEND = os.environ.get(
     "CHUNK_STUDIO_OBJECT_STORAGE_BACKEND",
-    os.environ.get("OBJECT_STORAGE_BACKEND", "minio" if _postgres_profile else "local"),
-).strip().casefold() or "local"
-OBJECT_STORAGE_BUCKET = (
-    os.environ.get("CHUNK_STUDIO_OBJECT_STORAGE_BUCKET")
-    or os.environ.get("OBJECT_STORAGE_BUCKET")
-    or ""
-).strip()
-OBJECT_STORAGE_ENDPOINT_URL = (
-    os.environ.get("CHUNK_STUDIO_OBJECT_STORAGE_ENDPOINT_URL")
-    or os.environ.get("OBJECT_STORAGE_ENDPOINT_URL")
-    or ""
-).strip()
+    os.environ.get("OBJECT_STORAGE_BACKEND", _object_storage_default),
+).strip().casefold() or _object_storage_default
+OBJECT_STORAGE_BUCKET = _first_env(
+    "CHUNK_STUDIO_OBJECT_STORAGE_BUCKET",
+    "OBJECT_STORAGE_BUCKET",
+)
+if _postgres_profile and not OBJECT_STORAGE_BUCKET:
+    OBJECT_STORAGE_BUCKET = _ENGINEERING_OBJECT_BUCKET
+OBJECT_STORAGE_ENDPOINT_URL = _first_env(
+    "CHUNK_STUDIO_OBJECT_STORAGE_ENDPOINT_URL",
+    "OBJECT_STORAGE_ENDPOINT_URL",
+)
+if _postgres_profile and not OBJECT_STORAGE_ENDPOINT_URL:
+    OBJECT_STORAGE_ENDPOINT_URL = _ENGINEERING_OBJECT_ENDPOINT_URL
 OBJECT_STORAGE_REGION = (
     os.environ.get("CHUNK_STUDIO_OBJECT_STORAGE_REGION")
     or os.environ.get("OBJECT_STORAGE_REGION")
     or "us-east-1"
 ).strip()
-OBJECT_STORAGE_ACCESS_KEY = (
-    os.environ.get("CHUNK_STUDIO_OBJECT_STORAGE_ACCESS_KEY")
-    or os.environ.get("OBJECT_STORAGE_ACCESS_KEY")
-    or ""
-).strip()
-OBJECT_STORAGE_SECRET_KEY = (
-    os.environ.get("CHUNK_STUDIO_OBJECT_STORAGE_SECRET_KEY")
-    or os.environ.get("OBJECT_STORAGE_SECRET_KEY")
-    or ""
-).strip()
+OBJECT_STORAGE_ACCESS_KEY = _first_env(
+    "CHUNK_STUDIO_OBJECT_STORAGE_ACCESS_KEY",
+    "OBJECT_STORAGE_ACCESS_KEY",
+)
+if _postgres_profile and not OBJECT_STORAGE_ACCESS_KEY:
+    OBJECT_STORAGE_ACCESS_KEY = _ENGINEERING_OBJECT_ACCESS_KEY
+OBJECT_STORAGE_SECRET_KEY = _first_env(
+    "CHUNK_STUDIO_OBJECT_STORAGE_SECRET_KEY",
+    "OBJECT_STORAGE_SECRET_KEY",
+)
+if _postgres_profile and not OBJECT_STORAGE_SECRET_KEY:
+    OBJECT_STORAGE_SECRET_KEY = _ENGINEERING_OBJECT_SECRET_KEY
 # In the local profile, SQLite remains the compatibility fallback. In the
 # postgres profile, content reads/writes and worker-owned mutations use the
 # PostgreSQL repositories; explicit backend variables can still override a
 # profile for staged rollback or comparison runs.
+_content_read_default = "postgres" if _postgres_profile else "sqlite"
 CONTENT_READ_BACKEND = os.environ.get(
     "CHUNK_STUDIO_CONTENT_READ_BACKEND",
-    os.environ.get(
-        "CONTENT_READ_BACKEND",
-        "postgres" if _postgres_profile else "sqlite",
-    ),
-).strip().casefold() or "sqlite"
+    os.environ.get("CONTENT_READ_BACKEND", _content_read_default),
+).strip().casefold() or _content_read_default
 
 # The local mode supplies one explicit current-user identity for development. A deployed
 # service must switch to an upstream-authenticated mode before it can use

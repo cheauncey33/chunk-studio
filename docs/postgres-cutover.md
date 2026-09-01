@@ -1,8 +1,10 @@
 # PostgreSQL staged cutover
 
-The local profile keeps SQLite as the zero-dependency default. After the
-comparison gates pass, use the explicit `postgres` deployment profile so the
-backend defaults are selected consistently instead of being assembled by hand:
+PostgreSQL/pgvector is the default runtime. The `local` profile remains the
+zero-dependency SQLite rollback path. Empty postgres-profile credentials use
+the local `docker-compose.engineering.yml` values and must be overridden in
+production. The explicit backend lines below are shown for readability and may
+be omitted when the profile is unset or set to `postgres`:
 
 ```powershell
 $env:CHUNK_STUDIO_DEPLOYMENT_PROFILE = 'postgres'
@@ -16,9 +18,8 @@ $env:CHUNK_STUDIO_REDIS_URL = 'redis://:chunkstudio_dev_only@127.0.0.1:56379/0'
 $env:CHUNK_STUDIO_RUN_IN_PROCESS_WORKER = '0'
 ```
 
-The explicit backend lines are shown for readability and may be omitted when
-`CHUNK_STUDIO_DEPLOYMENT_PROFILE=postgres` is used. The profile still requires
-the PostgreSQL DSN, Redis URL, MinIO/S3 bucket and credentials below.
+The default runtime still needs a reachable PostgreSQL, Redis, and MinIO/S3
+endpoint. Production deployments must replace the local-dev passwords.
 
 When PostgreSQL or trusted-proxy authentication is enabled, distributed
 runtime guardrails are enabled by default: Redis, shared S3/MinIO storage, and
@@ -47,9 +48,10 @@ uv run python scripts/migrate_settings_to_postgres.py `
   --apply
 ```
 
-Before changing the default database/vector backend, run the read-only cutover
-gate. It compares workspace-scoped identifiers and key fields, checks object
-metadata coverage, and reports PostgreSQL queue state:
+Before pointing a populated SQLite workspace at the default PostgreSQL runtime,
+run the read-only cutover gate. It compares workspace-scoped identifiers and
+key fields, checks object metadata coverage, and reports PostgreSQL queue
+state:
 
 ```powershell
 uv run python scripts/verify_postgres_cutover.py `
@@ -80,9 +82,10 @@ API to PostgreSQL (`users`, `workspaces`, and `workspace_members`). A trusted
 proxy user is accepted only when that exact user/workspace pair is active in
 PostgreSQL; the client still cannot submit or override `workspace_id`.
 
-In the `postgres` profile, the KB/file/chunk/assistant/audit-review routers,
-chat sessions, recovery exact search, and Worker mutations use the PostgreSQL
-repositories. The business analytics/SQL source remains a separate read-only
-business-data boundary; evaluation-only maintenance scripts may still target
-the SQLite fixture explicitly. Keep the local profile for rollback and use the
-PostgreSQL profile only after the content/object/vector comparison gates pass.
+In the default `postgres` profile, the KB/file/chunk/assistant/audit-review
+routers, chat sessions, recovery exact search, and Worker mutations use the
+PostgreSQL repositories. The business analytics/SQL source remains a separate
+read-only business-data boundary; evaluation-only maintenance scripts may still
+target the SQLite fixture explicitly. Keep `CHUNK_STUDIO_DEPLOYMENT_PROFILE=local`
+for rollback. Migrate existing SQLite workspaces before relying on the default
+runtime.

@@ -5,6 +5,7 @@ import asyncio
 from starlette.requests import Request
 
 from app import db
+from app import current_user, runtime
 from app.routers import assistants
 
 
@@ -183,3 +184,70 @@ def test_agent_chat_idempotency_key_replays_completed_response(monkeypatch, tmp_
     assert calls == 1
     db.get_conn().close()
     monkeypatch.setattr(db, "_conn", None)
+
+
+def test_agent_chat_stream_finishes_when_lock_cleanup_fails(monkeypatch, tmp_path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+
+    class BrokenReleaseLock:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            raise RuntimeError("redis lock cleanup failed")
+
+    monkeypatch.setattr(
+        assistants,
+        "_conversation_lock",
+        lambda *_args, **_kwargs: BrokenReleaseLock(),
+    )
+    monkeypatch.setattr(
+        assistants.chat_agent,
+        "run_chat_agent",
+        lambda **_kwargs: {
+            "answer": "ok",
+            "new_messages": [{"role": "assistant", "content": "ok"}],
+            "citations": [],
+            "charts": [],
+            "stop_reason": "finished",
+            "turns": 1,
+            "tool_calls": 0,
+        },
+    )
+    response = assistants.assistant_agent_chat_stream(
+        "assistant_oil_transformer_audit",
+        assistants.AgentChatRequest(message="test"),
+    )
+
+    async def collect() -> str:
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+        return "".join(chunks)
+
+    payload = asyncio.run(asyncio.wait_for(collect(), timeout=2))
+    assert "event: final" in payload
+    assert "event: done" in payload
+
+    db.get_conn().close()
+    monkeypatch.setattr(db, "_conn", None)
+
+
+def test_new_conversations_do_not_share_a_global_lock(monkeypatch) -> None:
+    monkeypatch.setattr(runtime.config, "REDIS_URL", "")
+    runtime.reset_runtime_for_tests()
+    identity = current_user.local_current_user()
+
+    first = assistants._conversation_lock(identity, "assistant-1", None)
+    second = assistants._conversation_lock(identity, "assistant-1", None)
+    assert first.acquire()
+    assert second.acquire()
+    second.release()
+    first.release()
+
+    existing = assistants._conversation_lock(identity, "assistant-1", "conversation-1")
+    duplicate = assistants._conversation_lock(identity, "assistant-1", "conversation-1")
+    assert existing.acquire()
+    assert not duplicate.acquire()
+    existing.release()
+    runtime.reset_runtime_for_tests()

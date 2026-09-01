@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 from collections.abc import Callable, Mapping
 from decimal import Decimal
 from html import unescape
@@ -12,7 +13,7 @@ from html.parser import HTMLParser
 from http import HTTPStatus
 from typing import Any
 
-from . import embeddings, lexical, llm, retrieval_experiments
+from . import embeddings, lexical, llm, observability, retrieval_experiments
 from .evidence_locator import chunk_text_sha256
 from .storage import vector_store
 
@@ -285,6 +286,20 @@ def hybrid_search(
     file_ids: list[str] | None = None,
     workspace_id: str | None = None,
 ) -> dict[str, Any]:
+    total_started = time.perf_counter()
+    timings_ms: dict[str, float] = {}
+
+    def finish_stage(stage: str, stage_started: float) -> None:
+        elapsed_seconds = time.perf_counter() - stage_started
+        timings_ms[stage] = round(elapsed_seconds * 1000, 3)
+        observability.metrics.observe(
+            "chunk_studio_stage_duration_seconds",
+            elapsed_seconds,
+            component="retrieval",
+            stage=stage,
+            status="ok",
+        )
+
     query = query.strip()
     if not query:
         raise ValueError("query must not be blank")
@@ -336,15 +351,18 @@ def hybrid_search(
         lexical_enabled = lexical.production_enabled()
 
     degraded: list[str] = []
+    stage_started = time.perf_counter()
     routes, routes_injected = _resolve_query_routes(
         query,
         query_routes=query_routes,
         planner=planner,
         degraded=degraded,
     )
+    finish_stage("query_planning", stage_started)
 
     route_names = list(routes)
     route_queries = list(routes.values())
+    stage_started = time.perf_counter()
     try:
         route_vectors = batch_embedder(
             route_queries,
@@ -365,12 +383,14 @@ def hybrid_search(
         )
     if len(route_vectors) != len(routes):
         raise RuntimeError("query embedder returned an unexpected vector count")
+    finish_stage("query_embedding", stage_started)
 
     route_vector_by_name = dict(zip(route_names, route_vectors, strict=True))
     dense_by_type: dict[str, list[dict[str, Any]]] = {}
     total_by_type: dict[str, int] = {}
     reserved_by_type: dict[str, list[dict[str, Any]]] = {kind: [] for kind in CONTENT_TYPES}
 
+    stage_started = time.perf_counter()
     for content_type in CONTENT_TYPES:
         merged: dict[str, dict[str, Any]] = {}
         for route, route_query in routes.items():
@@ -417,10 +437,12 @@ def hybrid_search(
                 content_type=content_type,
                 reserve=special_route_reserve,
             )
+    finish_stage("dense_retrieval", stage_started)
 
     lexical_by_type: dict[str, list[dict[str, Any]]] = {}
     dual_active = False
     if lexical_enabled:
+        stage_started = time.perf_counter()
         sync_index = True
         try:
             lexical_routes = [
@@ -460,7 +482,9 @@ def hybrid_search(
         except (RuntimeError, sqlite3.Error):
             degraded.append("lexical_retrieval_failed")
             lexical_by_type = {}
+        finish_stage("lexical_retrieval", stage_started)
 
+    stage_started = time.perf_counter()
     candidate_pool: list[dict[str, Any]] = []
     for content_type in CONTENT_TYPES:
         merged_type = _merge_candidate_lists(
@@ -476,8 +500,10 @@ def hybrid_search(
 
     candidate_pool = _rank_candidates(candidate_pool)
     candidate_count = len(candidate_pool)
+    finish_stage("candidate_merge", stage_started)
     mode_prefix = "dual" if dual_active else "dense"
     if not candidate_pool:
+        timings_ms["total"] = round((time.perf_counter() - total_started) * 1000, 3)
         return _response(
             query,
             routes,
@@ -494,6 +520,7 @@ def hybrid_search(
             final_section=final_quotas["section"] if final_quotas else None,
             dense_threshold=dense_threshold,
             rerank_threshold=rerank_threshold,
+            timings_ms=timings_ms,
         )
 
     documents = [_rerank_document(candidate) for candidate in candidate_pool]
@@ -502,6 +529,7 @@ def hybrid_search(
         if final_quotas is not None
         else min(top_k, candidate_count)
     )
+    stage_started = time.perf_counter()
     try:
         reranked = reranker(query, documents, select_n)
         ordered = [
@@ -518,6 +546,7 @@ def hybrid_search(
         ]
         retrieval_mode = f"{mode_prefix}_rrf_fallback"
         rerank_model = None
+    finish_stage("rerank", stage_started)
 
     if final_quotas is not None:
         selected = _slice_final_per_type(ordered, final_quotas=final_quotas)
@@ -545,12 +574,15 @@ def hybrid_search(
         ]
 
     if expand_references or aggregate_continuation_tables:
+        stage_started = time.perf_counter()
         selected = _enrich_evidence_hits(
             selected,
             expand_references=expand_references,
             aggregate_continuations=aggregate_continuation_tables,
         )
+        finish_stage("evidence_enrichment", stage_started)
 
+    timings_ms["total"] = round((time.perf_counter() - total_started) * 1000, 3)
     return _response(
         query,
         routes,
@@ -567,6 +599,7 @@ def hybrid_search(
         final_section=final_quotas["section"] if final_quotas else None,
         dense_threshold=dense_threshold,
         rerank_threshold=rerank_threshold,
+        timings_ms=timings_ms,
     )
 
 
@@ -1003,6 +1036,7 @@ def _response(
     final_section: int | None = None,
     dense_threshold: float | None = None,
     rerank_threshold: float | None = None,
+    timings_ms: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     return {
         "query": query,
@@ -1021,6 +1055,7 @@ def _response(
         "rerank_threshold": rerank_threshold,
         "rerank_model": rerank_model,
         "degraded": degraded,
+        "timings_ms": timings_ms or {},
         "hits": hits,
     }
 

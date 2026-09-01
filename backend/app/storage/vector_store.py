@@ -1,10 +1,10 @@
 """Vector search abstraction.
 
 The retrieval pipeline depends on this small contract instead of knowing
-whether vectors are SQLite blobs or PostgreSQL/pgvector rows. SQLite remains a
-fully working local adapter; pgvector is selected only by explicit config and
-fails with an actionable dependency/DSN error rather than silently falling
-back to an unsafe full scan.
+whether vectors are SQLite blobs or PostgreSQL/pgvector rows. pgvector is the
+default runtime adapter; SQLite remains the local-profile rollback path.
+Missing DSN or driver dependencies fail with an actionable error rather than
+silently falling back to an unsafe full scan.
 """
 from __future__ import annotations
 

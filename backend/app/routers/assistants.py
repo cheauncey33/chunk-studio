@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import queue
 import threading
 import time
@@ -12,11 +13,23 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import chat_agent, chat_sessions, config, current_user, db, jobs, llm, retrieval, runtime
+from .. import (
+    chat_agent,
+    chat_sessions,
+    config,
+    current_user,
+    db,
+    jobs,
+    llm,
+    observability,
+    retrieval,
+    runtime,
+)
 from ..storage.repositories import get_content_repository, get_content_write_repository
 
 
 router = APIRouter(prefix="/assistants", tags=["assistants"])
+logger = logging.getLogger(__name__)
 
 _CHAT_SYSTEM = """你是知识库问答助手。只能依据下方「检索证据」回答用户问题。
 要求：
@@ -1054,6 +1067,7 @@ def _agent_response(conversation_id: str, model: str, result: dict[str, Any]) ->
         "stop_reason": result.get("stop_reason"),
         "turns": result.get("turns", 0),
         "tool_calls": result.get("tool_calls", 0),
+        "performance": result.get("performance") or {},
     }
 
 
@@ -1105,7 +1119,9 @@ def _conversation_lock(
     assistant_id: str,
     conversation_id: str | None,
 ) -> runtime.ConversationLock:
-    suffix = conversation_id or "new"
+    # Existing conversations must serialize writes. New conversations do not
+    # share state and must not all contend on one global "new" lock.
+    suffix = conversation_id or f"new:{uuid.uuid4().hex}"
     return runtime.get_runtime().conversation_lock(
         f"{identity.workspace_id}:{identity.user_id}:{assistant_id}:{suffix}",
         blocking_timeout=0,
@@ -1317,12 +1333,34 @@ def assistant_agent_chat_stream(
                 )
             publish("final", final_response)
         except Exception as exc:
+            observability.metrics.increment(
+                "chunk_studio_agent_stream_failures_total",
+                error_type=type(exc).__name__,
+            )
             publish("error", {"error_type": type(exc).__name__, "error": str(exc)})
             _release_idempotency(identity, assistant_id, idempotency_key)
         finally:
-            services.agent_concurrency.release(agent_key)
-            lock.release()
-            events.put(None)
+            try:
+                services.agent_concurrency.release(agent_key)
+            except Exception as exc:
+                logger.exception("failed to release Agent concurrency lease")
+                observability.metrics.increment(
+                    "chunk_studio_agent_cleanup_failures_total",
+                    resource="concurrency_lease",
+                    error_type=type(exc).__name__,
+                )
+            try:
+                lock.release()
+            except Exception as exc:
+                logger.exception("failed to release Agent conversation lock")
+                observability.metrics.increment(
+                    "chunk_studio_agent_cleanup_failures_total",
+                    resource="conversation_lock",
+                    error_type=type(exc).__name__,
+                )
+            finally:
+                # Cleanup failures must never leave the response generator blocked.
+                events.put(None)
 
     threading.Thread(target=worker, name="agent-chat-stream", daemon=True).start()
 

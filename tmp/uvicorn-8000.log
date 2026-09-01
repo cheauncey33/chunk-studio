@@ -1,0 +1,140 @@
+INFO:     127.0.0.1:52412 - "GET /analytics?knowledge_base_id=kb_uncategorized HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52412 - "GET /assets/index-DIjpL4zw.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:51656 - "GET /assets/api-CdatBtKU.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:56969 - "GET /assets/index-C_Cd75ZB.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:56969 - "GET /assets/analytics-Cg9QwIjJ.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:51656 - "GET /api/knowledge-bases HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56969 - "GET /api/assistants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51656 - "GET /api/assistants/assistant_oil_transformer_audit/versions/active HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56969 - "GET /api/assistants/assistant_oil_transformer_audit/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55370 - "GET /api/assistants/assistant_oil_transformer_audit/conversations/chat_602afc7b141c4f539f8644eb4460ac88 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59281 - "GET /kb/kb_uncategorized/chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59281 - "GET /assets/index-DIjpL4zw.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56697 - "GET /assets/api-CdatBtKU.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64917 - "GET /assets/index-C_Cd75ZB.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56697 - "GET /assets/analytics-Cg9QwIjJ.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59281 - "GET /api/knowledge-bases HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59281 - "GET /api/assistants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56697 - "GET /api/assistants/assistant_oil_transformer_audit/versions/active HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59281 - "GET /api/assistants/assistant_oil_transformer_audit/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59281 - "GET /assets/datasets-ZKdZAB7q.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56697 - "GET /assets/list-filter-bar-DUfL5gnx.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56697 - "GET /assets/files-KfGsk8CQ.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59281 - "GET /assets/dropdown-menu-COLVmeEd.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64917 - "GET /assets/layers-DeJzQU3B.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63175 - "GET /assets/play-D6obuxCn.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55789 - "GET /assets/chunk-rule-fields-CuwsYAWj.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55789 - "GET /api/knowledge-bases/kb_uncategorized/files HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63175 - "GET /api/embeddings/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63175 - "GET /api/assistants/assistant_oil_transformer_audit/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63338 - "GET /api/assistants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63338 - "GET /api/knowledge-bases HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55386 - "GET /analytics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55386 - "GET /assets/index-BfAiTC8V.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50819 - "GET /assets/index-Bx5oQAi7.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57767 - "GET /assets/api-CdatBtKU.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55386 - "GET /assets/analytics-CL47lIpf.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55386 - "GET /api/assistants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57767 - "GET /api/knowledge-bases HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55386 - "GET /api/assistants/assistant_oil_transformer_audit/versions/active HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57767 - "GET /api/assistants/assistant_oil_transformer_audit/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64520 - "GET /api/assistants/assistant_80dee4d797ca423f8315a1fa7acb83bd/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50395 - "GET /api/assistants/assistant_80dee4d797ca423f8315a1fa7acb83bd/versions/active HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49673 - "GET /analytics?knowledge_base_id=kb_03dcb035be1b4c9ab24071e2b5342aa6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49673 - "GET /assets/index-BfAiTC8V.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65472 - "GET /assets/api-CdatBtKU.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:49673 - "GET /assets/index-Bx5oQAi7.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:49673 - "GET /assets/analytics-CL47lIpf.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65472 - "GET /api/knowledge-bases HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49673 - "GET /api/assistants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65472 - "GET /api/assistants/assistant_80dee4d797ca423f8315a1fa7acb83bd/versions/active HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49673 - "GET /api/assistants/assistant_80dee4d797ca423f8315a1fa7acb83bd/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49246 - "GET /analytics?knowledge_base_id=kb_03dcb035be1b4c9ab24071e2b5342aa6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49246 - "GET /assets/index-DUtfuMWY.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62727 - "GET /assets/index-Dg9P7NRd.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57887 - "GET /assets/api-CdatBtKU.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57887 - "GET /assets/analytics-DPaGIEym.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62727 - "GET /api/knowledge-bases HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57887 - "GET /api/assistants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62727 - "GET /api/assistants/assistant_80dee4d797ca423f8315a1fa7acb83bd/versions/active HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57887 - "GET /api/assistants/assistant_80dee4d797ca423f8315a1fa7acb83bd/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50475 - "GET /analytics?knowledge_base_id=kb_03dcb035be1b4c9ab24071e2b5342aa6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55008 - "GET /assets/api-CdatBtKU.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:51678 - "GET /assets/index-Dg9P7NRd.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:50475 - "GET /assets/index-DUtfuMWY.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:50475 - "GET /assets/analytics-DPaGIEym.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:51678 - "GET /api/knowledge-bases HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50475 - "GET /api/assistants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51678 - "GET /api/assistants/assistant_80dee4d797ca423f8315a1fa7acb83bd/versions/active HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50475 - "GET /api/assistants/assistant_80dee4d797ca423f8315a1fa7acb83bd/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54870 - "GET /analytics?knowledge_base_id=kb_03dcb035be1b4c9ab24071e2b5342aa6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54870 - "GET /assets/index-DHN1RQCn.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53152 - "GET /assets/api-CdatBtKU.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55370 - "GET /assets/index-Dg9P7NRd.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54870 - "GET /assets/analytics-Daa2kBsH.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55370 - "GET /api/knowledge-bases HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54870 - "GET /api/assistants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55370 - "GET /api/assistants/assistant_80dee4d797ca423f8315a1fa7acb83bd/versions/active HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54870 - "GET /api/assistants/assistant_80dee4d797ca423f8315a1fa7acb83bd/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58632 - "GET /analytics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58632 - "GET /assets/index-DHN1RQCn.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60710 - "GET /assets/api-CdatBtKU.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53652 - "GET /assets/index-Dg9P7NRd.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58632 - "GET /assets/analytics-Daa2kBsH.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60710 - "GET /api/knowledge-bases HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58632 - "GET /api/assistants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60710 - "GET /api/assistants/assistant_oil_transformer_audit/versions/active HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58632 - "GET /api/assistants/assistant_oil_transformer_audit/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58632 - "GET /api/assistants/assistant_oil_transformer_audit/conversations/chat_e5712b5459b94ce2b768125b16c41593 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55558 - "GET /analytics?knowledge_base_id=kb_uncategorized HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55558 - "GET /assets/index-CiI1GpCZ.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54903 - "GET /assets/api-CdatBtKU.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59225 - "GET /assets/index-Cc8XU0kJ.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55558 - "GET /assets/analytics-BgdMOgrN.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54903 - "GET /api/knowledge-bases HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55558 - "GET /api/assistants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54903 - "GET /api/assistants/assistant_oil_transformer_audit/versions/active HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55558 - "GET /api/assistants/assistant_oil_transformer_audit/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62701 - "GET /api/assistants/assistant_oil_transformer_audit/conversations/chat_e5712b5459b94ce2b768125b16c41593 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49342 - "GET /analytics?knowledge_base_id=kb_uncategorized HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49342 - "GET /assets/index-Bv1ZwmEY.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63948 - "GET /assets/index-Cc8XU0kJ.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52776 - "GET /assets/api-CdatBtKU.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49342 - "GET /assets/analytics-r8RsjBwi.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52776 - "GET /api/knowledge-bases HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49342 - "GET /api/assistants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52776 - "GET /api/assistants/assistant_oil_transformer_audit/versions/active HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49342 - "GET /api/assistants/assistant_oil_transformer_audit/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61868 - "GET /api/assistants/assistant_oil_transformer_audit/conversations/chat_e5712b5459b94ce2b768125b16c41593 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57533 - "GET /analytics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57533 - "GET /assets/index-Bv1ZwmEY.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57229 - "GET /assets/api-CdatBtKU.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52251 - "GET /assets/index-Cc8XU0kJ.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57533 - "GET /assets/analytics-r8RsjBwi.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52251 - "GET /api/knowledge-bases HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57533 - "GET /api/assistants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52251 - "GET /api/assistants/assistant_oil_transformer_audit/versions/active HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57533 - "GET /api/assistants/assistant_oil_transformer_audit/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57533 - "GET /api/assistants/assistant_oil_transformer_audit/conversations/chat_e5712b5459b94ce2b768125b16c41593 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62754 - "GET /api/assistants/assistant_oil_transformer_audit/conversations/chat_312f4828c53f40719f2916f4b222ac34 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60994 - "GET /api/assistants/assistant_oil_transformer_audit/conversations/chat_bd0e02a4a95c4ff496d7cdad95d44ca6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60994 - "GET /api/assistants/assistant_oil_transformer_audit/conversations/chat_fb5bbd240e6b47429f2f4a917845c97a HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60994 - "POST /api/assistants/assistant_oil_transformer_audit/agent-chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60994 - "GET /api/assistants/assistant_oil_transformer_audit/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64686 - "POST /api/assistants/assistant_oil_transformer_audit/agent-chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64686 - "GET /api/assistants/assistant_oil_transformer_audit/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57905 - "GET /analytics?knowledge_base_id=kb_uncategorized HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57905 - "GET /assets/index-Bv1ZwmEY.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:53214 - "GET /assets/api-CdatBtKU.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:59724 - "GET /assets/index-Cc8XU0kJ.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:59724 - "GET /assets/analytics-r8RsjBwi.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:53214 - "GET /api/knowledge-bases HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59724 - "GET /api/assistants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53214 - "GET /api/assistants/assistant_oil_transformer_audit/versions/active HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59724 - "GET /api/assistants/assistant_oil_transformer_audit/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59724 - "GET /api/assistants/assistant_oil_transformer_audit/conversations/chat_fb5bbd240e6b47429f2f4a917845c97a HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60849 - "GET /api/assistants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54648 - "GET /api/assistants/assistant_oil_transformer_audit HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54649 - "GET /api/knowledge-bases/kb_uncategorized/files HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65466 - "GET /api/assistants/assistant_oil_transformer_audit/conversations HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54282 - "GET /api/assistants/assistant_oil_transformer_audit/conversations/chat_fb5bbd240e6b47429f2f4a917845c97a HTTP/1.1" 200 OK

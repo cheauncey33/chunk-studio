@@ -1,0 +1,334 @@
+[
+  {
+    "text": "高压(线)电阻三相不平衡率最大值(%):≤2",
+    "decision": {
+      "mode": "fallback_llm",
+      "reason_code": "no_authoritative_table_claim",
+      "status": null,
+      "candidate_key": null,
+      "authoritative_count": 0
+    },
+    "n_comparisons": 0,
+    "comparisons": [],
+    "useful_attempts": [
+      {
+        "key": "c08",
+        "nodes": [
+          {
+            "node": "property_match",
+            "normalized_property": "高压(线)电阻三相不平衡率最大值(%)",
+            "ranked": [
+              {
+                "score": 1.0,
+                "header": "线",
+                "normalized_header": "线"
+              },
+              {
+                "score": 0.0,
+                "header": "变压器的要求",
+                "normalized_header": "变压器的要求"
+              },
+              {
+                "score": 0.0,
+                "header": "相",
+                "normalized_header": "相"
+              }
+            ],
+            "title_score": 0.3076923076923077,
+            "state": "unique",
+            "header": "线",
+            "score": 1.0,
+            "source": "header"
+          },
+          {
+            "node": "table_bind",
+            "state": "unresolved",
+            "row_index": null,
+            "candidate_row_count": 0
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "text": "低压(线)电阻三相不平衡率最大值(%):≤2",
+    "decision": {
+      "mode": "fallback_llm",
+      "reason_code": "no_authoritative_table_claim",
+      "status": null,
+      "candidate_key": null,
+      "authoritative_count": 0
+    },
+    "n_comparisons": 0,
+    "comparisons": [],
+    "useful_attempts": [
+      {
+        "key": "c08",
+        "nodes": [
+          {
+            "node": "property_match",
+            "normalized_property": "低压(线)电阻三相不平衡率最大值(%)",
+            "ranked": [
+              {
+                "score": 1.0,
+                "header": "线",
+                "normalized_header": "线"
+              },
+              {
+                "score": 0.0,
+                "header": "变压器的要求",
+                "normalized_header": "变压器的要求"
+              },
+              {
+                "score": 0.0,
+                "header": "相",
+                "normalized_header": "相"
+              }
+            ],
+            "title_score": 0.3076923076923077,
+            "state": "unique",
+            "header": "线",
+            "score": 1.0,
+            "source": "header"
+          },
+          {
+            "node": "table_bind",
+            "state": "unresolved",
+            "row_index": null,
+            "candidate_row_count": 0
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "text": "低压(相)电阻三相不平衡率最大值(%):≤4",
+    "decision": {
+      "mode": "fallback_llm",
+      "reason_code": "no_authoritative_table_claim",
+      "status": null,
+      "candidate_key": null,
+      "authoritative_count": 0
+    },
+    "n_comparisons": 0,
+    "comparisons": [],
+    "useful_attempts": [
+      {
+        "key": "c04",
+        "nodes": [
+          {
+            "node": "property_match",
+            "normalized_property": "低压(相)电阻三相不平衡率最大值(%)",
+            "ranked": [
+              {
+                "score": 1.0,
+                "header": "相",
+                "normalized_header": "相"
+              },
+              {
+                "score": 0.0,
+                "header": "变压器的要求",
+                "normalized_header": "变压器的要求"
+              },
+              {
+                "score": 0.0,
+                "header": "线",
+                "normalized_header": "线"
+              }
+            ],
+            "title_score": 0.3076923076923077,
+            "state": "unique",
+            "header": "相",
+            "score": 1.0,
+            "source": "header"
+          },
+          {
+            "node": "table_bind",
+            "state": "unresolved",
+            "row_index": null,
+            "candidate_row_count": 0
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "text": "击穿电压(kV):≥40",
+    "decision": {
+      "mode": "fallback_llm",
+      "reason_code": "no_authoritative_table_claim",
+      "status": null,
+      "candidate_key": null,
+      "authoritative_count": 0
+    },
+    "n_comparisons": 0,
+    "comparisons": [],
+    "useful_attempts": []
+  },
+  {
+    "text": "高压(线)电阻三相不平衡率最大值(%): ≤2",
+    "decision": {
+      "mode": "fallback_llm",
+      "reason_code": "no_authoritative_table_claim",
+      "status": null,
+      "candidate_key": null,
+      "authoritative_count": 0
+    },
+    "n_comparisons": 0,
+    "comparisons": [],
+    "useful_attempts": [
+      {
+        "key": "c08",
+        "nodes": [
+          {
+            "node": "property_match",
+            "normalized_property": "高压(线)电阻三相不平衡率最大值(%)",
+            "ranked": [
+              {
+                "score": 1.0,
+                "header": "线",
+                "normalized_header": "线"
+              },
+              {
+                "score": 0.0,
+                "header": "变压器的要求",
+                "normalized_header": "变压器的要求"
+              },
+              {
+                "score": 0.0,
+                "header": "相",
+                "normalized_header": "相"
+              }
+            ],
+            "title_score": 0.3076923076923077,
+            "state": "unique",
+            "header": "线",
+            "score": 1.0,
+            "source": "header"
+          },
+          {
+            "node": "table_bind",
+            "state": "unresolved",
+            "row_index": null,
+            "candidate_row_count": 0
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "text": "低压(线)电阻三相不平衡率最大值(%): ≤2",
+    "decision": {
+      "mode": "fallback_llm",
+      "reason_code": "no_authoritative_table_claim",
+      "status": null,
+      "candidate_key": null,
+      "authoritative_count": 0
+    },
+    "n_comparisons": 0,
+    "comparisons": [],
+    "useful_attempts": [
+      {
+        "key": "c08",
+        "nodes": [
+          {
+            "node": "property_match",
+            "normalized_property": "低压(线)电阻三相不平衡率最大值(%)",
+            "ranked": [
+              {
+                "score": 1.0,
+                "header": "线",
+                "normalized_header": "线"
+              },
+              {
+                "score": 0.0,
+                "header": "变压器的要求",
+                "normalized_header": "变压器的要求"
+              },
+              {
+                "score": 0.0,
+                "header": "相",
+                "normalized_header": "相"
+              }
+            ],
+            "title_score": 0.3076923076923077,
+            "state": "unique",
+            "header": "线",
+            "score": 1.0,
+            "source": "header"
+          },
+          {
+            "node": "table_bind",
+            "state": "unresolved",
+            "row_index": null,
+            "candidate_row_count": 0
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "text": "低压(相)电阻三相不平衡率最大值(%): ≤4",
+    "decision": {
+      "mode": "fallback_llm",
+      "reason_code": "no_authoritative_table_claim",
+      "status": null,
+      "candidate_key": null,
+      "authoritative_count": 0
+    },
+    "n_comparisons": 0,
+    "comparisons": [],
+    "useful_attempts": [
+      {
+        "key": "c04",
+        "nodes": [
+          {
+            "node": "property_match",
+            "normalized_property": "低压(相)电阻三相不平衡率最大值(%)",
+            "ranked": [
+              {
+                "score": 1.0,
+                "header": "相",
+                "normalized_header": "相"
+              },
+              {
+                "score": 0.0,
+                "header": "变压器的要求",
+                "normalized_header": "变压器的要求"
+              },
+              {
+                "score": 0.0,
+                "header": "线",
+                "normalized_header": "线"
+              }
+            ],
+            "title_score": 0.3076923076923077,
+            "state": "unique",
+            "header": "相",
+            "score": 1.0,
+            "source": "header"
+          },
+          {
+            "node": "table_bind",
+            "state": "unresolved",
+            "row_index": null,
+            "candidate_row_count": 0
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "text": "击穿电压(kV):≥40",
+    "decision": {
+      "mode": "fallback_llm",
+      "reason_code": "no_authoritative_table_claim",
+      "status": null,
+      "candidate_key": null,
+      "authoritative_count": 0
+    },
+    "n_comparisons": 0,
+    "comparisons": [],
+    "useful_attempts": []
+  }
+]

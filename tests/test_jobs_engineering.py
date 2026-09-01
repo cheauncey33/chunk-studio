@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import asyncio
 import sys
+
+import pytest
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
@@ -32,3 +35,44 @@ def test_chunk_stage_is_a_deduplicated_job(monkeypatch, tmp_path: Path) -> None:
     assert first["type"] == "chunk"
     assert first["target_type"] == "file"
     assert first["result"]["parse_id"] == "parse-1"
+
+
+def test_worker_retries_when_queue_dependency_is_temporarily_unavailable(monkeypatch) -> None:
+    claim_calls = 0
+    sleeps: list[float] = []
+
+    def fake_claim(_job_types):
+        nonlocal claim_calls
+        claim_calls += 1
+        if claim_calls == 1:
+            raise RuntimeError("database temporarily unavailable")
+        raise asyncio.CancelledError
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(jobs, "_claim_next_job", fake_claim)
+    monkeypatch.setattr(jobs.asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(jobs.worker_loop({"chunk"}))
+
+    assert claim_calls == 2
+    assert sleeps == [jobs.JOB_DEPENDENCY_BACKOFF_SECONDS]
+
+
+def test_worker_survives_failure_persistence_dependency_error(monkeypatch) -> None:
+    sleeps: list[float] = []
+
+    def fake_fail(_job, _error):
+        raise RuntimeError("database unavailable")
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(jobs, "_fail_job", fake_fail)
+    monkeypatch.setattr(jobs.asyncio, "sleep", fake_sleep)
+
+    asyncio.run(jobs._record_job_failure({"id": "job-1"}, "handler failed"))
+
+    assert sleeps == [jobs.JOB_DEPENDENCY_BACKOFF_SECONDS]

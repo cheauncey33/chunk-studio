@@ -150,6 +150,7 @@ class VectorSearchResponse(BaseModel):
     final_section: int | None = None
     rerank_model: str | None = None
     degraded: list[str] = Field(default_factory=list)
+    timings_ms: dict[str, float] = Field(default_factory=dict)
     hits: list[VectorSearchHit]
 
 

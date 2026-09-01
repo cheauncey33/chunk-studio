@@ -1,0 +1,70 @@
+{
+  "manifest": {
+    "generated_at": "2026-08-31T15:25:02.443906+00:00",
+    "base_url": "http://127.0.0.1:8000",
+    "assistant_id": "assistant_oil_transformer_audit",
+    "requests": 1,
+    "concurrency": 1,
+    "question_count": 5,
+    "timeout_seconds": 180.0
+  },
+  "summary": {
+    "requests": 1,
+    "successes": 1,
+    "errors": 0,
+    "error_rate": 0.0,
+    "throughput_rps": 0.086,
+    "wall_seconds": 11.561,
+    "status_counts": {
+      "200": 1
+    },
+    "headers_ms": {
+      "count": 1,
+      "min": 796.065,
+      "p50": 796.065,
+      "p95": 796.065,
+      "p99": 796.065,
+      "max": 796.065,
+      "mean": 796.065
+    },
+    "first_event_ms": {
+      "count": 1,
+      "min": 796.75,
+      "p50": 796.75,
+      "p95": 796.75,
+      "p99": 796.75,
+      "max": 796.75,
+      "mean": 796.75
+    },
+    "ttft_ms": {
+      "count": 1,
+      "min": 1615.283,
+      "p50": 1615.283,
+      "p95": 1615.283,
+      "p99": 1615.283,
+      "max": 1615.283,
+      "mean": 1615.283
+    },
+    "total_ms": {
+      "count": 1,
+      "min": 11291.812,
+      "p50": 11291.812,
+      "p95": 11291.812,
+      "p99": 11291.812,
+      "max": 11291.812,
+      "mean": 11291.812
+    }
+  },
+  "samples": [
+    {
+      "index": 0,
+      "status_code": 200,
+      "ok": true,
+      "headers_ms": 796.065,
+      "first_event_ms": 796.75,
+      "ttft_ms": 1615.283,
+      "total_ms": 11291.812,
+      "error": ""
+    }
+  ]
+}

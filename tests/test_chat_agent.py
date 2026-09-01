@@ -94,9 +94,12 @@ def test_chat_agent_runs_native_tool_loop_and_collects_citations(monkeypatch) ->
     assert calls[1][-1]["role"] == "user"
     assert calls[1][0]["role"] == "system"
     assert "current_question" in calls[1][-1]["content"]
-    assert [event["type"] for event in events] == [
+    assert [event["type"] for event in events if event["type"] != "node_timing"] == [
         "turn_started", "assistant_message", "tool_call", "tool_result",
         "assistant_message",
+    ]
+    assert [event["node"] for event in events if event["type"] == "node_timing"] == [
+        "llm", "tool", "llm",
     ]
 
 
@@ -202,3 +205,8 @@ def test_chat_agent_forwards_provider_token_events(monkeypatch) -> None:
 
     assert result["answer"] == "流式"
     assert [item["content"] for item in seen if item["type"] == "token"] == ["流", "式"]
+    assert result["performance"]["ttft_ms"] is not None
+    assert result["performance"]["total_ms"] >= result["performance"]["ttft_ms"]
+    assert result["performance"]["nodes"][0]["node"] == "llm"
+    assert len([item for item in seen if item["type"] == "first_token"]) == 1
+    assert any(item["type"] == "node_timing" for item in seen)

@@ -10,6 +10,8 @@ def test_gate_accepts_valid_definitive_judgment() -> None:
         sample_profile={},
     )
     assert decision["action"] == "accept_provisional"
+    assert decision["reason_code"] == "definitive_with_valid_evidence"
+    assert decision["resolution_state"] == "definitive"
 
 
 def test_gate_rejudges_contract_failure_without_agent() -> None:
@@ -106,3 +108,48 @@ def test_gate_does_not_expand_retrieval_for_untyped_judge_uncertainty() -> None:
 
     assert decision["action"] == "accept_provisional"
     assert decision["recoverable_by_agent"] is False
+
+
+def test_gate_marks_model_supported_as_not_closed() -> None:
+    decision = decide_recovery(
+        judgment={
+            "status": "supported",
+            "evidence_candidate_keys": ["c01"],
+            "authority": "model",
+            "authority_closed": False,
+            "bind_state": "unbound",
+            "bind_reason_code": "no_authoritative_table_claim",
+            "deterministic_judge": {
+                "applied": False,
+                "mode": "fallback_llm",
+                "reason_code": "no_authoritative_table_claim",
+            },
+        },
+        retrieval_trace={"output": {"candidate_count": 15}},
+        sample_profile={},
+    )
+    assert decision["action"] == "accept_provisional"
+    assert decision["reason_code"] == "model_judgment_not_closed"
+    assert decision["resolution_state"] == "model_provisional"
+    assert decision["recoverable_by_agent"] is False
+
+
+def test_gate_treats_programmatic_supported_as_definitive() -> None:
+    decision = decide_recovery(
+        judgment={
+            "status": "supported",
+            "evidence_candidate_keys": ["c01"],
+            "status_layer": {
+                "verdict": "supported",
+                "authority": "programmatic_table",
+                "closed": True,
+                "bind_state": "unique",
+                "reason_code": "unique_bound_comparable",
+            },
+        },
+        retrieval_trace={"output": {"candidate_count": 15}},
+        sample_profile={},
+    )
+    assert decision["action"] == "accept_provisional"
+    assert decision["reason_code"] == "definitive_with_valid_evidence"
+    assert decision["resolution_state"] == "definitive"

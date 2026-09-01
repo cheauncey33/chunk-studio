@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import {
   caseEvidenceList,
+  caseAuthorityLabel,
   caseJudgmentReason,
   caseJudgmentStatus,
   caseProjectName,
@@ -131,6 +132,7 @@ export function AuditResultCard({
   const requirement = caseRequirementText(item)
   const projectName = caseProjectName(item, index)
   const status = caseJudgmentStatus(item)
+  const authorityLabel = caseAuthorityLabel(item)
   const tone: ResultTone = status === 'mismatch'
     ? 'mismatch'
     : status === 'insufficient_context'
@@ -172,6 +174,11 @@ export function AuditResultCard({
       <div className="min-w-0 text-[13px] font-semibold leading-snug text-[#111827]">
         {title}
       </div>
+      {authorityLabel ? (
+        <span className="mt-1 inline-flex rounded border border-[#e5e7eb] bg-[#f9fafb] px-1.5 py-0.5 text-[11px] font-medium leading-none text-[#6b7280]">
+          {authorityLabel}
+        </span>
+      ) : null}
       {!member && requirement ? (
         <p className="mt-1 line-clamp-2 text-[12px] leading-snug text-[#6b7280]">
           {requirement}

@@ -444,6 +444,11 @@ export interface AuditReportListItem {
   job_status?: string | null
   audit_mode?: string | null
   judgments?: AuditJudgmentCounts | null
+  authority?: {
+    closed_count?: number
+    model_count?: number
+    [key: string]: unknown
+  } | null
 }
 
 export interface AuditReportListResponse {

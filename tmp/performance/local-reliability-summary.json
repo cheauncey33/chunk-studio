@@ -1,0 +1,66 @@
+{
+  "generated_at": "2026-08-31",
+  "environment": {
+    "deployment_profile": "postgres",
+    "database": "postgresql_pgvector",
+    "redis": true,
+    "object_storage": "minio",
+    "api_workers": 1,
+    "note": "MinIO used host ports 59100/59101 because 59000/59001 were in a Windows excluded port range."
+  },
+  "http_load": {
+    "liveness": {
+      "requests": 500,
+      "concurrency": 20,
+      "successes": 500,
+      "errors": 0,
+      "throughput_rps": 201.75,
+      "p50_ms": 2.96,
+      "p95_ms": 73.10,
+      "p99_ms": 358.23,
+      "max_ms": 407.37
+    },
+    "readiness_all_dependencies": {
+      "requests": 100,
+      "concurrency": 5,
+      "successes": 100,
+      "errors": 0,
+      "throughput_rps": 37.80,
+      "p50_ms": 104.13,
+      "p95_ms": 229.19,
+      "p99_ms": 241.21,
+      "max_ms": 245.98
+    }
+  },
+  "fault_injection": {
+    "postgres_stopped": {
+      "liveness_status": 200,
+      "readiness_status": 503,
+      "detected_error_type": "ConnectionTimeout",
+      "recovered_status": 200
+    },
+    "redis_stopped": {
+      "readiness_status": 503,
+      "detected_error_type": "TimeoutError",
+      "recovered_status": 200
+    },
+    "minio_stopped": {
+      "readiness_status": 503,
+      "detected_error_type": "ConnectTimeoutError",
+      "recovered_status": 200
+    },
+    "worker_database_outage": {
+      "before_fix": "worker process exited on PostgreSQL ConnectionTimeout",
+      "after_fix": "worker logged the claim failure, backed off, stayed alive, and resumed polling after recovery"
+    }
+  },
+  "verification": {
+    "python_tests": "423 passed",
+    "final_readiness": 200,
+    "all_dependencies_healthy": true
+  },
+  "not_run": {
+    "agent_ttft_and_total_latency": "requires explicit approval to send test questions and retrieved internal knowledge snippets to the configured external model provider",
+    "multi_query_ablation": "requires the same external model/data-transfer approval for embedding and reranking calls"
+  }
+}

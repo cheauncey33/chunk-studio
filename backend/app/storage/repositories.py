@@ -1,9 +1,8 @@
 """Database repository contracts and PostgreSQL adapters.
 
-SQLite remains the development implementation behind the existing service
-functions.  These adapters isolate PostgreSQL SQL, transaction semantics and
-row locking so the application can switch after an explicit migration and
-shadow-comparison step.
+PostgreSQL is the default runtime implementation. SQLite remains the
+local-profile rollback path behind the existing service functions. These
+adapters isolate PostgreSQL SQL, transaction semantics and row locking.
 """
 from __future__ import annotations
 
@@ -2783,7 +2782,7 @@ def get_settings_repository() -> PostgresSettingsRepository | None:
 
 
 def get_content_repository() -> PostgresContentRepository | None:
-    """Return the opt-in PostgreSQL read adapter for migrated content."""
+    """Return the PostgreSQL read adapter when content reads use postgres."""
     if config.CONTENT_READ_BACKEND in {"postgres", "postgresql"}:
         if not config.DATABASE_URL:
             raise RuntimeError("DATABASE_URL is required for PostgreSQL content reads")

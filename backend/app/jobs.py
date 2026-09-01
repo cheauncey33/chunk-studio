@@ -8,13 +8,14 @@ import time
 import uuid
 from typing import Any
 
-from . import artifacts, chunk_schema, config, current_user, db, extractors
+from . import artifacts, chunk_schema, config, current_user, db, extractors, observability
 from .adapters import ocr as ocr_adapter
 from .storage.repositories import get_content_write_repository, get_job_repository
 from .storage.object_store import get_object_store
 
 logger = logging.getLogger(__name__)
 JOB_POLL_SECONDS = 1.0
+JOB_DEPENDENCY_BACKOFF_SECONDS = 5.0
 JOB_TIMEOUT_SECONDS = 15 * 60
 
 
@@ -27,7 +28,7 @@ def workspace_id() -> str:
 
 
 def _job_repository():
-    """Return the opt-in PostgreSQL queue adapter, or the SQLite path."""
+    """Return the PostgreSQL queue adapter, or the SQLite local-profile path."""
     return get_job_repository()
 
 
@@ -715,17 +716,42 @@ def latest_job_for_target(target_id: str, type_: str = "ocr") -> dict[str, Any] 
 
 async def worker_loop(job_types: set[str] | None = None) -> None:
     while True:
-        job = _claim_next_job(job_types)
+        try:
+            job = _claim_next_job(job_types)
+        except Exception as exc:
+            logger.exception("worker could not claim a job; retrying after dependency backoff")
+            observability.metrics.increment(
+                "chunk_studio_worker_claim_failures_total",
+                error_type=type(exc).__name__,
+            )
+            await asyncio.sleep(JOB_DEPENDENCY_BACKOFF_SECONDS)
+            continue
         if not job:
             await asyncio.sleep(JOB_POLL_SECONDS)
             continue
         try:
             await asyncio.wait_for(_dispatch_job(job), timeout=JOB_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
-            _fail_job(job, f"job timed out after {JOB_TIMEOUT_SECONDS} seconds")
+            await _record_job_failure(
+                job,
+                f"job timed out after {JOB_TIMEOUT_SECONDS} seconds",
+            )
         except Exception as exc:
             logger.exception("job %s failed outside handler", job.get("id"))
-            _fail_job(job, str(exc))
+            await _record_job_failure(job, str(exc))
+
+
+async def _record_job_failure(job: dict[str, Any], error: str) -> None:
+    """Keep the worker alive if persisting a job failure also loses its dependency."""
+    try:
+        _fail_job(job, error)
+    except Exception as exc:
+        logger.exception("worker could not persist failure for job %s", job.get("id"))
+        observability.metrics.increment(
+            "chunk_studio_worker_failure_persist_errors_total",
+            error_type=type(exc).__name__,
+        )
+        await asyncio.sleep(JOB_DEPENDENCY_BACKOFF_SECONDS)
 
 
 async def _dispatch_job(job: dict[str, Any]) -> None:

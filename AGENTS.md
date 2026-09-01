@@ -15,11 +15,16 @@ From the repository root (PowerShell):
 
 ```powershell
 uv sync
+docker compose -f docker-compose.engineering.yml up -d
+$env:PYTHONPATH='backend'; uv run python scripts/migrate_postgres_schema.py --apply
 $env:PYTHONPATH='backend'; uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+uv run python scripts/run_worker.py --types ocr,parse,chunk,embed,audit,assistant_init
 uv run --with pytest pytest -q
 $env:PYTHONPATH='backend'; uv run python scripts/audit_chunk_quality.py
 $env:PYTHONPATH='backend'; uv run python scripts/validate_test_set.py
 ```
+
+The default runtime is PostgreSQL/pgvector. Opt out with `$env:CHUNK_STUDIO_DEPLOYMENT_PROFILE='local'` for the zero-dependency SQLite path. Tests force that local profile automatically.
 
 For the frontend:
 

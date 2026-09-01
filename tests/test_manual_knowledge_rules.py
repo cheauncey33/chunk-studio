@@ -25,6 +25,9 @@ def test_manual_knowledge_rules_include_total_loss_formula() -> None:
 
     assert total_loss["rule_type"] == "derived_numeric_formula"
     assert "P总 = P0 + Pk" in total_loss["rule_text"]
+    assert total_loss["formula"]["op"] == "sum"
+    assert "总损耗" in total_loss["formula"]["result_aliases"]
+    assert [item["id"] for item in total_loss["formula"]["addends"]] == ["p0", "pk"]
     assert total_loss["allowed_use"]
     assert total_loss["not_allowed_use"]
 
@@ -74,3 +77,23 @@ def test_select_drops_empty_rule_text() -> None:
     }
     selected = _select_manual_knowledge_rules(payload, None)
     assert [rule["rule_id"] for rule in selected["rules"]] == ["keep"]
+
+
+def test_load_overlays_seed_formula_onto_stale_rule() -> None:
+    payload = {
+        "version": 1,
+        "scope": "knowledge_base_manual_rules",
+        "status": "stale_snapshot",
+        "rules": [
+            {
+                "rule_id": "transformer_total_loss_sum_v1",
+                "rule_type": "derived_numeric_formula",
+                "rule_text": "在变压器损耗审查中，总损耗 P总 可以按空载损耗 P0 与负载损耗 Pk 之和计算，即 P总 = P0 + Pk。",
+            }
+        ],
+    }
+
+    loaded = _load_manual_knowledge_rules(payload)
+
+    assert loaded["rules"][0]["formula"]["op"] == "sum"
+    assert "P0" in loaded["rules"][0]["formula"]["addends"][0]["aliases"]

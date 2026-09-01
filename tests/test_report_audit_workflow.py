@@ -995,10 +995,99 @@ def test_run_audit_judge_applies_retrieved_deterministic_conflict_without_rejudg
         sample_profile=_sample_profile_fixture(),
     )
 
-    assert len(calls) == 1
+    assert len(calls) == 0
     assert judgment["status"] == "mismatch"
     assert judgment["evidence_candidate_keys"] == ["c01"]
     assert judgment["deterministic_judge"]["applied"] is True
+    assert _trace["judge_source"] == "programmatic_table"
+    assert _trace["table_claim_path"]["mode"] == "programmatic_table"
+    assert judgment["authority"] == "programmatic_table"
+    assert judgment["authority_closed"] is True
+    assert judgment["bind_state"] == "unique"
+
+
+def test_run_audit_judge_applies_derived_sum_without_llm(monkeypatch) -> None:
+    calls = []
+
+    def fake_call_model(prompt: str, payload: dict, *, model: str):
+        calls.append(payload)
+        raise AssertionError("derived sum should not call the judge model")
+
+    monkeypatch.setattr(workflow, "_call_model", fake_call_model)
+    judgment, trace = workflow._run_audit_judge_with_consistency(
+        judge_prompt="judge",
+        judge_input={
+            "deterministic_comparisons": [{
+                "source": "generic_derived_sum",
+                "candidate_key": "c01",
+                "evidence_candidate_keys": ["c01", "c02"],
+                "kind": "upper_bound",
+                "report_value": 3.985,
+                "standard_value": 3.985,
+                "tightness": "equal",
+                "relation": "supports",
+                "conclusion": "supports",
+                "status": "supported",
+                "target_column": "空载损耗P0(kW) + 负载损耗Pk(kW)",
+                "unit_normalize": {"base": "kw", "left_unit": "kw", "right_unit": "kw"},
+            }],
+            "table_claim_execution": {
+                "mode": "programmatic_formula",
+                "reason_code": "derived_sum_comparable",
+                "status": "supported",
+                "nodes": [],
+            },
+        },
+        judge_model="deepseek-v4-flash",
+        candidates=[_candidate("c01"), _candidate("c02")],
+        sample_profile=_sample_profile_fixture(),
+    )
+
+    assert calls == []
+    assert judgment["status"] == "supported"
+    assert judgment["evidence_candidate_keys"] == ["c01", "c02"]
+    assert judgment["deterministic_judge"]["mode"] == "programmatic_formula"
+    assert "P0" in judgment["reason"] or "派生" in judgment["reason"]
+    assert trace["judge_source"] == "programmatic_formula"
+    assert trace["table_claim_path"]["mode"] == "programmatic_formula"
+    assert judgment["authority"] == "programmatic_formula"
+    assert judgment["authority_closed"] is True
+    assert judgment["bind_state"] == "unique"
+
+
+def test_run_audit_judge_falls_back_to_llm_when_no_table_claim(monkeypatch) -> None:
+    calls = []
+
+    def fake_call_model(prompt: str, payload: dict, *, model: str):
+        calls.append(payload)
+        return {
+            "status": "not_audited",
+            "reason": "候选中没有可绑定的表格限值。",
+            "evidence_candidate_keys": [],
+            "missing_context_fields": [],
+        }
+
+    monkeypatch.setattr(workflow, "_call_model", fake_call_model)
+    judgment, trace = workflow._run_audit_judge_with_consistency(
+        judge_prompt="judge",
+        judge_input={
+            "reported_requirement": {"text": "冲击电压: 75 kV"},
+            "test_item": {"project_name": "雷电冲击"},
+            "deterministic_comparisons": [],
+        },
+        judge_model="deepseek-v4-flash",
+        candidates=[_candidate("c01")],
+        sample_profile=_sample_profile_fixture(),
+    )
+
+    assert len(calls) == 1
+    assert judgment["status"] == "not_audited"
+    assert trace["judge_source"] == "fallback_llm"
+    assert judgment["deterministic_judge"]["applied"] is False
+    assert trace["table_claim_path"]["fallback_applied"] is True
+    assert judgment["authority"] == "model"
+    assert judgment["authority_closed"] is False
+    assert judgment["bind_state"] == "unbound"
 
 
 def test_run_audit_judge_downgrades_when_rejudge_remains_inconsistent(
