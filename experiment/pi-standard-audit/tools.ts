@@ -54,14 +54,33 @@ function readableHits(payload: any): string {
 		.join("\n");
 }
 
-export const searchStandards = defineTool({
+export function createAuditTools() {
+	const maxCalls = Math.max(1, Number(process.env.PI_MAX_TOOL_CALLS ?? "12"));
+	let remaining = maxCalls;
+	const budgetExceeded = () => ({
+		content: [
+			{
+				type: "text" as const,
+				text: `工具调用已达预算上限 ${maxCalls} 次。请基于已获取的证据直接输出最终 JSON 判定，不要再调用工具。`,
+			},
+		],
+		details: { budget_exceeded: true },
+	});
+	function takeBudget(): ReturnType<typeof budgetExceeded> | null {
+		if (remaining <= 0) return budgetExceeded();
+		remaining -= 1;
+		return null;
+	}
+
+	const searchStandards = defineTool({
 	name: "search_standards",
 	label: "检索标准知识库",
 	description:
-		"在标准知识库中做混合检索。给定一条自然语言检索式（建议包含型号、额定容量、电压、试验项目、参数名），返回最相关的标准片段（表格/条款），含文件、页、业务元数据（标准号、表号）。需要核对该设备某项限值要求时使用。传入 row_filter（样机容量/电压）时，表格命中会直接给出匹配行的具体数值（如 400 kVA 行的空载损耗/空载电流/短路阻抗），无需再逐个读表格原文。",
-	promptSnippet: "检索标准知识库中的相关限值/条款，可按样机参数直接返回表格匹配行",
+		"在标准知识库中按你给出的检索式原样做混合检索（后端不会再自动改写）。建议包含型号、额定容量、电压、试验项目、参数名；返回最相关的标准片段（表格/条款），含文件、页、业务元数据（标准号、表号）。命中不好时换一种表述再调用本工具。传入 row_filter（样机容量/电压）时，表格命中会直接给出匹配行的具体数值（如 400 kVA 行的空载损耗/空载电流/短路阻抗），无需再逐个读表格原文。",
+	promptSnippet: "按原检索式检索标准知识库；命中不好时换表述再搜，可按样机参数直接返回表格匹配行",
 	promptGuidelines: [
-		"使用 search_standards 时 query 要写成完整自然语言检索式，包含型号参数（如 S20-M.RL-400/10-NX2 400 kVA 10/0.4 kV）、试验项目名和要核对的参数名（如 空载损耗P0）。",
+		"使用 search_standards 时 query 会原样作为检索式，后端不再自动改写。写成完整自然语言，包含型号参数（如 S20-M.RL-400/10-NX2 400 kVA 10/0.4 kV）、试验项目名和要核对的参数名（如 空载损耗P0）。",
+		"第一次命中不够时，用另一种表述再调 search_standards（例如按标准号/表号/参数名拆开），不要指望一次调用内部帮你扩写。",
 		"审查表格限值（损耗/电流/阻抗等）时务必传 row_filter（capacity_kva、system_nominal_voltage_kv，从产品型号参数解析为数字），命中表格会直接给出匹配行的全部列值，避免再读表格原文。",
 		"file_ids 可选：当已确定适用标准文档时，可把检索限定在该文件内提高精度。",
 	],
@@ -81,6 +100,8 @@ export const searchStandards = defineTool({
 		),
 	}),
 	async execute(_id, params, signal, _onUpdate, _ctx) {
+		const blocked = takeBudget();
+		if (blocked) return blocked;
 		// 组装 applicability 形状的 row_filter（后端 bind_table_row 契约）。
 		let rowFilter: Record<string, unknown> | undefined;
 		if (params.row_filter) {
@@ -102,6 +123,7 @@ export const searchStandards = defineTool({
 					top_k: Math.min(params.top_k ?? 8, 20),
 					file_ids: params.file_ids ?? undefined,
 					row_filter: rowFilter,
+					query_routes: { production: params.query },
 				}),
 			},
 		);
@@ -110,7 +132,7 @@ export const searchStandards = defineTool({
 	},
 });
 
-export const readChunk = defineTool({
+	const readChunk = defineTool({
 	name: "read_chunk",
 	label: "读取标准片段全文",
 	description:
@@ -124,6 +146,8 @@ export const readChunk = defineTool({
 		chunk_id: Type.String({ description: "标准知识库片段 id（来自 search_standards 命中）" }),
 	}),
 	async execute(_id, params, signal, _onUpdate, _ctx) {
+		const blocked = takeBudget();
+		if (blocked) return blocked;
 		const payload = await apiFetch(`/api/chunks/${encodeURIComponent(params.chunk_id)}`, signal);
 		const chunk = payload as any;
 		const meta = JSON.stringify(chunk.business_metadata ?? chunk.metadata ?? {});
@@ -135,7 +159,7 @@ export const readChunk = defineTool({
 	},
 });
 
-export const readReport = defineTool({
+	const readReport = defineTool({
 	name: "read_report",
 	label: "读取检测报告",
 	description:
@@ -151,6 +175,8 @@ export const readReport = defineTool({
 		),
 	}),
 	async execute(_id, params, signal, _onUpdate, _ctx) {
+		const blocked = takeBudget();
+		if (blocked) return blocked;
 		const payload = (await apiFetch(`/api/audit/reports/${encodeURIComponent(params.report_name)}`, signal)) as any;
 		const report = payload?.payload;
 		if (!report) throw new Error("报告响应缺少 payload 字段");
@@ -218,4 +244,7 @@ export const readReport = defineTool({
 	},
 });
 
-export const auditTools = [searchStandards, readChunk, readReport] as const;
+	return [searchStandards, readChunk, readReport];
+}
+
+export const auditTools = createAuditTools();

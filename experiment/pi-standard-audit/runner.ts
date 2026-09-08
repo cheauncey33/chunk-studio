@@ -29,16 +29,49 @@ import {
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 
-import { auditTools } from "./tools.ts";
+import { createAuditTools } from "./tools.ts";
 
 const apiBase = (process.env.CHUNK_STUDIO_API_BASE ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 const traceDir = process.env.PI_TRACE_DIR ?? join(process.cwd(), "traces");
 
-// 工具调用硬预算：模块级计数器。主循环在每个 case 开始前显式 reset，
-// 避免 extensionFactories（loader 级单例）闭包跨 session 泄漏计数。
-let toolCallBudget = Number(process.env.PI_MAX_TOOL_CALLS ?? "8");
-export function resetToolCallBudget(): void {
-	toolCallBudget = Number(process.env.PI_MAX_TOOL_CALLS ?? "8");
+const TRACE_TYPES = new Set([
+	"agent_start",
+	"agent_end",
+	"agent_settled",
+	"turn_start",
+	"turn_end",
+	"tool_call",
+	"tool_execution_start",
+	"tool_execution_update",
+	"tool_execution_end",
+	"tool_result",
+	"message_end",
+	"model_select",
+	"context",
+]);
+
+function defaultConcurrency(): number {
+	const raw = Number(process.env.AGENT_CONCURRENCY ?? "5");
+	return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 5;
+}
+
+async function mapPool<T, R>(
+	items: T[],
+	limit: number,
+	fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+	const out = new Array<R>(items.length);
+	let next = 0;
+	async function worker(): Promise<void> {
+		for (;;) {
+			const i = next++;
+			if (i >= items.length) return;
+			out[i] = await fn(items[i], i);
+		}
+	}
+	const n = Math.max(1, Math.min(limit, items.length || 1));
+	await Promise.all(Array.from({ length: items.length ? n : 0 }, () => worker()));
+	return out;
 }
 
 // Which report to audit (contains embedded gold cases).
@@ -46,14 +79,62 @@ function defaultReportPath(): string {
 	return join(process.cwd(), "..", "..", "backend", "data", "reports", "hbjc_end_to_end_audit_v1.json");
 }
 
-function parseArgs(argv: string[]): { report: string; limit: number | null; caseId?: string } {
-	const out = { report: process.env.PI_REPORT_PATH ?? defaultReportPath(), limit: null as number | null, caseId: undefined as string | undefined };
+function parseArgs(argv: string[]): {
+	report: string;
+	limit: number | null;
+	caseId?: string;
+	caseIds?: string[];
+	out?: string;
+	concurrency: number;
+} {
+	const out = {
+		report: process.env.PI_REPORT_PATH ?? defaultReportPath(),
+		limit: null as number | null,
+		caseId: undefined as string | undefined,
+		caseIds: undefined as string[] | undefined,
+		out: undefined as string | undefined,
+		concurrency: defaultConcurrency(),
+	};
 	for (let i = 0; i < argv.length; i++) {
 		if (argv[i] === "--report" && argv[i + 1]) out.report = argv[i + 1];
 		if (argv[i] === "--limit" && argv[i + 1]) out.limit = Number(argv[i + 1]);
 		if (argv[i] === "--case" && argv[i + 1]) out.caseId = argv[i + 1];
+		if (argv[i] === "--cases" && argv[i + 1]) {
+			out.caseIds = argv[i + 1].split(",").map((s) => s.trim()).filter(Boolean);
+		}
+		if (argv[i] === "--out" && argv[i + 1]) out.out = argv[i + 1];
+		if (argv[i] === "--concurrency" && argv[i + 1]) out.concurrency = Math.max(1, Number(argv[i + 1]));
 	}
 	return out;
+}
+
+function toolStats(trace: any[]): {
+	tool_calls: number;
+	search_calls: number;
+	read_chunks: number;
+	read_report: number;
+	search_queries: string[];
+} {
+	const starts = trace.filter((t) => t.type === "tool_execution_start");
+	const names = starts.map((t) => String(t.toolName ?? ""));
+	const search_queries = trace
+		.filter((t) => (t.type === "tool_call" || t.type === "tool_execution_start") && t.toolName === "search_standards")
+		.map((t) => String(t.args?.query ?? t.input?.query ?? ""))
+		.filter(Boolean);
+	return {
+		tool_calls: names.filter(Boolean).length,
+		search_calls: names.filter((n) => n === "search_standards").length,
+		read_chunks: names.filter((n) => n === "read_chunk").length,
+		read_report: names.filter((n) => n === "read_report").length,
+		search_queries: [...new Set(search_queries)],
+	};
+}
+
+function percentile(values: number[], p: number): number | null {
+	if (!values.length) return null;
+	const sorted = [...values].sort((a, b) => a - b);
+	const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+	return sorted[idx];
 }
 
 async function loadReport(path: string): Promise<any> {
@@ -126,6 +207,7 @@ function systemPrompt(): string {
 		`6. 加严指标：报告声称值严于标准限值（如标准 ≤4% 而报告 ≤3%），判 mismatch + kind=numeric_tighter，reasoning 注明"属自行加严，严于标准要求"。`,
 		``,
 		`工具可用：search_standards / read_chunk / read_report。`,
+		`search_standards 按你写的 query 原样检索，后端不会再自动改写；命中不好时换表述再搜。检索 2–3 次后应 read_chunk 并判定，禁止为同一条款反复搜索。`,
 	].join("\n");
 }
 
@@ -134,19 +216,18 @@ async function main(): Promise<void> {
 	const report = await loadReport(args.report);
 	await mkdir(traceDir, { recursive: true });
 
-	const apiKey = process.env.PI_API_KEY || process.env.DASHSCOPE_API_KEY || process.env.DEEPSEEK_API_KEY;
+	const apiKey = process.env.PI_API_KEY || process.env.ZHIPU_API_KEY || process.env.DASHSCOPE_API_KEY || process.env.DEEPSEEK_API_KEY;
 	if (!apiKey) {
-		throw new Error("缺少 API key：设置 PI_API_KEY / DASHSCOPE_API_KEY / DEEPSEEK_API_KEY");
+		throw new Error("缺少 API key：设置 PI_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY / DEEPSEEK_API_KEY");
 	}
-	// 默认走 DashScope OpenAI 兼容端点（compatible-mode），模型 ZHIPU/GLM-5.3-Flash。
-	// 需先在百炼控制台开通对应模型，否则返回 "product is not activated"。
+	// 默认走智谱官方 OpenAI 兼容端点，模型 glm-5.3-flash。
 	const baseUrl = (
 		process.env.PI_BASE_URL ||
 		process.env.DASHSCOPE_BASE_URL ||
-		"https://dashscope.aliyuncs.com/compatible-mode/v1"
+		"https://open.bigmodel.cn/api/paas/v4"
 	).replace(/\/+$/, "");
-	const modelId = process.env.PI_MODEL || process.env.DASHSCOPE_MODEL || "ZHIPU/GLM-5.3-Flash";
-	const providerId = process.env.PI_PROVIDER || "dashscope";
+	const modelId = process.env.PI_MODEL || process.env.DASHSCOPE_MODEL || "glm-5.3-flash";
+	const providerId = process.env.PI_PROVIDER || "zhipu";
 
 	// Build a ModelRuntime with only our registered provider; avoid any
 	// network/model-catalog refresh (models are supplied explicitly).
@@ -168,10 +249,16 @@ async function main(): Promise<void> {
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 1048576,
 				maxTokens: 16384,
-				// qwen 格式：enable_thinking + reasoning_effort（智谱/DashScope 的 GLM 与 Qwen 系列通用）。
-				// supportsReasoningEffort 让 Pi 把 thinkingLevel 映射成 reasoning_effort 发出。
-				// supportsDeveloperRole=false：DashScope 拒绝 developer 角色，必须用 system。
-				compat: { thinkingFormat: "qwen", supportsReasoningEffort: true, supportsDeveloperRole: false },
+				// 智谱官方：thinking { type: enabled }（Pi thinkingFormat=zai）。
+				// 百炼 Qwen/ZHIPU/*：enable_thinking + reasoning_effort。
+				// supportsDeveloperRole=false：两端都拒绝 developer 角色。
+				compat: {
+					thinkingFormat: /dashscope/i.test(baseUrl) || /^qwen/i.test(modelId) || /^zhipu\//i.test(modelId)
+						? "qwen"
+						: "zai",
+					supportsReasoningEffort: true,
+					supportsDeveloperRole: false,
+				},
 			},
 		],
 	});
@@ -180,82 +267,75 @@ async function main(): Promise<void> {
 	// 显式注入 key：避免依赖 env 引用的命名拼接。
 	modelRuntime.setRuntimeApiKey(model.provider, apiKey);
 
-	const loader = new DefaultResourceLoader({
-		cwd: process.cwd(),
-		agentDir: join(process.env.HOME ?? process.env.USERPROFILE ?? ".", ".pi", "agent"),
-		systemPromptOverride: () => systemPrompt(),
-		appendSystemPromptOverride: () => [],
-		extensionFactories: [
-			// 硬预算：拦截工具调用，超过上限即阻止并让模型直接收尾出判定（省 token/时间）。
-			// 计数用模块级 toolCallBudget，主循环每 case resetToolCallBudget()，避免跨 session 泄漏。
-			(_pi: any) => {
-				const pi2 = _pi as any;
-				pi2.on("tool_call", (_event: any) => {
-					if (toolCallBudget > 0) {
-						toolCallBudget -= 1;
-						return undefined; // 放行
-					}
-					return {
-						block: true,
-						reason: `工具调用已达预算上限 ${toolCallBudget} 次，请基于已获取的证据直接输出最终 JSON 判定，不要再调用工具。`,
-					};
-				});
-			},
-		],
-	});
-	await loader.reload();
-
 	const cases = report.cases as any[];
-	const selected = (args.limit ? cases.slice(0, args.limit) : cases).filter(
-		(c: any) => !args.caseId || c.case_id === args.caseId,
-	);
+	const idFilter = args.caseIds?.length
+		? new Set(args.caseIds)
+		: args.caseId
+			? new Set([args.caseId])
+			: null;
+	let selected = idFilter ? cases.filter((c: any) => idFilter.has(c.case_id)) : cases;
+	if (args.limit) selected = selected.slice(0, args.limit);
+	if (idFilter) {
+		const missing = [...idFilter].filter((id) => !selected.some((c: any) => c.case_id === id));
+		if (missing.length) console.warn(`未找到 case: ${missing.join(", ")}`);
+	}
+	const requestedThinking = String(process.env.PI_THINKING_LEVEL || "low").toLowerCase();
+	const glmAlwaysOn = /glm-5\.3/i.test(modelId);
+	let thinkingLevel = requestedThinking;
+	if (glmAlwaysOn) {
+		if (requestedThinking === "off" || requestedThinking === "minimal") thinkingLevel = "low";
+		else if (requestedThinking === "medium") thinkingLevel = "high";
+	}
+	const concurrency = args.concurrency;
 	console.log(`报告 ${args.report}: 共 ${cases.length} case，本次跑 ${selected.length} 个`);
+	console.log(`model=${modelId} thinking=${thinkingLevel} concurrency=${concurrency}`);
 
-	const results: any[] = [];
-	for (const [idx, c] of selected.entries()) {
+	const results = await mapPool(selected, concurrency, async (c, idx) => {
 		console.log(`--- case ${idx + 1}/${selected.length}: ${c.case_id} ---`);
+		const caseStarted = Date.now();
 		const trace: any[] = [];
 		let finalText = "";
-		let settled = false;
 		let promptError: unknown = undefined;
 		let readCount = 0;
+		let toolCallBudget = Number(process.env.PI_MAX_TOOL_CALLS ?? "12");
+		const tools = createAuditTools();
 
-		// 每 case 重置工具调用预算（extensionFactories 是 loader 级单例，闭包计数会跨 session 泄漏）。
-		resetToolCallBudget();
+		const loader = new DefaultResourceLoader({
+			cwd: process.cwd(),
+			agentDir: join(process.env.HOME ?? process.env.USERPROFILE ?? ".", ".pi", "agent"),
+			systemPromptOverride: () => systemPrompt(),
+			appendSystemPromptOverride: () => [],
+			extensionFactories: [
+				(_pi: any) => {
+					(_pi as any).on("tool_call", (_event: any) => {
+						if (toolCallBudget > 0) {
+							toolCallBudget -= 1;
+							return undefined;
+						}
+						return {
+							block: true,
+							reason: `工具调用已达预算上限 ${toolCallBudget} 次，请基于已获取的证据直接输出最终 JSON 判定，不要再调用工具。`,
+						};
+					});
+				},
+			],
+		});
+		await loader.reload();
 
 		const { session } = await createAgentSession({
 			model,
 			modelRuntime,
-			customTools: [...auditTools],
+			customTools: tools,
 			resourceLoader: loader,
 			sessionManager: SessionManager.inMemory(),
-			// 思考档位走 env（GLM 仅 max/high/low；Qwen 系支持 minimal/low/medium/high）。
-			thinkingLevel: (process.env.PI_THINKING_LEVEL as any) ?? "low",
+			thinkingLevel,
 		});
-		// White-list: only our RAG tools are visible to the model.
 		session.setActiveToolsByName(["search_standards", "read_chunk", "read_report"]);
 
-		const TRACE_TYPES = new Set([
-			"agent_start",
-			"agent_end",
-			"agent_settled",
-			"turn_start",
-			"turn_end",
-			"tool_call",
-			"tool_execution_start",
-			"tool_execution_update",
-			"tool_execution_end",
-			"tool_result",
-			"message_end",
-			"model_select",
-			"context",
-		]);
 		session.subscribe((event: any) => {
-			// host 端门禁计数：standard_not_found 必须建立在 read_chunk 证据上（见 prompt 后检查）。
 			if (event.type === "tool_execution_start" && event.toolName === "read_chunk") {
 				readCount += 1;
 			}
-			// 只录结构事件；message_update 是逐 token 流式事件（每 case 上千条），丢弃避免 trace 膨胀到几十 MB。
 			if (TRACE_TYPES.has(event.type)) {
 				trace.push({ type: event.type, ts: Date.now(), ...strip(event) });
 			}
@@ -278,10 +358,9 @@ async function main(): Promise<void> {
 			promptError = err instanceof Error ? err.message : String(err);
 		}
 
-		// host 端门禁：standard_not_found 但从未 read_chunk → 追加一次重判提示（预览不完整≠条款不存在）。
 		let parsed = parseVerdict(finalText);
 		if (parsed?.verdict === "unevaluable" && parsed?.kind === "standard_not_found" && readCount === 0) {
-			console.log(`  [gate] standard_not_found 但 read_chunk=0，追加重判提示`);
+			console.log(`  [gate] ${c.case_id} standard_not_found 但 read_chunk=0，追加重判提示`);
 			try {
 				await session.prompt(
 					`你给出了 unevaluable + standard_not_found，但本会话从未用 read_chunk 读取任何命中片段的完整原文。` +
@@ -294,36 +373,43 @@ async function main(): Promise<void> {
 			}
 			parsed = parseVerdict(finalText);
 		}
-		settled = true;
 		session.dispose();
-		results.push({
+		const duration_ms = Date.now() - caseStarted;
+		const stats = toolStats(trace);
+		const row = {
 			case_id: c.case_id,
+			edit_kind: c.edit_kind ?? null,
 			gold: c.judgment?.status ?? null,
 			answerability: c.answerability_status ?? null,
 			verdict: parsed?.verdict ?? null,
 			parsed_json: parsed ?? null,
 			final_assistant_text: finalText.slice(0, 4000),
 			error: promptError ?? null,
+			duration_ms,
+			stats,
 			trace: trace,
-		});
-
-		// persist a per-case trace file
+		};
 		const traceFile = join(traceDir, `${c.case_id}.jsonl`);
 		await writeFile(traceFile, trace.map((t) => JSON.stringify(t)).join("\n"), "utf8");
 		console.log(
-			`  gold=${c.judgment?.status ?? c.answerability_status ?? "-"} verdict=${parsed?.verdict ?? "(parse fail)"} -> ${traceFile}`,
+			`  gold=${c.judgment?.status ?? c.answerability_status ?? "-"} verdict=${parsed?.verdict ?? "(parse fail)"} kind=${parsed?.kind ?? "-"} ${duration_ms}ms search=${stats.search_calls} read=${stats.read_chunks} -> ${traceFile}`,
 		);
-	}
+		return row;
+	});
 
 	const reportOut = {
 		report: args.report,
 		model: modelId,
 		base_url: baseUrl,
+		thinking_level: thinkingLevel,
+		concurrency,
 		total: results.length,
 		summary: summarize(results),
 		results,
 	};
-	const outPath = join(process.cwd(), "results.json");
+	const outPath = args.out
+		? (args.out.includes("\\") || args.out.includes("/") ? args.out : join(process.cwd(), args.out))
+		: join(process.cwd(), "results.json");
 	await writeFile(outPath, JSON.stringify(reportOut, null, 2), "utf8");
 	console.log(`\n汇总已写入 ${outPath}`);
 	console.log(JSON.stringify(reportOut.summary, null, 2));
@@ -437,18 +523,54 @@ function summarizeMessageText(content: unknown): string {
 	return "";
 }
 
+function expectedKind(editKind: string | null | undefined): string | null {
+	if (!editKind) return null;
+	return (
+		{
+			numeric_looser: "numeric_looser",
+			numeric_tighter: "numeric_tighter",
+			formula_aggregate: "formula_aggregate",
+			comparator_flip: "comparator_flip",
+			bandwidth_looser: "bandwidth_exceeded",
+			wrong_level: "wrong_level",
+			wrong_condition: "wrong_condition",
+			wrong_label: "wrong_label",
+			magnitude_error: "magnitude_error",
+			unit_equivalence: "unit_equivalent",
+			positive_control: "exact",
+			existing_conflict_control: null,
+		} as Record<string, string | null>
+	)[editKind] ?? null;
+}
+
 function summarize(results: any[]): any {
-	const rows = results.map((r) => ({
-		case_id: r.case_id,
-		gold: r.gold,
-		answerability: r.answerability,
-		verdict: r.verdict,
-		kind: r.parsed_json?.kind ?? null,
-		match: r.gold && r.verdict ? goldToVerdict(r.gold) === r.verdict : null,
-	}));
+	const rows = results.map((r) => {
+		const kind = r.parsed_json?.kind ?? null;
+		const wantKind = expectedKind(r.edit_kind);
+		return {
+			case_id: r.case_id,
+			edit_kind: r.edit_kind ?? null,
+			gold: r.gold,
+			answerability: r.answerability,
+			verdict: r.verdict,
+			kind,
+			match: r.gold && r.verdict ? goldToVerdict(r.gold) === r.verdict : null,
+			kind_match: wantKind ? wantKind === kind : null,
+			duration_ms: r.duration_ms ?? null,
+			search_calls: r.stats?.search_calls ?? null,
+			read_chunks: r.stats?.read_chunks ?? null,
+			tool_calls: r.stats?.tool_calls ?? null,
+			search_queries: r.stats?.search_queries ?? [],
+		};
+	});
 	const match = rows.filter((r) => r.match === true).length;
 	const mismatch = rows.filter((r) => r.match === false).length;
 	const unparsed = rows.filter((r) => r.verdict === null).length;
+	const kindRows = rows.filter((r) => r.kind_match !== null);
+	const durations = rows.map((r) => r.duration_ms).filter((n): n is number => typeof n === "number");
+	const searchCounts = rows.map((r) => r.search_calls).filter((n): n is number => typeof n === "number");
+	const readCounts = rows.map((r) => r.read_chunks).filter((n): n is number => typeof n === "number");
+	const distinctQueries = rows.filter((r) => (r.search_queries?.length ?? 0) >= 2).length;
 
 	// test_set.json 口径：answerable 期望产出判定（match/mismatch），
 	// context_required 期望 unevaluable，not_applicable_to_retrieval 期望 out_of_scope。
@@ -468,6 +590,19 @@ function summarize(results: any[]): any {
 		exact_match: match,
 		verdict_mismatch: mismatch,
 		unparsed,
+		kind_match: kindRows.filter((r) => r.kind_match === true).length,
+		kind_total: kindRows.length,
+		latency_ms: {
+			p50: percentile(durations, 50),
+			p90: percentile(durations, 90),
+			max: durations.length ? Math.max(...durations) : null,
+			mean: durations.length ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : null,
+		},
+		tools: {
+			search_p50: percentile(searchCounts, 50),
+			read_p50: percentile(readCounts, 50),
+			multi_query_cases: distinctQueries,
+		},
 		test_set: answerable.length
 			? {
 					answerable: answerable.length,

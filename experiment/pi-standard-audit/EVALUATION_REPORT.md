@@ -212,6 +212,30 @@ hbjc-13-r4（9/10 的唯一 X）不再是行为问题：模型读了 Q/GDW 表29
 numeric_tighter）。分歧根源是**标准优先级未定义**：HBJC gold 走 GB/T 1094.5 Ⅰ类路径判 match，
 模型走 Q/GDW 国网规范路径判加严。属待定义的业务口径，非模型缺陷。
 
+## 接入 chunk-studio（v7 判定 → 生产审查）
+
+实验闭环后按用户决策接入：**Node sidecar + 直接替代审查判定层**。架构：
+
+```
+前端 审查页 ──> FastAPI jobs（enqueue/进度/轮询，全部复用）
+                  └─> _run_audit_job ──> run_report_audit_workflow.py --judge-mode agent
+                                              ├─ 提取阶段（参数/项目/型号解码/样机画像）：生产管线不动
+                                              └─ 判定阶段：逐 case POST services/pi-audit-sidecar
+                                                    POST /audit/case → 全新 Pi session（3 工具 + v7 定义）
+```
+
+| 组件 | 说明 |
+|---|---|
+| `services/pi-audit-sidecar/` | 无状态单 case 执行器：并发闸（默认 1）、单 case 硬超时、预算 hook、read 门禁、trace 存档自动清理；file_scope 默认限定助手知识库文件 |
+| `run_report_audit_workflow.py` | `--judge-mode agent`：判定换 agent、提取保留；per-case 重试（2 次退避）；失败 case 降级 `insufficient_context + agent_error` 不中断整跑；agent 模式并发压 1（sidecar 串行）；sidecar 预检 fail-fast |
+| `backend/app/config.py` | `AUDIT_JUDGE_MODE`（默认 agent）/ `AGENT_SIDECAR_URL` / `AGENT_SIDECAR_TOKEN` |
+| `backend/app/audit_run.py` | production_runtime_args 透传 judge-mode/sidecar-url |
+| `backend/app/routers/audit.py` | 工作流 trace 增加 `agent_audit` 节点；agent case 跳过 query_planner/retrieval/gold 占位还原 |
+| 判定兼容 | judgment.status 用旧词表（match→supported 等）——读侧路由/前端徽章零改动；`verdict`/`kind` 作附加字段供分析 |
+
+可靠性对照用户要求："时间花了一定要有结果"= case 级 checkpoint（复用生产）+ per-case
+重试 + 失败降级不中断 + 单 case 硬超时；"任务跑着人走开"= jobs 表进度 + 前端已有轮询。
+
 ## 待办
 
 - [ ] 证据召回分析（agent 检索命中 vs required_evidence_groups，trace details.hits 可离线算）
