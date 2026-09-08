@@ -60,7 +60,8 @@ export function CaseWorkflowTrace({
         if (cancelled) return
         setTrace(payload)
         const prefer =
-          payload.nodes.find(node => node.id === 'audit_judge')?.id
+          payload.nodes.find(node => node.id === 'agent_audit')?.id
+          || payload.nodes.find(node => node.id === 'audit_judge')?.id
           || payload.nodes.find(node => node.id === 'retrieval')?.id
           || payload.nodes[0]?.id
           || ''

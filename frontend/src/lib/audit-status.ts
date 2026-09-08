@@ -165,12 +165,31 @@ export function caseStatusLayer(item: Record<string, unknown>): CaseStatusLayer 
   return { verdict, authority, closed, bindState, reasonCode }
 }
 
+export const KIND_LABELS: Record<string, string> = {
+  exact: '精确一致',
+  unit_equivalent: '单位等价',
+  formula_aggregate: '加和口径',
+  numeric_looser: '限值放宽',
+  numeric_tighter: '自行加严',
+  comparator_flip: '比较符反转',
+  bandwidth_exceeded: '超出带宽',
+  wrong_level: '等级写错',
+  wrong_condition: '条件写错',
+  wrong_label: '标号写错',
+  magnitude_error: '数量级错误',
+  standard_not_found: '未找到标准',
+  applicability_undetermined: '适用性未定',
+}
+
 export function caseAuthorityLabel(item: Record<string, unknown>): string {
   const layer = caseStatusLayer(item)
+  const kind = String(asRecord(item.judgment).kind || '').trim()
+  const kindLabel = KIND_LABELS[kind] || kind
   if (layer.closed) {
     return AUTHORITY_LABELS[layer.authority] || '程序闭合'
   }
   if (layer.authority === 'model') {
+    if (kindLabel) return `模型判定 · ${kindLabel}`
     const bind = BIND_STATE_LABELS[layer.bindState]
     return bind ? `模型判定 · ${bind}` : '模型判定'
   }
@@ -193,6 +212,17 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 /** Report-side limit / value shown on the requirement line. */
 export function caseReportUsedValue(item: Record<string, unknown>): string {
+  const judgment = asRecord(item.judgment)
+  const reported = String(judgment.reported_value || '').trim()
+  if (reported) return reported
+  const requirement = asRecord(item.reported_requirement)
+  const claim = asRecord(requirement.claim)
+  const claimValue = asRecord(claim.value)
+  const fromClaim = String(claimValue.raw || claimValue.normalized || '').trim()
+  if (fromClaim) {
+    const unit = String(claimValue.unit || requirement.unit || '').trim()
+    return unit && !fromClaim.includes(unit) ? `${fromClaim} ${unit}` : fromClaim
+  }
   const full = caseRequirementText(item)
   if (!full) return '—'
   const parts = full.split(/[:：]/)
@@ -203,42 +233,72 @@ export function caseReportUsedValue(item: Record<string, unknown>): string {
   return full
 }
 
+function evidencePages(locator: Record<string, unknown>, meta: Record<string, unknown>): string {
+  const pageStart = locator.page_start ?? meta.page_start
+  const pageEnd = locator.page_end ?? meta.page_end
+  if (pageStart != null && pageEnd != null && pageStart !== pageEnd) {
+    return `p.${pageStart}–${pageEnd}`
+  }
+  if (pageStart != null) return `p.${pageStart}`
+  return ''
+}
+
+function evidenceCitation(
+  locator: Record<string, unknown>,
+  meta: Record<string, unknown>,
+  fallback: string,
+): string {
+  const standardNo = String(locator.standard_no || meta.standard_no || '').trim()
+  const section = String(locator.section || meta.section || '').trim()
+  const sectionTitle = String(locator.section_title || meta.section_title || '').trim()
+  const tableNo = String(locator.table_no || meta.table_no || '').trim()
+  const tableTitle = String(locator.table_title || meta.table_title || '').trim()
+  const place = tableNo
+    ? `表 ${tableNo}${tableTitle ? ` ${tableTitle}` : ''}`
+    : [section && `§${section}`, sectionTitle].filter(Boolean).join(' ')
+  return [standardNo, place].filter(Boolean).join(' · ') || fallback
+}
+
+function parseAgentEvidenceString(text: string, index: number): CaseEvidence {
+  const trimmed = text.trim()
+  const citation = trimmed.split(/[：:]/, 1)[0]?.trim() || `证据 ${index + 1}`
+  const pageMatch = trimmed.match(/p\.?\s*(\d+)/i) || trimmed.match(/第(\d+)\s*页/)
+  return {
+    key: `e${index + 1}`,
+    title: citation,
+    citation,
+    text: trimmed,
+    pages: pageMatch ? `p.${pageMatch[1]}` : '',
+  }
+}
+
 export function caseEvidenceList(item: Record<string, unknown>): CaseEvidence[] {
   const judgment = asRecord(item.judgment)
   const raw = Array.isArray(judgment.evidence) ? judgment.evidence : []
-  return raw.map((entry, index) => {
+  return raw.flatMap((entry, index) => {
+    if (typeof entry === 'string') {
+      const text = entry.trim()
+      return text ? [parseAgentEvidenceString(text, index)] : []
+    }
     const row = asRecord(entry)
+    if (!Object.keys(row).length) return []
     const meta = asRecord(row.business_metadata)
     const locator = asRecord(row.locator)
-    const standardNo = String(
-      locator.standard_no || meta.standard_no || '',
-    ).trim()
-    const section = String(locator.section || meta.section || '').trim()
-    const sectionTitle = String(
-      locator.section_title || meta.section_title || '',
-    ).trim()
-    const tableNo = String(locator.table_no || meta.table_no || '').trim()
-    const tableTitle = String(locator.table_title || meta.table_title || '').trim()
-    const key = String(row.candidate_key || `e${index + 1}`)
-    const place = tableNo
-      ? `表 ${tableNo}${tableTitle ? ` ${tableTitle}` : ''}`
-      : [section && `§${section}`, sectionTitle].filter(Boolean).join(' ')
-    const citation = [standardNo, place].filter(Boolean).join(' · ') || key
-    const pageStart = locator.page_start ?? meta.page_start
-    const pageEnd = locator.page_end ?? meta.page_end
-    let pages = ''
-    if (pageStart != null && pageEnd != null && pageStart !== pageEnd) {
-      pages = `p.${pageStart}–${pageEnd}`
-    } else if (pageStart != null) {
-      pages = `p.${pageStart}`
-    }
-    return {
+    const agentSource = String(row.source || '').trim()
+    const agentLocation = String(row.location || '').trim()
+    const key = String(row.candidate_key || row.chunk_id || `e${index + 1}`)
+    const citation = evidenceCitation(locator, meta, '')
+      || [agentSource, agentLocation].filter(Boolean).join(' · ')
+      || key
+    const text = String(row.text || agentLocation || agentSource || '').trim()
+    if (!text && !citation) return []
+    return [{
       key,
       title: citation,
       citation,
-      text: String(row.text || '').trim(),
-      pages,
-    }
+      text,
+      pages: evidencePages(locator, meta),
+    }]
   })
 }
 
@@ -283,8 +343,15 @@ function extractLimitSnippet(text: string, reportValue: string): string {
   return snippet.length > 64 ? `${snippet.slice(0, 64)}…` : snippet
 }
 
-/** Best-effort standard-side value from adopted evidence (not a separate model field). */
+/** Best-effort standard-side value: agent field first, else adopted evidence. */
 export function caseStandardValueDisplay(item: Record<string, unknown>): string {
+  const judgment = asRecord(item.judgment)
+  const value = String(judgment.standard_value || '').trim()
+  const standardNo = String(judgment.standard_no || '').trim()
+  if (value) {
+    if (standardNo && !value.includes(standardNo)) return `${standardNo}：${value}`
+    return value
+  }
   const evidence = caseEvidenceList(item)
   if (!evidence.length) return '—'
   const primary = evidence[0]

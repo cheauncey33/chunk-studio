@@ -16,6 +16,8 @@ import {
   caseJudgmentReason,
   caseJudgmentStatus,
   caseProjectName,
+  caseReportUsedValue,
+  caseStandardValueDisplay,
   formatAuditTime,
   statusVariant,
 } from '@/lib/audit-status'
@@ -883,6 +885,8 @@ export default function WorkbenchPage() {
                       const title = caseProjectName(item, index)
                       const reason = caseJudgmentReason(item)
                       const authorityLabel = caseAuthorityLabel(item)
+                      const reportValue = caseReportUsedValue(item)
+                      const standardValue = caseStandardValueDisplay(item)
                       return (
                         <article key={String(item.case_id || index)} className="rounded-xl border border-border-button p-4">
                           <div className="flex flex-wrap items-center gap-2">
@@ -893,6 +897,20 @@ export default function WorkbenchPage() {
                               <Badge variant="secondary">{authorityLabel}</Badge>
                             ) : null}
                             <strong className="text-[15px]">{title}</strong>
+                          </div>
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            <div className="min-w-0 rounded-md bg-[#f8fafc] px-2.5 py-2">
+                              <div className="text-[11px] font-medium leading-none text-[#9ca3af]">报告使用值</div>
+                              <div className="mt-1 break-words text-[13px] font-medium leading-snug text-[#111827]">
+                                {reportValue}
+                              </div>
+                            </div>
+                            <div className="min-w-0 rounded-md bg-[#f8fafc] px-2.5 py-2">
+                              <div className="text-[11px] font-medium leading-none text-[#9ca3af]">真正标准值</div>
+                              <div className="mt-1 break-words text-[13px] font-medium leading-snug text-[#111827]">
+                                {standardValue}
+                              </div>
+                            </div>
                           </div>
                           {reason && (
                             <p className="mt-2 text-[15px] leading-relaxed text-text-secondary">{reason}</p>
