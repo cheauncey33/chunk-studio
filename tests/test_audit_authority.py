@@ -21,6 +21,19 @@ def test_programmatic_table_is_closed_supported() -> None:
     assert layer["verdict"] == "supported"
 
 
+def test_agent_judge_source_is_model_authority() -> None:
+    layer = build_status_layer(verdict="supported", judge_source="agent")
+    assert layer["authority"] == "model"
+    assert layer["closed"] is False
+
+    error_layer = build_status_layer(
+        verdict="insufficient_context",
+        judge_source="agent_error",
+    )
+    assert error_layer["authority"] == "model"
+    assert error_layer["closed"] is False
+
+
 def test_fallback_llm_supported_is_not_closed() -> None:
     layer = build_status_layer(
         verdict="supported",

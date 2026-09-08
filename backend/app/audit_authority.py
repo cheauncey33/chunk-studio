@@ -21,6 +21,8 @@ _SOURCE_TO_AUTHORITY = {
     "fallback_llm_rejudge": "model",
     "llm": "model",
     "model": "model",
+    "agent": "model",
+    "agent_error": "model",
 }
 
 _REASON_TO_BIND_STATE = {

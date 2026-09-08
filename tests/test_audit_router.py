@@ -119,6 +119,44 @@ def test_workflow_trace_omits_gold_node_for_recorded_full_report_runs() -> None:
     trace = _build_workflow_trace(payload, case, current_llm_config={})
 
     assert all(node["id"] != "gold_comparison" for node in trace["nodes"])
+    assert all(node["id"] != "agent_audit" for node in trace["nodes"])
+
+
+def test_workflow_trace_includes_agent_node_and_skips_planner() -> None:
+    payload = {
+        "judge_mode": "agent",
+        "judge_provider": "pi-agent-sidecar",
+        "workflow_definition": {
+            "provider_config": {"provider": "deepseek", "judge_mode": "agent"},
+            "global_trace": {
+                "report_parameters": {"input": {}, "output": {}},
+            },
+        },
+    }
+    case = {
+        "case_id": "item_abc",
+        "workflow_trace": {
+            "audit_judge": {
+                "input": {"judge_mode": "agent"},
+                "output": {"status": "supported"},
+            },
+            "agent_audit": {
+                "input": {"case_id": "item_abc"},
+                "output": {"ok": True, "parse_mode": "strict"},
+            },
+        },
+    }
+
+    trace = _build_workflow_trace(payload, case, current_llm_config={})
+    node_ids = [node["id"] for node in trace["nodes"]]
+
+    assert "agent_audit" in node_ids
+    assert "query_planner" not in node_ids
+    assert "retrieval" not in node_ids
+    assert "gold_comparison" not in node_ids
+    agent_node = next(node for node in trace["nodes"] if node["id"] == "agent_audit")
+    assert agent_node["configuration"]["provider"] == "pi-agent-sidecar"
+    assert agent_node["configuration"]["judge_mode"] == "agent"
 
 
 def _review_env(monkeypatch, tmp_path: Path) -> sqlite3.Connection:

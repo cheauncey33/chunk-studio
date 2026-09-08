@@ -76,3 +76,10 @@ def test_worker_survives_failure_persistence_dependency_error(monkeypatch) -> No
     asyncio.run(jobs._record_job_failure({"id": "job-1"}, "handler failed"))
 
     assert sleeps == [jobs.JOB_DEPENDENCY_BACKOFF_SECONDS]
+
+
+def test_audit_jobs_use_extended_timeout(monkeypatch) -> None:
+    monkeypatch.setattr(jobs.config, "AUDIT_JOB_TIMEOUT_SECONDS", 14400)
+    assert jobs._timeout_for_job({"type": "audit"}) == 14400
+    assert jobs._timeout_for_job({"type": "chunk"}) == jobs.JOB_TIMEOUT_SECONDS
+    assert jobs._timeout_for_job({"type": "parse"}) == jobs.JOB_TIMEOUT_SECONDS

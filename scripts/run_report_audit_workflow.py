@@ -17,6 +17,8 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import httpx
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
@@ -73,6 +75,268 @@ RRF_K = 60
 DEFAULT_OUTPUT = BACKEND / "data" / "reports" / "hbjc_end_to_end_audit_v1.json"
 DEFAULT_JUDGE_CONCURRENCY = 8
 MAX_JUDGE_CONCURRENCY = 500
+
+# Pi agent sidecar verdict (v7 taxonomy) -> production judgment status vocabulary.
+AGENT_VERDICT_TO_STATUS = {
+    "match": "supported",
+    "mismatch": "mismatch",
+    "unevaluable": "insufficient_context",
+    "out_of_scope": "not_audited",
+}
+_AGENT_CHUNK_ID_RE = re.compile(
+    r"(?:chunk_id\s*[=:：]\s*|chunk\s+)([0-9a-f]{32})",
+    re.IGNORECASE,
+)
+_AGENT_TABLE_NO_RE = re.compile(r"表\s*([0-9A-Za-z.]+)")
+_AGENT_SECTION_RE = re.compile(r"(?:第\s*([\d.]+)\s*条|§\s*([\d.]+))")
+_AGENT_PAGE_RE = re.compile(r"(?:p\.?\s*(\d+)|第(\d+)\s*页)", re.IGNORECASE)
+_AGENT_STANDARD_NO_RE = re.compile(
+    r"(?:GB\s*/?\s*T?\s*[\d.]+-\d{4}|Q\s*/?\s*GDW\s*[\d.]+-\d{4}|"
+    r"JB\s*/?\s*T?\s*[\d.]+-\d{4}|GB\s+\d+-\d{4})",
+    re.IGNORECASE,
+)
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _load_chunk_for_evidence(chunk_id: str) -> dict[str, Any] | None:
+    cid = str(chunk_id or "").strip()
+    if not cid:
+        return None
+    try:
+        repository = _content_repository()
+        if repository is not None:
+            row = repository.get_chunk(cid)
+            if row:
+                return row
+        raw = db.get_conn().execute("SELECT * FROM chunks WHERE id=?", (cid,)).fetchone()
+        return dict(raw) if raw else None
+    except Exception:
+        return None
+
+
+def _chunk_row_dict(row: Any) -> dict[str, Any]:
+    return dict(row) if row is not None and not isinstance(row, dict) else dict(row or {})
+
+
+def _pick_hydrated_chunk(rows: list[Any]) -> dict[str, Any] | None:
+    parsed = [_chunk_row_dict(row) for row in rows if row is not None]
+    if not parsed:
+        return None
+    with_table = [row for row in parsed if "<table" in str(row.get("text") or "").lower()]
+    pool = with_table or parsed
+    return max(pool, key=lambda row: len(str(row.get("text") or "")))
+
+
+def _load_chunk_for_locator(
+    *,
+    standard_no: str = "",
+    table_no: str = "",
+    section: str = "",
+) -> dict[str, Any] | None:
+    """Best-effort lookup when the agent cited a table/clause but omitted chunk_id."""
+    standard_no = str(standard_no or "").strip()
+    table_no = str(table_no or "").strip()
+    section = str(section or "").strip()
+    if not standard_no or not (table_no or section):
+        return None
+    try:
+        if table_no:
+            rows = db.get_conn().execute(
+                """SELECT * FROM chunks
+                   WHERE json_extract(business_metadata, '$.standard_no') = ?
+                     AND json_extract(business_metadata, '$.table_no') = ?
+                   ORDER BY page, created_at
+                   LIMIT 8""",
+                (standard_no, table_no),
+            ).fetchall()
+        else:
+            rows = db.get_conn().execute(
+                """SELECT * FROM chunks
+                   WHERE json_extract(business_metadata, '$.standard_no') = ?
+                     AND (
+                        json_extract(business_metadata, '$.section') = ?
+                        OR json_extract(business_metadata, '$.section') LIKE ?
+                     )
+                   ORDER BY page, created_at
+                   LIMIT 8""",
+                (standard_no, section, f"{section}%"),
+            ).fetchall()
+        return _pick_hydrated_chunk(list(rows or []))
+    except Exception:
+        return None
+
+
+def _chunk_to_evidence(chunk: dict[str, Any], index: int) -> dict[str, Any]:
+    metadata = _json_object(chunk.get("business_metadata") or chunk.get("metadata"))
+    trace = _json_object(chunk.get("source_trace"))
+    candidate = {
+        "candidate_key": f"a{index + 1:02d}",
+        "content_type": str(
+            metadata.get("content_type") or chunk.get("content_type") or "section"
+        ),
+        "business_metadata": metadata,
+        "text": str(chunk.get("text") or ""),
+        "page": chunk.get("page"),
+        "source_trace": trace,
+    }
+    compact = _compact_candidate(candidate)
+    compact["locator"] = _evidence_locator(candidate)
+    return compact
+
+
+def _parse_agent_evidence_blob(blob: str) -> dict[str, Any]:
+    text = blob.strip()
+    chunk_match = _AGENT_CHUNK_ID_RE.search(text)
+    table_match = _AGENT_TABLE_NO_RE.search(text)
+    section_match = _AGENT_SECTION_RE.search(text)
+    page_match = _AGENT_PAGE_RE.search(text)
+    standard_match = _AGENT_STANDARD_NO_RE.search(text)
+    section = ""
+    if section_match:
+        section = str(section_match.group(1) or section_match.group(2) or "").strip()
+    return {
+        "text": text,
+        "chunk_id": chunk_match.group(1) if chunk_match else "",
+        "table_no": table_match.group(1) if table_match else "",
+        "section": section,
+        "page": int(page_match.group(1) or page_match.group(2)) if page_match else None,
+        "standard_no": standard_match.group(0).strip() if standard_match else "",
+    }
+
+
+def normalize_agent_evidence(
+    raw: Any,
+    *,
+    standard_no: str = "",
+) -> list[dict[str, Any]]:
+    """Adapt sidecar evidence (strings / {source,location,text,chunk_id}) to UI candidates."""
+    if raw is None:
+        items: list[Any] = []
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        items = [raw]
+    normalized: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    seen_chunk_ids: set[str] = set()
+
+    def _append(entry: dict[str, Any], chunk_id: str = "") -> None:
+        key = str(entry.get("candidate_key") or "")
+        if key and key in seen_keys:
+            return
+        cid = str(chunk_id or "").strip()
+        if cid:
+            if cid in seen_chunk_ids:
+                return
+            seen_chunk_ids.add(cid)
+        if key:
+            seen_keys.add(key)
+        normalized.append(entry)
+
+    for index, item in enumerate(items):
+        parsed: dict[str, Any]
+        compact_fallback: dict[str, Any] | None = None
+        if isinstance(item, str):
+            parsed = _parse_agent_evidence_blob(item)
+        elif isinstance(item, dict):
+            locator = item.get("locator") if isinstance(item.get("locator"), dict) else {}
+            meta = (
+                item.get("business_metadata")
+                if isinstance(item.get("business_metadata"), dict)
+                else {}
+            )
+            blob = " ".join(
+                str(part or "")
+                for part in (
+                    item.get("source"),
+                    item.get("location"),
+                    item.get("text"),
+                    item.get("chunk_id"),
+                    locator.get("standard_no"),
+                    locator.get("table_no") and f"表{locator.get('table_no')}",
+                    locator.get("section") and f"第{locator.get('section')}条",
+                    meta.get("standard_no"),
+                    meta.get("table_no") and f"表{meta.get('table_no')}",
+                    meta.get("section") and f"第{meta.get('section')}条",
+                )
+            )
+            parsed = _parse_agent_evidence_blob(blob)
+            if item.get("chunk_id"):
+                parsed["chunk_id"] = str(item.get("chunk_id") or "").strip()
+            if item.get("text"):
+                parsed["text"] = str(item.get("text") or "").strip()
+            if item.get("source") and not parsed.get("standard_no"):
+                parsed["standard_no"] = str(item.get("source") or "").strip()
+            if locator.get("table_no") and not parsed.get("table_no"):
+                parsed["table_no"] = str(locator.get("table_no") or "").strip()
+            if locator.get("section") and not parsed.get("section"):
+                parsed["section"] = str(locator.get("section") or "").strip()
+            if locator.get("standard_no") and not parsed.get("standard_no"):
+                parsed["standard_no"] = str(locator.get("standard_no") or "").strip()
+            if locator.get("page_start") and not parsed.get("page"):
+                parsed["page"] = locator.get("page_start")
+            if item.get("candidate_key") and item.get("text"):
+                compact_fallback = dict(item)
+                if not compact_fallback.get("candidate_key"):
+                    compact_fallback["candidate_key"] = f"a{index + 1:02d}"
+        else:
+            continue
+        chunk_id = str(parsed.get("chunk_id") or "")
+        chunk = _load_chunk_for_evidence(chunk_id) if chunk_id else None
+        existing_html = "<table" in str(parsed.get("text") or "").lower()
+        if chunk is None and not existing_html:
+            chunk = _load_chunk_for_locator(
+                standard_no=str(parsed.get("standard_no") or standard_no or ""),
+                table_no=str(parsed.get("table_no") or ""),
+                section=str(parsed.get("section") or ""),
+            )
+        if chunk:
+            _append(_chunk_to_evidence(chunk, index), str(chunk.get("id") or chunk_id))
+            continue
+        if compact_fallback is not None:
+            _append(compact_fallback)
+            continue
+        text = str(parsed.get("text") or "").strip()
+        if not text:
+            continue
+        meta = {
+            "standard_no": parsed.get("standard_no") or standard_no or "",
+        }
+        if parsed.get("table_no"):
+            meta["table_no"] = parsed["table_no"]
+            meta["content_type"] = "table"
+        if parsed.get("section"):
+            meta["section"] = parsed["section"]
+        locator = {
+            "standard_no": meta["standard_no"],
+            "content_type": meta.get("content_type") or "section",
+        }
+        if parsed.get("table_no"):
+            locator["table_no"] = parsed["table_no"]
+        if parsed.get("section"):
+            locator["section"] = parsed["section"]
+        if parsed.get("page"):
+            locator["page_start"] = parsed["page"]
+            locator["page_end"] = parsed["page"]
+        _append({
+            "candidate_key": f"a{index + 1:02d}",
+            "content_type": locator["content_type"],
+            "business_metadata": meta,
+            "locator": locator,
+            "text": text,
+        })
+    return normalized
 
 
 def _content_repository():
@@ -2330,6 +2594,220 @@ def _audit_one_case(
     return entry
 
 
+def _call_agent_sidecar(
+    base_url: str,
+    payload: dict[str, Any],
+    *,
+    token: str = "",
+    timeout_seconds: float = 480.0,
+) -> dict[str, Any]:
+    """POST one audit case to the Pi agent sidecar; raise on transport/5xx/4xx errors."""
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    response = httpx.post(
+        f"{base_url.rstrip('/')}/audit/case",
+        json=payload,
+        headers=headers,
+        timeout=timeout_seconds,
+    )
+    if response.status_code >= 500:
+        raise RuntimeError(
+            f"agent sidecar 5xx ({response.status_code}): {response.text[:300]}"
+        )
+    if response.status_code >= 400:
+        raise ValueError(
+            f"agent sidecar rejected request ({response.status_code}): {response.text[:300]}"
+        )
+    body = response.json()
+    if not body.get("ok"):
+        raise RuntimeError(f"agent sidecar error: {str(body.get('error'))[:300]}")
+    return body
+
+
+def _agent_preflight(base_url: str, *, token: str = "") -> None:
+    """Fail fast when the sidecar is unreachable (before burning extraction LLM calls)."""
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    try:
+        response = httpx.get(
+            f"{base_url.rstrip('/')}/health", headers=headers, timeout=5.0
+        )
+        response.raise_for_status()
+    except Exception as exc:  # noqa: BLE001 - surface any transport failure clearly
+        raise RuntimeError(
+            f"agent sidecar unreachable at {base_url} "
+            f"(start it: cd services/pi-audit-sidecar && npm start): {exc}"
+        ) from exc
+
+
+def _agent_runtime_case(
+    unit: dict[str, Any],
+    sample_profile: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build the runtime case dict exactly like the workflow judge path."""
+    fresh = {"test_item": unit["test_item"], "requirement": unit["requirement"]}
+    sample_profile = dict(sample_profile)
+    deterministic_applicability = resolve_applicability(
+        sample_profile,
+        project_name=str(fresh["test_item"].get("project_name") or ""),
+        requirement_text=str(fresh["requirement"].get("requirement_text") or ""),
+    )
+    sample_profile["deterministic_applicability"] = deterministic_applicability
+    from_report = (
+        sample_profile.get("from_report")
+        if isinstance(sample_profile.get("from_report"), dict)
+        else {}
+    )
+    requirement_extraction = extract_requirement_claim(
+        str(fresh["requirement"].get("requirement_text") or ""),
+        unit=fresh["requirement"].get("unit"),
+        project_name=str(fresh["test_item"].get("project_name") or ""),
+    )
+    compact_extraction = {
+        "program_ready": requirement_extraction["program_ready"],
+        "reason_code": requirement_extraction["reason_code"],
+        "split_method": requirement_extraction["split_method"],
+        "claim": requirement_extraction["claim"],
+        "nodes": requirement_extraction["nodes"],
+    }
+    runtime_case = {
+        "sample_profile": sample_profile,
+        "sample_context": from_report,
+        "test_item": {
+            "item_no": fresh["test_item"]["item_no"],
+            "project_name": fresh["test_item"]["project_name"],
+            "phase": fresh["test_item"]["phase"],
+        },
+        "reported_requirement": {
+            "text": fresh["requirement"]["requirement_text"],
+            "unit": fresh["requirement"]["unit"],
+            "claim": requirement_extraction["claim"],
+            "program_ready": requirement_extraction["program_ready"],
+            "reason_code": requirement_extraction["reason_code"],
+        },
+        "requirement_extraction": compact_extraction,
+    }
+    return runtime_case, sample_profile
+
+
+def _audit_one_case_agent(
+    unit: dict[str, Any],
+    *,
+    sample_profile: dict[str, Any],
+    evidence_file_ids: list[str],
+    sidecar_url: str,
+    agent_token: str = "",
+    agent_model: str = "",
+    retries: int = 2,
+    report_markdown: str = "",
+) -> dict[str, Any]:
+    """Judge one audit unit through the Pi agent sidecar (workflow-judge replacement).
+
+    Retry policy: transient sidecar failures get exponential backoff (2s/4s/…);
+    after the final attempt the case degrades to insufficient_context with the
+    error recorded, so one bad case never aborts the whole report run.
+    """
+    del report_markdown  # the agent re-derives context via its own RAG tools
+    runtime_case, profile_copy = _agent_runtime_case(unit, sample_profile)
+    payload = {
+        "case_id": unit["case_id"],
+        "sample_context": runtime_case["sample_context"],
+        "test_item": runtime_case["test_item"],
+        "reported_requirement": runtime_case["reported_requirement"],
+        "file_scope": list(evidence_file_ids or []),
+    }
+    agent_response: dict[str, Any] | None = None
+    agent_error: str | None = None
+    for attempt in range(max(1, retries + 1)):
+        try:
+            agent_response = _call_agent_sidecar(
+                sidecar_url, payload, token=agent_token
+            )
+            agent_error = None
+            break
+        except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+            agent_error = str(exc)
+            if attempt < retries:
+                time.sleep(min(30.0, 2.0 * (2**attempt)))
+    judgment: dict[str, Any]
+    if agent_response is not None:
+        result = agent_response.get("result") or {}
+        verdict = str(result.get("verdict") or "")
+        status = AGENT_VERDICT_TO_STATUS.get(verdict)
+        if status is None:
+            judgment = {
+                "status": "insufficient_context",
+                "reason": f"agent 判定无法解析（verdict={verdict!r}），parse_mode={agent_response.get('parse_mode')}",
+                "evidence": [],
+                "judge_source": "agent_error",
+                "agent_error": "unparseable verdict",
+            }
+        else:
+            evidence = normalize_agent_evidence(
+                result.get("evidence"),
+                standard_no=str(result.get("standard_no") or ""),
+            )
+            judgment = {
+                "status": status,
+                "reason": str(result.get("reasoning") or ""),
+                "standard_no": result.get("standard_no"),
+                "standard_value": result.get("standard_value"),
+                "reported_value": result.get("reported_value"),
+                "evidence": evidence,
+                "evidence_candidate_keys": [
+                    str(item.get("candidate_key") or "")
+                    for item in evidence
+                    if str(item.get("candidate_key") or "").strip()
+                ],
+                # v7 agent taxonomy rides along for analytics/replay.
+                "verdict": verdict,
+                "kind": result.get("kind"),
+                "judge_source": "agent",
+                "agent_model": agent_model,
+            }
+    else:
+        judgment = {
+            "status": "insufficient_context",
+            "reason": f"agent 判定失败：{agent_error}",
+            "evidence": [],
+            "judge_source": "agent_error",
+            "agent_error": agent_error,
+        }
+    return {
+        "case_id": unit["case_id"],
+        **runtime_case,
+        "queries": {},
+        "candidate_counts": {"table": 0, "section": 0},
+        "judgment": judgment,
+        "status_layer": layer_from_judgment(
+            judgment, judge_source=str(judgment.get("judge_source"))
+        ),
+        "workflow_trace": {
+            "audit_judge": {
+                "input": {
+                    "judge_mode": "agent",
+                    "sample_context": runtime_case["sample_context"],
+                    "test_item": runtime_case["test_item"],
+                    "reported_requirement": runtime_case["reported_requirement"],
+                },
+                "output": judgment,
+            },
+            "agent_audit": {
+                "input": payload,
+                "output": {
+                    "ok": bool(agent_response),
+                    "parse_mode": (agent_response or {}).get("parse_mode"),
+                    "stats": (agent_response or {}).get("stats"),
+                    "status": (agent_response or {}).get("status"),
+                    "result": (agent_response or {}).get("result"),
+                    "trace_file": (agent_response or {}).get("trace_file"),
+                    "error": agent_error,
+                },
+            },
+        },
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path)
@@ -2370,6 +2848,26 @@ def main() -> None:
             f"Capped at {MAX_JUDGE_CONCURRENCY}."
         ),
     )
+    parser.add_argument(
+        "--judge-mode",
+        choices=("workflow", "agent"),
+        default=str(os.environ.get("AUDIT_JUDGE_MODE") or "workflow").strip().lower(),
+        help=(
+            "per-case judging backend: 'workflow' (production planner+retrieval+judge) "
+            "or 'agent' (Pi agent sidecar; extraction stays on this pipeline)."
+        ),
+    )
+    parser.add_argument(
+        "--agent-sidecar-url",
+        default=str(os.environ.get("AGENT_SIDECAR_URL") or "http://127.0.0.1:8787"),
+        help="Pi agent sidecar base URL (judge-mode=agent).",
+    )
+    parser.add_argument(
+        "--agent-retries",
+        type=int,
+        default=int(os.environ.get("AGENT_CASE_RETRIES") or 2),
+        help="retries per case on transient sidecar failures (judge-mode=agent).",
+    )
     args = parser.parse_args()
 
     if _content_repository() is None:
@@ -2391,12 +2889,47 @@ def main() -> None:
     )
     configured_model = str(profile["model_config"].get("model") or "deepseek-v4-flash")
     judge_model = args.judge_model or configured_model
-    if not judge_model.lower().startswith("deepseek"):
+    # Workflow mode judges through llm.py (DeepSeek); agent mode judges in the
+    # sidecar, so any OpenAI-compatible extraction model is acceptable there.
+    if args.judge_mode == "workflow" and not judge_model.lower().startswith("deepseek"):
         raise ValueError("judge model must be a DeepSeek model")
     judge_concurrency = _resolve_judge_concurrency(
         args.judge_concurrency,
         profile.get("model_config") if isinstance(profile.get("model_config"), dict) else {},
     )
+    if args.judge_mode == "agent":
+        # Fail fast before extraction LLM calls: a dead sidecar should kill the
+        # job with a clear cause, not produce an all-agent_error report.
+        _agent_preflight(
+            args.agent_sidecar_url,
+            token=str(os.environ.get("AGENT_SIDECAR_TOKEN") or ""),
+        )
+        # Agent judging goes through the sidecar, which now runs up to
+        # AGENT_CONCURRENCY sessions in parallel. Match that here unless the
+        # caller set an explicit CLI/env value.
+        env_conc = str(
+            os.environ.get("AUDIT_JUDGE_CONCURRENCY")
+            or os.environ.get("AGENT_CONCURRENCY")
+            or ""
+        ).strip()
+        if args.judge_concurrency is not None:
+            judge_concurrency = min(
+                max(int(args.judge_concurrency), 1), MAX_JUDGE_CONCURRENCY
+            )
+        elif env_conc:
+            try:
+                judge_concurrency = min(max(int(env_conc), 1), MAX_JUDGE_CONCURRENCY)
+            except ValueError as exc:
+                raise ValueError(
+                    f"AUDIT_JUDGE_CONCURRENCY/AGENT_CONCURRENCY must be an integer, got {env_conc!r}"
+                ) from exc
+        else:
+            judge_concurrency = 5
+        print(
+            f"judge_mode=agent sidecar={args.agent_sidecar_url} "
+            f"concurrency={judge_concurrency} retries={args.agent_retries}",
+            flush=True,
+        )
     retrieval_config = _retrieval_runtime_config(profile)
     peer_context_rules = _resolve_peer_context_rules(profile["retrieval_config"])
     top_k = int(retrieval_config["top_k"])
@@ -2531,34 +3064,46 @@ def main() -> None:
                 case_label=case_label[:120],
                 message=f"判定中 {done_before + 1}/{total_units}（并发 {judge_concurrency}）",
             )
-        entry = _audit_one_case(
-            unit,
-            sample_profile=sample_profile,
-            extracted=extracted,
-            peer_context_rules=peer_context_rules,
-            manual_knowledge_rules=manual_knowledge_rules,
-            few_shot_rules=few_shot_rules,
-            query_prompt=query_prompt,
-            judge_prompt=judge_prompt,
-            judge_model=judge_model,
-            evidence_compression_mode=args.evidence_compression,
-            profile=profile,
-            evidence_file_ids=evidence_file_ids,
-            top_k=top_k,
-            route_top_k=route_top_k,
-            candidates_per_type=candidates_per_type,
-            final_table=final_table,
-            final_section=final_section,
-            special_route_reserve=special_route_reserve,
-            rrf_k=rrf_k,
-            similarity_threshold=similarity_threshold,
-            aggregate_continuation_tables=aggregate_continuation_tables,
-            expand_references=expand_references,
-            retrieval_lock=retrieval_lock,
-            report_markdown=markdown,
-            recovery_mode=args.recovery_mode,
-            recovery_semaphore=recovery_semaphore,
-        )
+        if args.judge_mode == "agent":
+            entry = _audit_one_case_agent(
+                unit,
+                sample_profile=sample_profile,
+                evidence_file_ids=evidence_file_ids,
+                sidecar_url=args.agent_sidecar_url,
+                agent_token=str(os.environ.get("AGENT_SIDECAR_TOKEN") or ""),
+                agent_model=str(os.environ.get("PI_MODEL") or ""),
+                retries=args.agent_retries,
+                report_markdown=markdown,
+            )
+        else:
+            entry = _audit_one_case(
+                unit,
+                sample_profile=sample_profile,
+                extracted=extracted,
+                peer_context_rules=peer_context_rules,
+                manual_knowledge_rules=manual_knowledge_rules,
+                few_shot_rules=few_shot_rules,
+                query_prompt=query_prompt,
+                judge_prompt=judge_prompt,
+                judge_model=judge_model,
+                evidence_compression_mode=args.evidence_compression,
+                profile=profile,
+                evidence_file_ids=evidence_file_ids,
+                top_k=top_k,
+                route_top_k=route_top_k,
+                candidates_per_type=candidates_per_type,
+                final_table=final_table,
+                final_section=final_section,
+                special_route_reserve=special_route_reserve,
+                rrf_k=rrf_k,
+                similarity_threshold=similarity_threshold,
+                aggregate_continuation_tables=aggregate_continuation_tables,
+                expand_references=expand_references,
+                retrieval_lock=retrieval_lock,
+                report_markdown=markdown,
+                recovery_mode=args.recovery_mode,
+                recovery_semaphore=recovery_semaphore,
+            )
         with state_lock:
             results.append(entry)
             results.sort(key=lambda item: unit_order.get(item["case_id"], 10**9))
@@ -2675,8 +3220,9 @@ def main() -> None:
             "version": few_shot_rules.get("version"),
             "item_ids": [item.get("id") for item in few_shot_rules.get("items", [])],
         },
-        "judge_provider": "deepseek",
+        "judge_provider": "deepseek" if args.judge_mode == "workflow" else "pi-agent-sidecar",
         "judge_model": judge_model,
+        "judge_mode": args.judge_mode,
         "judge_concurrency": judge_concurrency,
         "workflow_definition": {
             "version": 1,
@@ -2687,6 +3233,15 @@ def main() -> None:
             "provider_config": {
                 **llm.public_config(model=judge_model),
                 "judge_concurrency": judge_concurrency,
+                "judge_mode": args.judge_mode,
+                "judge_provider": (
+                    "deepseek" if args.judge_mode == "workflow" else "pi-agent-sidecar"
+                ),
+                **(
+                    {"agent_sidecar_url": args.agent_sidecar_url}
+                    if args.judge_mode == "agent"
+                    else {}
+                ),
             },
             "retrieval_config": {
                 "backend": "hybrid_search",

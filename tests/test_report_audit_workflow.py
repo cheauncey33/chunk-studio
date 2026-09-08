@@ -1439,3 +1439,164 @@ def test_resolve_judge_concurrency_priority_and_bounds(monkeypatch) -> None:
     )
     with pytest.raises(ValueError, match=">= 1"):
         workflow._resolve_judge_concurrency(0, {})
+
+
+def test_agent_verdict_maps_to_production_status() -> None:
+    assert workflow.AGENT_VERDICT_TO_STATUS == {
+        "match": "supported",
+        "mismatch": "mismatch",
+        "unevaluable": "insufficient_context",
+        "out_of_scope": "not_audited",
+    }
+
+
+def _agent_unit() -> dict:
+    return {
+        "case_id": "item_1",
+        "test_item": {
+            "item_no": "5",
+            "project_name": "空载损耗和空载电流测量",
+            "phase": "initial",
+        },
+        "requirement": {"requirement_text": "空载损耗P0(kW):≤0.370", "unit": "kW"},
+    }
+
+
+def test_audit_one_case_agent_writes_compatible_judgment(monkeypatch) -> None:
+    def fake_call(_url, payload, token="", timeout_seconds=480.0):
+        assert payload["case_id"] == "item_1"
+        assert payload["file_scope"] == ["std-1"]
+        del token, timeout_seconds
+        return {
+            "ok": True,
+            "parse_mode": "strict",
+            "result": {
+                "verdict": "match",
+                "kind": "exact",
+                "reasoning": "与表列限值一致",
+                "standard_no": "GB/T 1094.1",
+                "standard_value": "0.370",
+                "reported_value": "0.370",
+                "evidence": [
+                    {
+                        "source": "GB/T 1094.1",
+                        "location": "表 6",
+                        "text": "空载损耗 ≤0.370 kW",
+                        "chunk_id": "c1",
+                    }
+                ],
+            },
+            "stats": {"tool_calls": 2, "turns": 3},
+            "status": "supported",
+            "trace_file": "traces/item_1.jsonl",
+        }
+
+    monkeypatch.setattr(workflow, "_call_agent_sidecar", fake_call)
+    monkeypatch.setattr(workflow, "_load_chunk_for_evidence", lambda _cid: None)
+    monkeypatch.setattr(workflow, "_load_chunk_for_locator", lambda **_kwargs: None)
+    entry = workflow._audit_one_case_agent(
+        _agent_unit(),
+        sample_profile={"from_report": {"model": "S20-M.RL-400/10-NX2"}},
+        evidence_file_ids=["std-1"],
+        sidecar_url="http://127.0.0.1:8787",
+        retries=0,
+    )
+    assert entry["judgment"]["status"] == "supported"
+    assert entry["judgment"]["kind"] == "exact"
+    assert entry["judgment"]["judge_source"] == "agent"
+    assert entry["status_layer"]["authority"] == "model"
+    assert entry["workflow_trace"]["agent_audit"]["output"]["ok"] is True
+    evidence = entry["judgment"]["evidence"]
+    assert evidence and evidence[0]["candidate_key"] == "a01"
+    assert evidence[0]["locator"]["standard_no"] == "GB/T 1094.1"
+    assert "≤0.370" in evidence[0]["text"]
+    assert entry["judgment"]["evidence_candidate_keys"] == ["a01"]
+
+
+def test_normalize_agent_evidence_hydrates_chunk(monkeypatch) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_load_chunk_for_evidence",
+        lambda _cid: {
+            "id": "a" * 32,
+            "page": 10,
+            "text": "<table><tr><td>400</td><td>0.370</td></tr></table>",
+            "business_metadata": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "table_no": "6",
+                "table_title": "性能参数",
+            },
+            "source_trace": {"page_start": 10, "page_end": 10},
+        },
+    )
+    items = workflow.normalize_agent_evidence(
+        [f"Q/GDW 表6 p10 chunk_id={'a' * 32} 空载损耗 0.370"],
+        standard_no="Q/GDW 12126.4-2024",
+    )
+    assert len(items) == 1
+    assert items[0]["locator"]["table_no"] == "6"
+    assert items[0]["locator"]["page_start"] == 10
+    assert "<table>" in items[0]["text"]
+
+
+def test_normalize_agent_evidence_keeps_string_excerpt(monkeypatch) -> None:
+    monkeypatch.setattr(workflow, "_load_chunk_for_locator", lambda **_kwargs: None)
+    items = workflow.normalize_agent_evidence(
+        ["GB/T 6451-2023 第4.3.2条 表4 p12：线电阻不平衡率不应大于 2%"],
+        standard_no="GB/T 6451-2023",
+    )
+    assert len(items) == 1
+    assert items[0]["locator"]["standard_no"] == "GB/T 6451-2023"
+    assert items[0]["locator"]["table_no"] == "4"
+    assert items[0]["locator"]["page_start"] == 12
+    assert items[0]["locator"]["section"] == "4.3.2"
+    assert "2%" in items[0]["text"]
+
+
+def test_normalize_agent_evidence_hydrates_table_locator(monkeypatch) -> None:
+    monkeypatch.setattr(workflow, "_load_chunk_for_evidence", lambda _cid: None)
+    monkeypatch.setattr(
+        workflow,
+        "_load_chunk_for_locator",
+        lambda **_kwargs: {
+            "id": "b" * 32,
+            "page": 34,
+            "text": "<table><tr><td>偏差</td></tr></table>",
+            "business_metadata": {
+                "standard_no": "Q/GDW 12126.4-2024",
+                "content_type": "table",
+                "table_no": "30",
+                "table_title": "例行试验判定标准",
+            },
+            "source_trace": {"page_start": 34, "page_end": 34},
+        },
+    )
+    items = workflow.normalize_agent_evidence(
+        [{
+            "source": "Q/GDW 12126.4-2024",
+            "location": "表30",
+            "text": "其他分接: 匝数比设计值的±0.5 %",
+        }],
+        standard_no="Q/GDW 12126.4-2024",
+    )
+    assert len(items) == 1
+    assert items[0]["locator"]["table_no"] == "30"
+    assert "<table>" in items[0]["text"]
+
+
+def test_audit_one_case_agent_degrades_on_sidecar_failure(monkeypatch) -> None:
+    def fake_call(*_args, **_kwargs):
+        raise RuntimeError("sidecar 5xx")
+
+    monkeypatch.setattr(workflow, "_call_agent_sidecar", fake_call)
+    entry = workflow._audit_one_case_agent(
+        _agent_unit(),
+        sample_profile={"from_report": {"model": "S20"}},
+        evidence_file_ids=[],
+        sidecar_url="http://127.0.0.1:8787",
+        retries=0,
+    )
+    assert entry["judgment"]["status"] == "insufficient_context"
+    assert entry["judgment"]["judge_source"] == "agent_error"
+    assert "sidecar 5xx" in entry["judgment"]["reason"]

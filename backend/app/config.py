@@ -191,6 +191,30 @@ RUN_IN_PROCESS_WORKER = os.environ.get(
     "0" if _postgres_profile else "1",
 ).strip().casefold() in {"1", "true", "yes", "on"}
 
+# Audit judge backend: "workflow" (production planner+retrieval+judge) or
+# "agent" (Pi agent sidecar; extraction still runs on the production pipeline).
+# The sidecar itself runs separately: services/pi-audit-sidecar (npm start).
+AUDIT_JUDGE_MODE = os.environ.get(
+    "CHUNK_STUDIO_AUDIT_JUDGE_MODE",
+    os.environ.get("AUDIT_JUDGE_MODE", "agent"),
+).strip().casefold()
+if AUDIT_JUDGE_MODE not in {"workflow", "agent"}:
+    AUDIT_JUDGE_MODE = "workflow"
+AGENT_SIDECAR_URL = os.environ.get(
+    "CHUNK_STUDIO_AGENT_SIDECAR_URL",
+    os.environ.get("AGENT_SIDECAR_URL", "http://127.0.0.1:8787"),
+).rstrip("/")
+AGENT_SIDECAR_TOKEN = os.environ.get(
+    "CHUNK_STUDIO_AGENT_SIDECAR_TOKEN",
+    os.environ.get("AGENT_SIDECAR_TOKEN", ""),
+).strip()
+# Full-report agent judging fans out to the sidecar (AGENT_CONCURRENCY, default 5).
+# GLM/Qwen cases often take 30–120s each; 15 minutes is enough for OCR/parse, not for audit.
+AUDIT_JOB_TIMEOUT_SECONDS = _positive_int_env(
+    "CHUNK_STUDIO_AUDIT_JOB_TIMEOUT_SECONDS",
+    4 * 60 * 60,
+)
+
 HOST = "127.0.0.1"
 PORT = 8000
 
@@ -240,6 +264,8 @@ def deployment_config() -> dict[str, str | bool]:
         "content_read_backend": CONTENT_READ_BACKEND,
         "auth_mode": AUTH_MODE,
         "in_process_worker": RUN_IN_PROCESS_WORKER,
+        "audit_judge_mode": AUDIT_JUDGE_MODE,
+        "agent_sidecar_configured": bool(AGENT_SIDECAR_URL),
     }
 
 
