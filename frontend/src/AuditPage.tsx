@@ -889,8 +889,18 @@ function CaseDetail({ item, review, onSaveReview, onRemoveReview }: {
   }
   const judgment = asRecord(item.judgment)
   const requirement = asRecord(item.reported_requirement)
-  const queries = Object.entries(asRecord(item.queries))
-  const evidence = asArray(judgment.evidence).filter(isRecord)
+  const queries = Object.entries(asRecord(item.queries)).filter(([, value]) => {
+    if (value == null || value === '') return false
+    if (typeof value === 'string' && value === 'agent_sidecar') return false
+    return true
+  })
+  const evidence = asArray(judgment.evidence).flatMap((entry, index) => {
+    if (isRecord(entry)) return [entry]
+    if (typeof entry === 'string' && entry.trim()) {
+      return [{ candidate_key: `e${index + 1}`, text: entry.trim() }]
+    }
+    return []
+  })
   const groups = asArray(item.groups).filter(isRecord)
   const manualRuleSet = asRecord(item.manual_knowledge_rules)
   const selectedRules = asArray(manualRuleSet.rules).filter(isRecord)
@@ -912,6 +922,24 @@ function CaseDetail({ item, review, onSaveReview, onRemoveReview }: {
       <section>
         <h4>报告标准值</h4>
         <p className="audit-requirement">{String(requirement.text || '—')}</p>
+        {(judgment.reported_value != null || judgment.standard_value != null) && (
+          <dl className="audit-metadata">
+            {judgment.reported_value != null && judgment.reported_value !== '' ? (
+              <div>
+                <dt>报告使用值</dt>
+                <dd>{String(judgment.reported_value)}</dd>
+              </div>
+            ) : null}
+            {judgment.standard_value != null && judgment.standard_value !== '' ? (
+              <div>
+                <dt>真正标准值</dt>
+                <dd>
+                  {[judgment.standard_no, judgment.standard_value].filter(Boolean).join('：')}
+                </dd>
+              </div>
+            ) : null}
+          </dl>
+        )}
       </section>
 
       {judgment.reason != null && (
