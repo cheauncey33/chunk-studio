@@ -46,6 +46,8 @@ class JobRepository(Protocol):
 
     def claim_pending(self, worker_id: str, **kwargs: Any) -> list[dict[str, Any]]: ...
 
+    def extend_lease(self, job_id: str, lease_seconds: int) -> None: ...
+
     def mark_done(self, job_id: str, result: dict[str, Any] | None = None) -> None: ...
 
     def requeue(self, job_id: str, error: str, retry_delay_seconds: int = 30) -> None: ...
@@ -766,6 +768,15 @@ class PostgresJobRepository:
                 if updated:
                     claimed.append(self._job(updated))
         return claimed
+
+    def extend_lease(self, job_id: str, lease_seconds: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """UPDATE jobs
+                   SET locked_until=now() + (%s * interval '1 second')
+                   WHERE id=%s AND status='running'""",
+                (max(1, int(lease_seconds)), job_id),
+            )
 
     def mark_done(self, job_id: str, result: dict[str, Any] | None = None) -> None:
         with self._connect() as conn:

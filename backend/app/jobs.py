@@ -19,6 +19,34 @@ JOB_DEPENDENCY_BACKOFF_SECONDS = 5.0
 JOB_TIMEOUT_SECONDS = 15 * 60
 
 
+def _timeout_for_job(job: dict[str, Any] | None) -> int:
+    """Audit jobs need a longer wall clock than OCR/parse/chunk."""
+    if str((job or {}).get("type") or "") == "audit":
+        return max(JOB_TIMEOUT_SECONDS, int(config.AUDIT_JOB_TIMEOUT_SECONDS))
+    return JOB_TIMEOUT_SECONDS
+
+
+def _refresh_job_lease(job: dict[str, Any] | None) -> None:
+    """Stretch the claim lease when the job type outlives the default timeout."""
+    if not job or not job.get("id"):
+        return
+    timeout = _timeout_for_job(job)
+    if timeout <= JOB_TIMEOUT_SECONDS:
+        return
+    job_id = str(job["id"])
+    repository = _job_repository()
+    extender = getattr(repository, "extend_lease", None) if repository is not None else None
+    if callable(extender):
+        extender(job_id, timeout)
+        return
+    until = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + timeout))
+    with db.transaction() as conn:
+        conn.execute(
+            "UPDATE jobs SET locked_until=? WHERE id=? AND status='running'",
+            (until, job_id),
+        )
+
+
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -729,12 +757,13 @@ async def worker_loop(job_types: set[str] | None = None) -> None:
         if not job:
             await asyncio.sleep(JOB_POLL_SECONDS)
             continue
+        timeout = _timeout_for_job(job)
         try:
-            await asyncio.wait_for(_dispatch_job(job), timeout=JOB_TIMEOUT_SECONDS)
+            await asyncio.wait_for(_dispatch_job(job), timeout=timeout)
         except asyncio.TimeoutError:
             await _record_job_failure(
                 job,
-                f"job timed out after {JOB_TIMEOUT_SECONDS} seconds",
+                f"job timed out after {timeout} seconds",
             )
         except Exception as exc:
             logger.exception("job %s failed outside handler", job.get("id"))
@@ -794,7 +823,9 @@ def _claim_next_job(job_types: set[str] | None = None) -> dict[str, Any] | None:
             lease_seconds=JOB_TIMEOUT_SECONDS,
             job_types=job_types,
         )
-        return claimed[0] if claimed else None
+        job = claimed[0] if claimed else None
+        _refresh_job_lease(job)
+        return job
     type_clause = ""
     params: list[Any] = [now_iso()]
     if job_types:
@@ -813,13 +844,14 @@ def _claim_next_job(job_types: set[str] | None = None) -> dict[str, Any] | None:
         if not row:
             return None
         started = now_iso()
+        timeout = _timeout_for_job({"type": row["type"]})
         conn.execute(
             """UPDATE jobs
                SET status='running', attempts=attempts+1, started_at=?,
                    locked_by=?, locked_until=?, error='', available_at=NULL
                WHERE id=?""",
             (started, f"local-worker-{uuid.uuid4().hex[:8]}",
-             time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + JOB_TIMEOUT_SECONDS)),
+             time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + timeout)),
              row["id"]),
         )
     return get_job(row["id"])

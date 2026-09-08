@@ -32,8 +32,14 @@ WORKFLOW_NODE_SPECS = (
     ("query_planner", "检索 Query 规划", "llm", False),
     ("retrieval", "候选证据检索", "retrieval", False),
     ("audit_judge", "标准值审查", "llm", False),
+    ("agent_audit", "Agent 工具轨迹", "llm", False),
     ("gold_comparison", "Gold 对照", "diagnostic", True),
 )
+
+# Nodes an agent-judged case legitimately has no trace for (the agent runs its
+# own retrieval loop inside the sidecar); omit them instead of reconstructing
+# misleading placeholders.
+AGENT_CASE_SKIPPED_NODES = {"query_planner", "retrieval", "gold_comparison"}
 
 
 def _safe_report_path(name: str) -> Path:
@@ -356,11 +362,17 @@ def _build_workflow_trace(
     }
 
     nodes = []
+    agent_judged = bool(case_trace.get("agent_audit"))
     for node_id, label, kind, diagnostic_only in WORKFLOW_NODE_SPECS:
         trace = _record(global_trace.get(node_id)) or _record(case_trace.get(node_id))
         # Full-report runs record traces but have no gold comparison; omit the
         # diagnostic node instead of showing a reconstructed placeholder.
         if node_id == "gold_comparison" and recorded and not trace:
+            continue
+        # Do not reconstruct a fake Agent node for workflow-judged or legacy reports.
+        if node_id == "agent_audit" and not agent_judged and not trace:
+            continue
+        if agent_judged and node_id in AGENT_CASE_SKIPPED_NODES and not trace:
             continue
         if trace:
             node_input = trace.get("input")
@@ -379,6 +391,12 @@ def _build_workflow_trace(
                 "model_input": False,
             }
         )
+        if node_id == "agent_audit":
+            configuration = {
+                **(configuration if isinstance(configuration, dict) else {}),
+                "provider": payload.get("judge_provider") or "pi-agent-sidecar",
+                "judge_mode": payload.get("judge_mode") or "agent",
+            }
         nodes.append({
             "id": node_id,
             "label": label,

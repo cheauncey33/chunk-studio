@@ -39,6 +39,18 @@ def _check_redis() -> None:
         client.close()
 
 
+def _check_agent_sidecar() -> None:
+    """Liveness of the Pi audit sidecar used when AUDIT_JUDGE_MODE=agent."""
+    import httpx
+
+    url = f"{config.AGENT_SIDECAR_URL.rstrip('/')}/health"
+    headers = {}
+    if config.AGENT_SIDECAR_TOKEN:
+        headers["Authorization"] = f"Bearer {config.AGENT_SIDECAR_TOKEN}"
+    response = httpx.get(url, headers=headers, timeout=2.0)
+    response.raise_for_status()
+
+
 def _check_object_storage() -> None:
     if config.OBJECT_STORAGE_BACKEND == "local":
         root = config.DATA_DIR / "objects"
@@ -90,4 +102,6 @@ def readiness_checks() -> tuple[bool, dict[str, dict[str, object]]]:
         checks.append(("redis", _check_redis))
     if config.OBJECT_STORAGE_BACKEND in {"local", "s3", "minio"}:
         checks.append(("object_storage", _check_object_storage))
+    if config.AUDIT_JUDGE_MODE == "agent":
+        checks.append(("agent_sidecar", _check_agent_sidecar))
     return run_checks(checks)

@@ -27,12 +27,30 @@ REPORTS_DIR = config.DATA_DIR / "reports"
 
 def production_runtime_args() -> list[str]:
     """Return explicit flags used by the in-app production audit runner."""
-    return [
+    args = [
         "--evidence-compression",
         PRODUCTION_EVIDENCE_COMPRESSION_MODE,
         "--recovery-mode",
         PRODUCTION_RECOVERY_MODE,
+        "--judge-mode",
+        config.AUDIT_JUDGE_MODE,
     ]
+    if config.AUDIT_JUDGE_MODE == "agent":
+        args.extend(
+            [
+                "--agent-sidecar-url",
+                config.AGENT_SIDECAR_URL,
+            ]
+        )
+        extraction_model = (
+            os.environ.get("LLM_MODEL")
+            or os.environ.get("PI_MODEL")
+            or os.environ.get("DEEPSEEK_MODEL")
+            or ""
+        ).strip()
+        if extraction_model:
+            args.extend(["--judge-model", extraction_model])
+    return args
 
 
 def _latest_done_parse(file_id: str) -> dict[str, Any]:
@@ -173,6 +191,10 @@ def run_assistant_audit(
         cmd.extend(["--naming-rule-file-id", resolved_naming_id])
     run_env = os.environ.copy()
     identity = current_user.get_current_user()
+    run_env["AUDIT_JUDGE_MODE"] = config.AUDIT_JUDGE_MODE
+    run_env["AGENT_SIDECAR_URL"] = config.AGENT_SIDECAR_URL
+    if config.AGENT_SIDECAR_TOKEN:
+        run_env["AGENT_SIDECAR_TOKEN"] = config.AGENT_SIDECAR_TOKEN
     run_env["CHUNK_STUDIO_DEFAULT_WORKSPACE_ID"] = identity.workspace_id
     run_env["DEFAULT_WORKSPACE_ID"] = identity.workspace_id
     run_env["CHUNK_STUDIO_DEFAULT_USER_ID"] = identity.user_id
