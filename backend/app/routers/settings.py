@@ -25,10 +25,11 @@ KNOWN_KEYS = [
 ]
 
 # Match runtime resolution order used by llm.py / adapters/ocr.py.
+# llm.api_key: LLM_* is current; DEEPSEEK_* remains a legacy alias.
 SECRET_ENV_KEYS = {
-    "llm.api_key": ("DEEPSEEK_API_KEY", "env_first"),
-    "mineru.token": ("MINERU_TOKEN", "db_first"),
-    "ocr.token": (None, "db_first"),
+    "llm.api_key": (("LLM_API_KEY", "PI_API_KEY", "ZHIPU_API_KEY", "DEEPSEEK_API_KEY"), "env_first"),
+    "mineru.token": (("MINERU_TOKEN",), "db_first"),
+    "ocr.token": ((), "db_first"),
 }
 
 DISPLAY_DEFAULTS = {
@@ -55,9 +56,13 @@ def get_settings():
         else:
             sources[key] = "db"
 
-    for key, (env_name, order) in SECRET_ENV_KEYS.items():
+    for key, (env_names, order) in SECRET_ENV_KEYS.items():
         db_value = str(stored.get(key) or "").strip()
-        env_value = str(os.environ.get(env_name) or "").strip() if env_name else ""
+        env_value = ""
+        for env_name in env_names:
+            env_value = str(os.environ.get(env_name) or "").strip()
+            if env_value:
+                break
         if order == "env_first":
             if env_value:
                 values[key] = _mask_secret(env_value)

@@ -17,6 +17,9 @@ def test_masked_secret_is_not_persisted(monkeypatch) -> None:
     }
     monkeypatch.setattr(settings.db, "get_all_settings", lambda: dict(stored))
     monkeypatch.setattr(settings.db, "set_setting", stored.__setitem__)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("PI_API_KEY", raising=False)
+    monkeypatch.delenv("ZHIPU_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
     result = settings.update_settings(SettingsUpdate(settings={
@@ -31,6 +34,9 @@ def test_masked_secret_is_not_persisted(monkeypatch) -> None:
 
 def test_settings_expose_only_deepseek_llm_controls(monkeypatch) -> None:
     monkeypatch.setattr(settings.db, "get_all_settings", lambda: {})
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("PI_API_KEY", raising=False)
+    monkeypatch.delenv("ZHIPU_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("MINERU_TOKEN", raising=False)
 

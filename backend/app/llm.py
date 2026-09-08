@@ -14,6 +14,17 @@ from . import db
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-v4-flash"
+
+
+def _first_env(*names: str) -> str:
+    """First non-empty environment value. LLM_* is provider-agnostic; DEEPSEEK_* is legacy."""
+    for name in names:
+        value = str(os.environ.get(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 # Transient TLS / connection drops (e.g. UNEXPECTED_EOF_WHILE_READING).
 _HTTP_RETRY_ATTEMPTS = max(1, int(os.environ.get("LLM_HTTP_RETRIES", "4")))
 _HTTP_RETRY_BASE_DELAY_S = float(os.environ.get("LLM_HTTP_RETRY_BASE_DELAY_S", "1.0"))
@@ -30,13 +41,13 @@ def public_config(*, model: str | None = None) -> dict[str, Any]:
     return {
         "provider": "deepseek",
         "base_url": (
-            os.environ.get("DEEPSEEK_BASE_URL")
+            _first_env("LLM_BASE_URL", "PI_BASE_URL", "DEEPSEEK_BASE_URL")
             or db.get_setting("llm.base_url")
             or DEFAULT_BASE_URL
         ).rstrip("/"),
         "model": (
             model
-            or os.environ.get("DEEPSEEK_MODEL")
+            or _first_env("LLM_MODEL", "PI_MODEL", "DEEPSEEK_MODEL")
             or db.get_setting("llm.model")
             or DEFAULT_MODEL
         ),
@@ -47,9 +58,15 @@ def public_config(*, model: str | None = None) -> dict[str, Any]:
 
 
 def resolve_config(*, model: str | None = None) -> dict[str, str]:
-    api_key = os.environ.get("DEEPSEEK_API_KEY") or db.get_setting("llm.api_key")
+    api_key = _first_env(
+        "LLM_API_KEY",
+        "PI_API_KEY",
+        "ZHIPU_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "DASHSCOPE_API_KEY",
+    ) or db.get_setting("llm.api_key")
     if not api_key:
-        raise RuntimeError("DeepSeek API key is not configured")
+        raise RuntimeError("LLM API key is not configured")
     visible = public_config(model=model)
     return {
         "api_key": api_key,
@@ -96,13 +113,15 @@ def chat_text(
     config = resolve_config(model=model)
     response = _post_chat_completions(
         config=config,
-        payload={
-            "model": config["model"],
-            "messages": messages,
-            "temperature": temperature,
-            "thinking": {"type": "disabled"},
-            "stream": False,
-        },
+        payload=_apply_thinking_fields(
+            {
+                "model": config["model"],
+                "messages": messages,
+                "temperature": temperature,
+                "stream": False,
+            },
+            config,
+        ),
         timeout=timeout,
     )
     if response.status_code != HTTPStatus.OK:
@@ -137,15 +156,17 @@ def chat_tools(
     config = resolve_config(model=model)
     response = _post_chat_completions(
         config=config,
-        payload={
-            "model": config["model"],
-            "messages": messages,
-            "tools": tools,
-            "tool_choice": tool_choice,
-            "temperature": temperature,
-            "thinking": {"type": "disabled"},
-            "stream": False,
-        },
+        payload=_apply_thinking_fields(
+            {
+                "model": config["model"],
+                "messages": messages,
+                "tools": tools,
+                "tool_choice": tool_choice,
+                "temperature": temperature,
+                "stream": False,
+            },
+            config,
+        ),
         timeout=timeout,
     )
     if response.status_code != HTTPStatus.OK:
@@ -186,15 +207,17 @@ def chat_tools_stream(
     if not tools:
         raise ValueError("tools must not be empty")
     config = resolve_config(model=model)
-    payload = {
-        "model": config["model"],
-        "messages": messages,
-        "tools": tools,
-        "tool_choice": tool_choice,
-        "temperature": temperature,
-        "thinking": {"type": "disabled"},
-        "stream": True,
-    }
+    payload = _apply_thinking_fields(
+        {
+            "model": config["model"],
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "temperature": temperature,
+            "stream": True,
+        },
+        config,
+    )
     headers = {
         "Authorization": f"Bearer {config['api_key']}",
         "Content-Type": "application/json",
@@ -285,6 +308,84 @@ def chat_tools_stream(
     }
 
 
+def _thinking_payload() -> dict[str, Any]:
+    """Thinking request field; overridable for always-thinking models.
+
+    DeepSeek (default) takes {"type": "disabled"}. Always-thinking endpoints
+    (e.g. zhipu GLM-5.3) reject "disabled" and need an effort level instead:
+    LLM_THINKING_PAYLOAD='{"type":"enabled","reasoning_effort":"low"}'.
+    """
+    raw = os.environ.get("LLM_THINKING_PAYLOAD", "").strip()
+    if raw:
+        try:
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+    return {"type": "disabled"}
+
+
+def _uses_dashscope(config: dict[str, str]) -> bool:
+    base = str(config.get("base_url") or "").lower()
+    model = str(config.get("model") or "").lower()
+    return "dashscope" in base or model.startswith("qwen") or model.startswith("zhipu/")
+
+
+def _is_glm53(model: str) -> bool:
+    return "glm-5.3" in str(model or "").lower()
+
+
+def _glm_reasoning_effort() -> str:
+    """GLM-5.3 accepts low/high/max; default low. medium is not a valid level."""
+    level = (
+        os.environ.get("PI_THINKING_LEVEL")
+        or os.environ.get("LLM_THINKING_LEVEL")
+        or "low"
+    ).strip().lower()
+    if level in {"off", "minimal"}:
+        return "low"
+    if level == "medium":
+        return "high"
+    if level in {"low", "high", "max"}:
+        return level
+    return "low"
+
+
+def _apply_thinking_fields(payload: dict[str, Any], config: dict[str, str]) -> dict[str, Any]:
+    """DashScope uses enable_thinking; official Zhipu/DeepSeek use thinking{}."""
+    if _uses_dashscope(config):
+        payload.pop("thinking", None)
+        if _is_glm53(str(config.get("model") or "")):
+            # 百炼 ZHIPU/GLM-5.3-Flash cannot disable thinking.
+            payload["enable_thinking"] = True
+            payload["reasoning_effort"] = _glm_reasoning_effort()
+            return payload
+        raw = os.environ.get("LLM_THINKING_PAYLOAD", "").strip()
+        enabled = False
+        if raw:
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                if "enable_thinking" in parsed:
+                    enabled = bool(parsed["enable_thinking"])
+                elif str(parsed.get("type") or "").lower() in {"enabled", "true"}:
+                    enabled = True
+        payload["enable_thinking"] = enabled
+        return payload
+    if _is_glm53(str(config.get("model") or "")):
+        # Official Zhipu GLM-5.3: thinking.type only supports enabled.
+        payload["thinking"] = {
+            "type": "enabled",
+            "reasoning_effort": _glm_reasoning_effort(),
+        }
+        return payload
+    payload["thinking"] = _thinking_payload()
+    return payload
+
+
 def chat_json(
     messages: list[dict[str, str]],
     *,
@@ -295,14 +396,16 @@ def chat_json(
     config = resolve_config(model=model)
     response = _post_chat_completions(
         config=config,
-        payload={
-            "model": config["model"],
-            "messages": messages,
-            "temperature": temperature,
-            "response_format": {"type": "json_object"},
-            "thinking": {"type": "disabled"},
-            "stream": False,
-        },
+        payload=_apply_thinking_fields(
+            {
+                "model": config["model"],
+                "messages": messages,
+                "temperature": temperature,
+                "response_format": {"type": "json_object"},
+                "stream": False,
+            },
+            config,
+        ),
         timeout=timeout,
     )
     if response.status_code != HTTPStatus.OK:
