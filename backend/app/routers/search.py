@@ -39,6 +39,7 @@ def search_chunks(body: VectorSearchRequest, background_tasks: BackgroundTasks):
             body.query,
             top_k=body.top_k,
             file_ids=body.file_ids or None,
+            query_routes=body.query_routes or None,
         )
         if body.row_filter:
             result["hits"] = _annotate_row_filters(result.get("hits") or [], body.row_filter)

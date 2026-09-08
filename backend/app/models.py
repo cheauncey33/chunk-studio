@@ -120,6 +120,10 @@ class VectorSearchRequest(BaseModel):
     # matching row's column values so the LLM sees exact cell values instead of
     # hunting through raw HTML tables.
     row_filter: dict[str, Any] | None = None
+    # When set (e.g. agent search_standards), skip LLM query rewrite and use
+    # these routes as-is. Must include production. Knowledge-base UI search
+    # leaves this unset so plan_query_rewrites still runs.
+    query_routes: dict[str, str] | None = None
 
 
 class VectorSearchHit(BaseModel):

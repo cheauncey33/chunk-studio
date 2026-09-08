@@ -171,6 +171,41 @@ def test_search_router_skips_shadow_when_lexical_is_in_production(monkeypatch) -
     assert tasks.tasks == []
 
 
+def test_search_router_forwards_injected_query_routes(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_hybrid_search(query, **kwargs):
+        captured["query"] = query
+        captured["kwargs"] = kwargs
+        return {
+            "query": query,
+            "model": "model",
+            "dimension": 1,
+            "total_candidates": 0,
+            "candidate_count": 0,
+            "retrieval_mode": "dense_rerank",
+            "query_routes": kwargs.get("query_routes") or {},
+            "routes_injected": True,
+            "rerank_model": "reranker",
+            "degraded": [],
+            "hits": [],
+        }
+
+    monkeypatch.setattr(search_router.retrieval, "hybrid_search", fake_hybrid_search)
+    monkeypatch.setattr(search_router.lexical, "production_enabled", lambda: True)
+    tasks = BackgroundTasks()
+    routes = {"production": "S20-M.RL-400/10-NX2 400 kVA 空载损耗P0"}
+
+    result = search_router.search_chunks(
+        VectorSearchRequest(query=routes["production"], query_routes=routes),
+        tasks,
+    )
+
+    assert captured["query"] == routes["production"]
+    assert captured["kwargs"]["query_routes"] == routes
+    assert result["query_routes"] == routes
+
+
 def test_postgres_lexical_search_uses_content_repository(monkeypatch) -> None:
     class FakeRepository:
         def list_lexical_rows(self, *, content_type, file_ids=None, limit=5000):

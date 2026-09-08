@@ -179,6 +179,48 @@ def test_hybrid_search_falls_back_to_original_query_when_rewrite_fails() -> None
     assert [hit["chunk_id"] for hit in result["hits"]] == ["a"]
 
 
+def test_hybrid_search_injected_production_route_skips_planner() -> None:
+    query = "S20-M.RL-400/10-NX2 400 kVA 10/0.4 kV 空载损耗P0"
+    planner_calls: list[str] = []
+    embed_calls: list[list[str]] = []
+
+    def planner(value: str) -> dict[str, str]:
+        planner_calls.append(value)
+        return {"semantic": "should-not-run", "keyword": "should-not-run"}
+
+    def vector_searcher(_route_query: str, _vector: list[float], **kwargs):
+        content_type = kwargs["content_type"]
+        return {
+            "total_candidates": 1 if content_type == "table" else 0,
+            "hits": (
+                [_hit("a", 0.8, content_type="table", text="document A")]
+                if content_type == "table"
+                else []
+            ),
+        }
+
+    def batch_embedder(queries: list[str], **kwargs):
+        embed_calls.append(queries)
+        return [[1.0] * embeddings.DEFAULT_DIMENSION for _ in queries]
+
+    result = retrieval.hybrid_search(
+        query,
+        top_k=1,
+        query_routes={"production": query},
+        planner=planner,
+        batch_embedder=batch_embedder,
+        vector_searcher=vector_searcher,
+        reranker=lambda _query, _documents, _top_n: [(0, 0.9)],
+        lexical_enabled=False,
+    )
+
+    assert planner_calls == []
+    assert embed_calls == [[query]]
+    assert result["query_routes"] == {"production": query}
+    assert result["routes_injected"] is True
+    assert [hit["chunk_id"] for hit in result["hits"]] == ["a"]
+
+
 def test_hybrid_search_falls_back_to_rrf_when_reranker_fails() -> None:
     query = "原始查询"
     planned = {"semantic": "语义查询", "keyword": "关键词查询"}
