@@ -1,0 +1,833 @@
+{
+  "version": "rich23-from-score-v4pro-caliber-v5",
+  "cases": [
+    {
+      "case_id": "e01_no_load_looser",
+      "source_case": "item_bb33eb0046fc",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "4",
+        "project_name": "空载损耗和空载电流测量",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "空载损耗P0(kW):≤0.500",
+        "unit": "kW"
+      },
+      "edit_kind": "numeric_looser",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "报告限值宽于标准限值，应判冲突"
+      }
+    },
+    {
+      "case_id": "e02_load_looser",
+      "source_case": "item_3e5a004f4e69",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "5",
+        "project_name": "短路阻抗和负载损耗测量",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "负载损耗Pk(kW):≤5.000",
+        "unit": "kW"
+      },
+      "edit_kind": "numeric_looser",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "报告限值宽于标准限值，应判冲突"
+      }
+    },
+    {
+      "case_id": "e08_no_load_current_looser",
+      "source_case": "item_ad32124decef",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "4",
+        "project_name": "空载损耗和空载电流测量",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "空载电流I0(%):≤0.50(1+30%)",
+        "unit": "%"
+      },
+      "edit_kind": "numeric_looser",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "空载电流限值放宽，应判冲突"
+      }
+    },
+    {
+      "case_id": "e09_total_loss_looser",
+      "source_case": "item_0e5c243bd9cc",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "5",
+        "project_name": "短路阻抗和负载损耗测量",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "总损耗P总(kW):≤5.500",
+        "unit": "kW"
+      },
+      "edit_kind": "formula_aggregate",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "总损耗派生限值放宽，应判冲突"
+      }
+    },
+    {
+      "case_id": "e10_winding_temp_looser",
+      "source_case": "item_7250aed49fb4",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "10",
+        "project_name": "温升试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压绕组平均温升(K):≤80",
+        "unit": "K"
+      },
+      "edit_kind": "numeric_looser",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "绕组温升限值放宽，应判冲突"
+      }
+    },
+    {
+      "case_id": "e17_sound_power_looser",
+      "source_case": "item_a832ca188f13",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "12",
+        "project_name": "声级测定",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "声功率级LWA[dB(A)]:≤60",
+        "unit": "dB(A)"
+      },
+      "edit_kind": "numeric_looser",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "声功率级限值放宽，应判冲突"
+      }
+    },
+    {
+      "case_id": "e24_bushing_temp_looser",
+      "source_case": "item_dcb11adfc960",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "11",
+        "project_name": "短时过负载能力试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "套管最高温升:≤120",
+        "unit": "K"
+      },
+      "edit_kind": "numeric_looser",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "套管温升限值放宽，应判冲突"
+      }
+    },
+    {
+      "case_id": "e03_oil_temp_flip",
+      "source_case": "item_21abffec104f",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "10",
+        "project_name": "温升试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "顶层油温升:≥55",
+        "unit": "K"
+      },
+      "edit_kind": "comparator_flip",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "比较方向反转，应判冲突"
+      }
+    },
+    {
+      "case_id": "e04_breakdown_flip",
+      "source_case": "item_5f771067d76c",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "8",
+        "project_name": "绝缘液试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "击穿电压(kV):≤40",
+        "unit": "kV"
+      },
+      "edit_kind": "comparator_flip",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "下限改成上限，应判冲突"
+      }
+    },
+    {
+      "case_id": "e11_main_tap_bandwidth",
+      "source_case": "item_3eb28798b0dc",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "3",
+        "project_name": "电压比测量和联结组标号检定",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "主分接电压比偏差:±1.0%与实际阻抗电压百分数的±1/10中较低者",
+        "unit": "%"
+      },
+      "edit_kind": "bandwidth_looser",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "主分接允许偏差带宽放宽，应判冲突"
+      }
+    },
+    {
+      "case_id": "e15_impedance_bandwidth",
+      "source_case": "item_a1925c5f10a4",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "5",
+        "project_name": "短路阻抗和负载损耗测量",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "短路阻抗Zk(%):4.0(1±20%)",
+        "unit": "%"
+      },
+      "edit_kind": "bandwidth_looser",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "阻抗允许偏差带宽放宽，应判冲突"
+      }
+    },
+    {
+      "case_id": "e06_other_tap_keep",
+      "source_case": "item_8c0173569571",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "3",
+        "project_name": "电压比测量和联结组标号检定",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "其他分接电压比偏差:变压器阻抗电压值(%)的1/10以内,且允许偏差应为±1%",
+        "unit": "%"
+      },
+      "edit_kind": "existing_conflict_control",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "原文已与标准 ±0.5% 冲突，保持不变作为对照"
+      }
+    },
+    {
+      "case_id": "e12_applied_voltage_wrong",
+      "source_case": "item_299e9934a894",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "7",
+        "project_name": "外施耐压试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压对低压及地试验电压(kV):25",
+        "unit": "kV"
+      },
+      "edit_kind": "wrong_level",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "外施耐压电压等级写错，应判冲突"
+      }
+    },
+    {
+      "case_id": "e16_induction_level_wrong",
+      "source_case": "item_a70138d8f030",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "6",
+        "project_name": "感应耐压试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压试验电压:1.5Ur",
+        "unit": "kV"
+      },
+      "edit_kind": "wrong_level",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "感应耐压倍数写错，应判冲突"
+      }
+    },
+    {
+      "case_id": "e18_impulse_level_wrong",
+      "source_case": "item_14ac164a4090",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "14",
+        "project_name": "雷电冲击试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压线端全波电压(kV): -60(1±3%)波前时间: T1: 1.2μs±30%半峰值时间: T2: 50μs±20%",
+        "unit": "kV"
+      },
+      "edit_kind": "wrong_level",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "雷电冲击全波电压等级写错，应判冲突"
+      }
+    },
+    {
+      "case_id": "e13_seal_duration_wrong",
+      "source_case": "item_1b2ab719c75c",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "9",
+        "project_name": "压力密封试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "持续时间:6",
+        "unit": "h"
+      },
+      "edit_kind": "wrong_condition",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "压力密封持续时间条件写错，应判冲突"
+      }
+    },
+    {
+      "case_id": "e25_short_circuit_count_wrong",
+      "source_case": "item_69b8513d2a05",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "13",
+        "project_name": "短路承受能力试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "试验次数:3次",
+        "unit": "次"
+      },
+      "edit_kind": "wrong_condition",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "短路承受试验次数写错，应判冲突"
+      }
+    },
+    {
+      "case_id": "e20_vector_group_wrong",
+      "source_case": "item_d2af38c1cc6f",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "3",
+        "project_name": "电压比测量和联结组标号检定",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "联结组标号:Dyn5",
+        "unit": "/"
+      },
+      "edit_kind": "wrong_label",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "联结组标号写错，应判冲突"
+      }
+    },
+    {
+      "case_id": "e05_tand_unit_equiv",
+      "source_case": "item_0f9c9d46fd3e",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "8",
+        "project_name": "绝缘液试验",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "介质损耗因数tanδ(90°C):≤0.010",
+        "unit": "%"
+      },
+      "edit_kind": "unit_equivalence",
+      "judgment": {
+        "status": "supported",
+        "reason": "1% 与 0.010 等价；应仍支持"
+      }
+    },
+    {
+      "case_id": "e14_lv_phase_tighter",
+      "source_case": "item_96805e8fceb0",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "2",
+        "project_name": "绕组电阻测量",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "低压(相)电阻三相不平衡率最大值(%):≤3",
+        "unit": "%"
+      },
+      "edit_kind": "numeric_tighter",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "报告限值严于标准（3% vs 标准 ≤4%），按现行判定口径属自行加严指标，判 mismatch 并在原因中注明加严"
+      }
+    },
+    {
+      "case_id": "e07_resistance_positive",
+      "source_case": "item_937127d7a86f",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "2",
+        "project_name": "绕组电阻测量",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "高压(线)电阻三相不平衡率最大值(%):≤2",
+        "unit": "%"
+      },
+      "edit_kind": "positive_control",
+      "judgment": {
+        "status": "supported",
+        "reason": "未改动正控，应仍支持"
+      }
+    },
+    {
+      "case_id": "e21_lv_line_positive",
+      "source_case": "item_2a6a9e4363b5",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "2",
+        "project_name": "绕组电阻测量",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "低压(线)电阻三相不平衡率最大值(%):≤2",
+        "unit": "%"
+      },
+      "edit_kind": "positive_control",
+      "judgment": {
+        "status": "supported",
+        "reason": "未改动正控，应仍支持"
+      }
+    },
+    {
+      "case_id": "e19_sound_pressure_magnitude",
+      "source_case": "item_938cb5cf6499",
+      "sample_context": {
+        "model": "S20-M.RL-400/10-NX2",
+        "rated_capacity": "400 kVA",
+        "rated_voltage": "10/0.4 kV",
+        "phase_count": "3",
+        "connection_group": "Dyn11",
+        "cooling_method": "ONAN",
+        "insulation_level": "HV 线路端子 Um/LI/AC 75/35; LV 线路端子和中性点端子 AC 5 kV",
+        "product_type": "油浸式变压器",
+        "insulation_medium": "油浸式",
+        "equipment_highest_voltage_um": "",
+        "rated_frequency": "50 Hz",
+        "regulation_method": "无励磁调压",
+        "core_material": "电工钢",
+        "core_structure": "立体卷铁芯",
+        "tank_structure": "",
+        "sealing_type": "密封式"
+      },
+      "test_item": {
+        "item_no": "12",
+        "project_name": "声级测定",
+        "phase": "initial"
+      },
+      "reported_requirement": {
+        "text": "声压级 LPA [dB(A)]:≤400",
+        "unit": "dB(A)"
+      },
+      "edit_kind": "magnitude_error",
+      "judgment": {
+        "status": "mismatch",
+        "reason": "声压级数量级错误，应判冲突"
+      }
+    }
+  ]
+}
