@@ -112,6 +112,14 @@ class SettingsUpdate(BaseModel):
 class VectorSearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=8192)
     top_k: int = Field(default=10, ge=1, le=50)
+    # Optional scope: when present, search only within these file IDs
+    # (used by the Pi audit agent to lock evidence to a detection basis).
+    file_ids: list[str] | None = None
+    # Optional table row filter: {parameters: {capacity_kva, system_nominal_voltage_kv, ...}}.
+    # When present, table-type hits are annotated by bind_table_row with the
+    # matching row's column values so the LLM sees exact cell values instead of
+    # hunting through raw HTML tables.
+    row_filter: dict[str, Any] | None = None
 
 
 class VectorSearchHit(BaseModel):
@@ -133,6 +141,9 @@ class VectorSearchHit(BaseModel):
     evidence_unit: dict[str, Any] | None = None
     added_by: str | None = None
     source_chunk_id: str | None = None
+    # Present only when the request carried row_filter: the bind_table_row
+    # annotation for table-type hits (matched row's column values etc.).
+    row_binding: dict[str, Any] | None = None
 
 
 class VectorSearchResponse(BaseModel):

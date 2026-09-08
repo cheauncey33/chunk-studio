@@ -33,3 +33,14 @@ batch_vl_results.json
 .shell_*.txt
 .tmp_hbjc_job.json
 .tmp_pytest_out.txt
+
+# Vendored third-party clone (Pi agent harness source, read-only reference)
+vendor/
+
+# Node dependencies anywhere
+**/node_modules/
+
+# Experiment raw artifacts (regenerable traces/logs)
+experiment/pi-standard-audit/traces*/
+experiment/pi-standard-audit/run_*.log
+experiment/pi-standard-audit/results.json
