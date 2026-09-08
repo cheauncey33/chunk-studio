@@ -44,3 +44,7 @@ vendor/
 experiment/pi-standard-audit/traces*/
 experiment/pi-standard-audit/run_*.log
 experiment/pi-standard-audit/results.json
+
+# Pi audit sidecar runtime artifacts
+services/pi-audit-sidecar/traces/
+services/pi-audit-sidecar/sidecar.log
