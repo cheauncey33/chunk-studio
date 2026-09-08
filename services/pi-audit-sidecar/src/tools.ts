@@ -9,8 +9,9 @@
  *   - read_report     — read a parsed inspection report's sections
  *
  * Base URL comes from CHUNK_STUDIO_API_BASE (default http://127.0.0.1:8000).
- * Tools are built per case via createAuditTools(fileScope) so each session's
- * default file_ids (assistant-bound KB scope) stay isolated under concurrency.
+ * Tools are built per case via createAuditTools(fileScope, { searchEnabled }).
+ * When the workflow already retrieved candidates, search_standards is omitted
+ * and the agent only reads those chunk ids.
  */
 import { Type } from "typebox";
 import { defineTool } from "@earendil-works/pi-coding-agent";
@@ -62,11 +63,15 @@ function readableHits(payload: any): string {
 }
 
 /**
- * Build the three audit tools bound to one case's file scope. Each case gets
- * its own tool instances so per-case state (default file_ids) stays isolated
- * under concurrency.
+ * Build audit tools bound to one case's file scope. Each case gets its own
+ * tool instances so per-case state (default file_ids) stays isolated under
+ * concurrency. Pass searchEnabled=false to omit search_standards.
  */
-export function createAuditTools(fileScope: string[] | undefined | null) {
+export function createAuditTools(
+	fileScope: string[] | undefined | null,
+	options?: { searchEnabled?: boolean },
+) {
+	const searchEnabled = options?.searchEnabled !== false;
 	const scope = normalizeScope(fileScope);
 	const maxCalls = Math.max(1, Number(process.env.PI_MAX_TOOL_CALLS ?? "12"));
 	let remaining = maxCalls;
@@ -152,15 +157,27 @@ export function createAuditTools(fileScope: string[] | undefined | null) {
 	const readChunk = defineTool({
 		name: "read_chunk",
 		label: "读取标准片段全文",
-		description:
-			"按 chunk_id 读取一个标准知识库片段的完整原文，含表格数据和业务元数据（标准号、表号、标题）。search_standards 只返回截断的预览（最多 800 字符），涉及限值/数值/条款的判定，必须在拿到命中后用 read_chunk 读取对应片段的完整内容，确认表格数值或条款原文后再下结论，不得仅凭预览片段判 insufficient_context。",
-		promptSnippet: "读取检索命中的标准片段完整原文（含表格数值）",
-		promptGuidelines: [
-			"使用 read_chunk 时 chunk_id 应来自 search_standards 命中的 chunk_id 字段，不要凭空构造。",
-			"用 read_chunk 读取包含目标限值/数值/条款的片段，检索命中后必须读取完整原文（尤其表格）确认数值，再给出判定。",
-		],
+		description: searchEnabled
+			? "按 chunk_id 读取一个标准知识库片段的完整原文，含表格数据和业务元数据（标准号、表号、标题）。search_standards 只返回截断的预览（最多 800 字符），涉及限值/数值/条款的判定，必须在拿到命中后用 read_chunk 读取对应片段的完整内容，确认表格数值或条款原文后再下结论，不得仅凭预览片段判 insufficient_context。"
+			: "按 chunk_id 读取工作流已召回的标准片段完整原文，含表格数据和业务元数据（标准号、表号、标题）。chunk_id 来自任务里的已召回列表。涉及限值/数值/条款时必须读完整原文后再取标准值。",
+		promptSnippet: searchEnabled
+			? "读取检索命中的标准片段完整原文（含表格数值）"
+			: "读取已召回标准片段的完整原文（含表格数值）",
+		promptGuidelines: searchEnabled
+			? [
+					"使用 read_chunk 时 chunk_id 应来自 search_standards 命中的 chunk_id 字段，不要凭空构造。",
+					"用 read_chunk 读取包含目标限值/数值/条款的片段，检索命中后必须读取完整原文（尤其表格）确认数值，再给出判定。",
+				]
+			: [
+					"使用 read_chunk 时 chunk_id 应来自任务里「已召回的标准片段」的 chunk_id，不要凭空构造。",
+					"对可能含目标限值的片段必须读完整原文（尤其表格）再取标准值。",
+				],
 		parameters: Type.Object({
-			chunk_id: Type.String({ description: "标准知识库片段 id（来自 search_standards 命中）" }),
+			chunk_id: Type.String({
+				description: searchEnabled
+					? "标准知识库片段 id（来自 search_standards 命中）"
+					: "标准知识库片段 id（来自任务里已召回列表）",
+			}),
 		}),
 		async execute(_id, params, signal, _onUpdate, _ctx) {
 			const blocked = takeBudget();
@@ -259,5 +276,5 @@ export function createAuditTools(fileScope: string[] | undefined | null) {
 		},
 	});
 
-	return [searchStandards, readChunk, readReport];
+	return searchEnabled ? [searchStandards, readChunk, readReport] : [readChunk, readReport];
 }

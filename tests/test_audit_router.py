@@ -159,6 +159,35 @@ def test_workflow_trace_includes_agent_node_and_skips_planner() -> None:
     assert agent_node["configuration"]["judge_mode"] == "agent"
 
 
+def test_workflow_trace_keeps_retrieval_when_agent_is_evidence_fallback() -> None:
+    payload = {
+        "judge_mode": "retrieve_caliber_agent",
+        "judge_provider": "caliber+pi-agent",
+        "workflow_definition": {
+            "provider_config": {"provider": "deepseek"},
+            "global_trace": {
+                "report_parameters": {"input": {}, "output": {}},
+            },
+        },
+    }
+    case = {
+        "case_id": "item_abc",
+        "workflow_trace": {
+            "query_planner": {"input": {}, "output": {}},
+            "retrieval": {"input": {}, "output": {}},
+            "audit_judge": {"input": {}, "output": {"status": "supported"}},
+            "agent_audit": {"input": {}, "output": {"ok": True}},
+        },
+    }
+
+    trace = _build_workflow_trace(payload, case, current_llm_config={})
+    node_ids = [node["id"] for node in trace["nodes"]]
+
+    assert "query_planner" in node_ids
+    assert "retrieval" in node_ids
+    assert "agent_audit" in node_ids
+
+
 def _review_env(monkeypatch, tmp_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(tmp_path / "audit-reviews.db")
     conn.row_factory = sqlite3.Row

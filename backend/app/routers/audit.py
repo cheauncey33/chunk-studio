@@ -363,6 +363,7 @@ def _build_workflow_trace(
 
     nodes = []
     agent_judged = bool(case_trace.get("agent_audit"))
+    exclusive_agent = agent_judged and not case_trace.get("retrieval") and not case_trace.get("query_planner")
     for node_id, label, kind, diagnostic_only in WORKFLOW_NODE_SPECS:
         trace = _record(global_trace.get(node_id)) or _record(case_trace.get(node_id))
         # Full-report runs record traces but have no gold comparison; omit the
@@ -372,7 +373,8 @@ def _build_workflow_trace(
         # Do not reconstruct a fake Agent node for workflow-judged or legacy reports.
         if node_id == "agent_audit" and not agent_judged and not trace:
             continue
-        if agent_judged and node_id in AGENT_CASE_SKIPPED_NODES and not trace:
+        # Older agent-only runs skipped planner/retrieval. Unified runs keep both.
+        if exclusive_agent and node_id in AGENT_CASE_SKIPPED_NODES and not trace:
             continue
         if trace:
             node_input = trace.get("input")

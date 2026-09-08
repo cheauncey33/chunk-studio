@@ -33,23 +33,18 @@ def production_runtime_args() -> list[str]:
         "--recovery-mode",
         PRODUCTION_RECOVERY_MODE,
         "--judge-mode",
-        config.AUDIT_JUDGE_MODE,
+        "workflow",
+        "--agent-sidecar-url",
+        config.AGENT_SIDECAR_URL,
     ]
-    if config.AUDIT_JUDGE_MODE == "agent":
-        args.extend(
-            [
-                "--agent-sidecar-url",
-                config.AGENT_SIDECAR_URL,
-            ]
-        )
-        extraction_model = (
-            os.environ.get("LLM_MODEL")
-            or os.environ.get("PI_MODEL")
-            or os.environ.get("DEEPSEEK_MODEL")
-            or ""
-        ).strip()
-        if extraction_model:
-            args.extend(["--judge-model", extraction_model])
+    extraction_model = (
+        os.environ.get("LLM_MODEL")
+        or os.environ.get("PI_MODEL")
+        or os.environ.get("DEEPSEEK_MODEL")
+        or ""
+    ).strip()
+    if extraction_model:
+        args.extend(["--judge-model", extraction_model])
     return args
 
 

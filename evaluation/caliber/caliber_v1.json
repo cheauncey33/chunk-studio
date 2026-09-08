@@ -1,0 +1,342 @@
+{
+  "caliber_version": "1",
+  "status": "active",
+  "spec_document": "evaluation/caliber/standard_value_audit_caliber_v1.md",
+  "authority_note": "Single source of truth for standard-value audit adjudication. skill.md, sidecar prompt.ts, standard_value_audit_judge_v1.md, standard_value_audit_result.schema.json and the defect manifest must derive from this file.",
+  "verdicts": {
+    "match": "\u58f0\u79f0\u503c\u4e0d\u8fdd\u53cd\u9002\u7528\u6807\u51c6\u8981\u6c42\uff08\u68c0\u7d22\u540e\uff09",
+    "mismatch": "\u58f0\u79f0\u503c\u4e0e\u9002\u7528\u6807\u51c6\u8981\u6c42\u51b2\u7a81\uff08\u68c0\u7d22\u540e\uff09",
+    "unevaluable": "\u8be5\u5ba1\uff0c\u4f46\u8bc1\u636e\u4e0d\u8db3\u4ee5\u4e0b\u7ed3\u8bba\uff08\u68c0\u7d22\u540e\uff09",
+    "out_of_scope": "\u58f0\u79f0\u503c\u4e0d\u6784\u6210\u9650\u503c\u58f0\u79f0\uff0c\u65e0\u9700\u68c0\u7d22\u5373\u53ef\u5224\uff08\u68c0\u7d22\u524d\uff09"
+  },
+  "kinds": {
+    "match": ["exact", "unit_equivalent", "formula_aggregate", "within_standard"],
+    "mismatch": [
+      "numeric_looser",
+      "comparator_flip",
+      "bandwidth_exceeded",
+      "wrong_level",
+      "wrong_condition",
+      "wrong_label",
+      "magnitude_error",
+      "formula_aggregate"
+    ],
+    "unevaluable": ["standard_not_found", "applicability_undetermined", "basis_conflict"],
+    "out_of_scope": [null]
+  },
+  "kind_priority": [
+    "comparator_flip",
+    "wrong_level",
+    "wrong_condition",
+    "wrong_label",
+    "magnitude_error",
+    "bandwidth_exceeded",
+    "numeric_looser"
+  ],
+  "flags": {
+    "tighter_than_standard": "\u58f0\u79f0\u503c\u4e25\u4e8e\u6807\u51c6\u9650\u503c\uff1b\u63d0\u793a\u81ea\u884c\u52a0\u4e25\uff0c\u4e0d\u8ba1\u5165\u7f3a\u9677",
+    "basis_edition_mismatch": "\u62a5\u544a\u58f0\u660e\u7684\u6807\u51c6\u7248\u6b21\u4e0e\u77e5\u8bc6\u5e93\u73b0\u884c\u7248\u6b21\u4e0d\u4e00\u81f4",
+    "basis_incomplete": "\u62a5\u544a\u68c0\u6d4b\u4f9d\u636e\u4e2d\u7684\u6807\u51c6\u672a\u5728\u77e5\u8bc6\u5e93\u5168\u90e8\u547d\u4e2d"
+  },
+  "predicate_fields": {
+    "claim_shape": ["scalar", "interval", "enum", "qualitative", "expression"],
+    "unit_state": ["same", "converted", "unitless", "one_sided", "unavailable"],
+    "comparator_state": ["aligned", "flipped", "mixed"],
+    "relation": ["equal", "supports", "conflicts", "different", "not_comparable"],
+    "tightness": ["equal", "stricter", "looser", null],
+    "interval_relation": ["subset", "superset", "overlap", "disjoint", null],
+    "property_family": ["total_loss", "any"],
+    "numeric_delta_class": ["within_display_tolerance", "magnitude", "other"],
+    "evidence_state": ["found", "not_found", "applicability_missing", "conflicting_bases"],
+    "source": "relation / tightness from audit_semantics.compare_claims; unit_state from audit_semantics.normalize_unit_pair"
+  },
+  "rules": [
+    {
+      "rule_id": "C-00",
+      "name": "value_relation_decides_verdict",
+      "when": {"evidence_state": "found", "relation": ["equal", "supports", "conflicts", "different"]},
+      "then": {
+        "verdict": "match when relation in (equal, supports); mismatch when relation in (conflicts, different)",
+        "kind": "exact for match unless C-01/C-02/C-03/C-08/C-11 refines it; mismatch subtype by kind_priority"
+      },
+      "rationale": "\u57fa\u7840\u89c4\u5219\u3002v1 \u521d\u7a3f\u53ea\u5199\u4e86\u4f8b\u5916\u60c5\u5f62\uff0c\u6ca1\u6709\u5199\u300c\u76f8\u7b49\u5c31\u662f match\u300d\u8fd9\u4e2a\u5e73\u51e1\u60c5\u5f62\uff0c\u5bfc\u81f4 derive \u5728\u6700\u5e38\u89c1\u7684\u8def\u5f84\u4e0a\u8f93\u51fa\u7a7a rules\uff0c\u800c\u7a7a rules \u6309 derivation_contract \u662f\u65e0\u6548\u5224\u5b9a\u3002",
+      "new_in_v1": true
+    },
+    {
+      "rule_id": "C-01",
+      "name": "tighter_than_standard_is_compliant",
+      "when": {
+        "evidence_state": "found",
+        "comparator_state": "aligned",
+        "tightness": "stricter"
+      },
+      "then": {"verdict": "match", "kind": "within_standard", "flags": ["tighter_than_standard"]},
+      "rationale": "\u5ba1\u67e5\u56de\u7b54\u7684\u662f\u62a5\u544a\u662f\u5426\u8fdd\u53cd\u6807\u51c6\uff1b\u52a0\u4e25\u4e0d\u8fdd\u53cd\u3002\u5224 mismatch \u4f1a\u5728\u771f\u5b9e\u62a5\u544a\u4e0a\u4ea7\u751f\u5927\u91cf\u8bef\u62a5\u5e76\u6c61\u67d3 mismatch \u4fe1\u53f7\u3002",
+      "supersedes": ["skill.md v7 rule 6", "sidecar prompt.ts rule 6", "adversarial_rich23 e14 caliber-v5"],
+      "consistent_with": ["transformer_reports_v2/manifest.json tighter edits (5)"]
+    },
+    {
+      "rule_id": "C-02",
+      "name": "unit_equivalence",
+      "when": {"evidence_state": "found", "unit_state": "converted", "relation": "equal"},
+      "then": {"verdict": "match", "kind": "unit_equivalent", "flags": []},
+      "rationale": "\u5355\u4f4d\u8868\u8ff0\u5dee\u5f02\u4e0d\u662f\u5185\u5bb9\u5dee\u5f02\uff1b\u4ec5\u5f53\u6362\u7b97\u540e\u4ecd\u4e0d\u4e00\u81f4\u624d\u8fdb\u5165 mismatch\u3002",
+      "requires": "evidence must state the conversion relation"
+    },
+    {
+      "rule_id": "C-03",
+      "name": "total_loss_formula_aggregate",
+      "when": {"property_family": "total_loss", "evidence_state": "found"},
+      "then": {
+        "verdict": "match|mismatch",
+        "kind": "formula_aggregate",
+        "decision_by_claim_role": {
+          "limit_claim": "the aggregate of the no-load and load-loss limits is the standard bound; ordinary bound semantics apply, so a stricter total-loss limit is match/within_standard under C-01",
+          "reported_aggregate": "a reported total verified against its own reported addends requires equality; any difference is mismatch/formula_aggregate"
+        }
+      },
+      "rationale": "GB/T 1094.1 \u7b2c3.6.4\u6761\u5b9a\u4e49\u603b\u635f\u8017=\u7a7a\u8f7d+\u8d1f\u8f7d\uff0c\u4f46\u9650\u503c\u8868\u65e0\u72ec\u7acb\u603b\u635f\u8017\u5217\u3002",
+      "amended_in_v1_draft": "\u521d\u7a3f\u5199\u300c\u2260\u52a0\u548c\u5373 mismatch\uff08\u65e0\u8bba\u504f\u5927\u504f\u5c0f\uff09\u300d\uff0c\u628a\u300c\u9650\u503c\u58f0\u79f0\u300d\u548c\u300c\u5b9e\u6d4b\u503c\u7b97\u672f\u4e00\u81f4\u6027\u300d\u6df7\u4e3a\u4e00\u4f53\uff1b\u62a5\u544a\u81ea\u884c\u58f0\u79f0 \u22642.400 kW \u800c\u6807\u51c6\u52a0\u548c\u4e3a 3.205 kW \u65f6\u5c5e\u4e8e\u81ea\u884c\u52a0\u4e25\uff0c\u4e0d\u662f\u7f3a\u9677\u3002",
+      "forbids": "comparing a total-loss claim against a single load-loss limit",
+      "implemented_by": ["evaluation/manual_knowledge_rules_v1.json#transformer_total_loss_sum_v1", "audit_semantics.evaluate_derived_sum"]
+    },
+    {
+      "rule_id": "C-04",
+      "name": "display_precision_is_exact",
+      "when": {
+        "evidence_state": "found",
+        "unit_state": "same",
+        "comparator_state": "aligned",
+        "numeric_delta_class": "within_display_tolerance"
+      },
+      "then": {"verdict": "match", "kind": "exact", "flags": []},
+      "rationale": "60 \u4e0e 60.0\u300135 \u4e0e 35.0 \u662f\u540c\u4e00\u8981\u6c42\uff1bv7 \u672a\u5b9a\u4e49\u6b64\u60c5\u5f62\u4f1a\u5bfc\u81f4\u8bef\u62a5\u3002",
+      "tolerance": "relative: max(1e-6, abs(target) * 1e-4)",
+      "new_in_v1": true,
+      "covers": ["defect-04-same_unit", "defect-05-same_unit", "defect-08-same_unit", "defect-09-same_unit"]
+    },
+    {
+      "rule_id": "C-05",
+      "name": "qualitative_clause_out_of_scope",
+      "when": {"claim_shape": "qualitative"},
+      "then": {"verdict": "out_of_scope", "kind": null, "flags": []},
+      "placeholder_values": {
+        "tokens": ["/", "-", "\u2014", "\u2013", "\u65e0", "N/A", "NA", ""],
+        "note": "a placeholder in the reported requirement column states no limit, so it is out_of_scope; reading it as a categorical label produces false wrong_label defects"
+      },
+      "decided_by": "deterministic_prefilter",
+      "model_may_decide": false,
+      "rationale": "\u4fee\u590d\u56db\u5411\u5224\u5b9a\u9000\u5316\u6210\u4e09\u5411\uff1a\u5b9e\u6d4b 40 case \u4e2d\u6a21\u578b\u4e00\u6b21\u90fd\u672a\u8f93\u51fa not_audited\uff0cgate \u9075\u4ece 0/7\u3002\u62d2\u5224\u4ea4\u7ed9\u6a21\u578b\uff0c\u6a21\u578b\u4e0d\u4f1a\u7528\u3002",
+      "example_forms": [
+        "\u5e94\u65e0\u6e17\u6f0f\u3001\u65e0\u635f\u4f24",
+        "\u63d0\u4f9b\u8bd5\u9a8c\u6570\u636e",
+        "\u5916\u89c2\u68c0\u67e5\u65e0\u5f02\u5e38",
+        "\u8bd5\u9a8c\u7535\u538b\u5e94\u4e0d\u51fa\u73b0\u7a81\u7136\u4e0b\u964d",
+        "\u6ce2\u5f62\u56fe\u6bd4\u8f83\u5e94\u65e0\u660e\u663e\u5dee\u5f02"
+      ],
+      "new_in_v1": true
+    },
+    {
+      "rule_id": "C-06",
+      "name": "standard_priority_order",
+      "when": {"evidence_state": "conflicting_bases"},
+      "then": {
+        "resolve_by": "standard_priority_order",
+        "fallback": {"verdict": "unevaluable", "kind": "basis_conflict", "flags": []},
+        "immaterial_conflict": "when every conflicting basis yields the same relation to the claim, the conflict cannot change the verdict and must not block adjudication; record note basis_conflict_immaterial"
+      },
+      "standard_priority_order": [
+        "declared_order_in_report_detection_basis",
+        "product_specific_standard_over_general_standard",
+        "contract_or_tender_spec > enterprise_standard > industry_standard > national_general_standard",
+        "unresolved -> unevaluable/basis_conflict"
+      ],
+      "model_may_decide": false,
+      "rationale": "judge_v1 \u5c06\u4f18\u5148\u7ea7\u4ea4\u7ed9\u6a21\u578b\uff0c\u800c EVALUATION_REPORT \u81ea\u884c\u5c06 hbjc-13-r4 \u7684\u552f\u4e00\u5931\u8d25\u5f52\u56e0\u4e3a\u300c\u6807\u51c6\u4f18\u5148\u7ea7\u672a\u5b9a\u4e49\u300d\u3002\u8fd9\u662f\u4e1a\u52a1\u88c1\u5b9a\u6743\u3002",
+      "new_in_v1": true
+    },
+    {
+      "rule_id": "C-07",
+      "name": "basis_edition_and_completeness",
+      "when": {"basis_check": ["edition_mismatch", "declared_standard_not_in_kb"]},
+      "then": {
+        "verdict": "unchanged",
+        "flags": ["basis_edition_mismatch", "basis_incomplete"],
+        "report_level_output": "basis_assessment"
+      },
+      "must_not": "raise and abort the audit run",
+      "rationale": "\u62a5\u544a\u5f15\u7528\u4f5c\u5e9f\u6216\u9519\u8bef\u7248\u6b21\u6807\u51c6\u662f\u4e00\u6761\u771f\u5b9e\u5ba1\u67e5\u53d1\u73b0\uff0c\u73b0\u5b9e\u73b0\u628a\u5b83\u53d8\u6210\u4e86\u4e00\u6b21\u4efb\u52a1\u5931\u8d25\u3002",
+      "current_blocking_code": "scripts/run_report_audit_workflow.py::_filter_evidence_file_ids_by_detection_basis",
+      "maps_to_schema": ["basis_assessment.status", "audit_assessment.error_types#obsolete_basis"],
+      "requires_model_change": "standard_no must become (standard_no, edition, validity)",
+      "new_in_v1": true
+    },
+    {
+      "rule_id": "C-08",
+      "name": "interval_and_tolerance_algebra",
+      "when": {"claim_shape": ["interval", "expression"]},
+      "then": {
+        "decision_table": {
+          "subset": {"verdict": "match", "kind": "exact", "flags": ["tighter_than_standard"]},
+          "equal": {"verdict": "match", "kind": "exact", "flags": []},
+          "superset": {"verdict": "mismatch", "kind": "bandwidth_exceeded", "flags": []},
+          "overlap": {"verdict": "mismatch", "kind": "bandwidth_exceeded", "flags": []},
+          "disjoint": {"verdict": "mismatch", "kind": "by kind_priority on the band centers", "flags": []},
+          "unparseable": {"verdict": "unevaluable", "kind": "applicability_undetermined", "flags": []}
+        },
+        "center_first": {
+          "applies_when": "both sides are tolerance bands around a nominal (forms relative_symmetric / absolute_symmetric)",
+          "order": [
+            "compare the nominal centers first; a center difference beyond display tolerance is a value error, kind by kind_priority (magnitude_error or numeric_looser), never bandwidth_exceeded",
+            "only when the centers agree does band width decide: wider reported band -> mismatch/bandwidth_exceeded, narrower -> match/exact + tighter_than_standard"
+          ],
+          "rationale": "\u62a5\u544a\u5199 -76(1\u00b13%) \u800c\u6807\u51c6\u662f 75(1\u00b13%) \u65f6\uff0c\u9519\u7684\u662f\u6807\u5c3c\u503c\u4e0d\u662f\u5e26\u5bbd\uff1b\u521d\u7a3f\u8868\u4f1a\u628a\u5b83\u5f52\u6210 bandwidth_exceeded\uff0c\u4e0e crosswalk \u91cc different -> wrong_condition|numeric_looser \u81ea\u76f8\u77db\u76fe\u3002"
+        },
+        "polarity": {
+          "rule": "compare magnitudes when one side carries a signed nominal and the other is unsigned and the comparator is exact or a tolerance band",
+          "rationale": "\u51b2\u51fb\u7535\u538b -75 kV \u4e0e\u6807\u51c6\u8868\u7684 75 kV \u662f\u540c\u4e00\u8981\u6c42\uff1b\u6781\u6027\u5dee\u5f02\u4e0d\u662f\u5185\u5bb9\u5dee\u5f02\u3002"
+        },
+        "comparator_direction_first": {
+          "rule": "resolve comparator direction across the two sides before containment; a degenerate standard scalar inherits the reported bound direction, exactly as the scalar path does",
+          "rationale": "\u6807\u51c6\u4e8b\u5b9e\u5e38\u53ea\u8bb0\u5f55\u4e86\u9650\u503c\u6570\u5b57\uff08\u5982 0.80\uff09\u800c operator \u4e3a eq\uff1b\u4e0d\u5148\u5bf9\u9f50\u65b9\u5411\u4f1a\u628a\u9000\u5316\u533a\u95f4 [0.8, 0.8] \u4e0e [\u2212\u221e, 0.234] \u5224\u4e3a disjoint\u3002"
+        },
+        "standard_tolerance_not_recorded": {
+          "rule": "when the reported side expands a base by a relative tolerance and that base equals the recorded standard value while the standard fact records no tolerance of its own, the case is unevaluable/applicability_undetermined",
+          "rationale": "\u62a5\u544a\u5199 \u22640.18(1+30%) \u800c\u6807\u51c6\u4e8b\u5b9e\u53ea\u8bb0\u4e86 0.18\uff1a\u65e0\u6cd5\u5206\u8fa8\u62a5\u544a\u662f\u5728\u5f15\u7528\u6807\u51c6\u81ea\u5df1\u7684 +30% \u5bb9\u5dee\uff0c\u8fd8\u662f\u81ea\u884c\u653e\u5bbd\u4e86 30%\u3002\u5224 mismatch \u662f\u731c\u3002",
+          "resolution": "extract the tolerance into the standard fact, then this clause stops firing"
+        }
+      },
+      "rationale": "\u5b9e\u6d4b 73 case \u4e2d 13 \u6761\uff0818%\uff09\u56e0\u533a\u95f4/\u5bb9\u5dee\u8868\u8fbe\u5f0f\u672a\u88ab\u89e3\u6790\u5668\u652f\u6301\u800c\u9000\u56de LLM\uff1b\u8fd9\u4e9b\u662f\u6700\u89c4\u8303\u7684\u5bb9\u5dee\u5199\u6cd5\u3002",
+      "example_forms": ["\u22640.16(1+30%)", "4.0(1\u00b110%)", "15\u2264t\u226460", "0.5\u00b110%", "35(1\u00b11%)", "3\u03bcs~6\u03bcs"],
+      "new_in_v1": true
+    },
+    {
+      "rule_id": "C-09",
+      "name": "applicability_undetermined",
+      "when": {"evidence_state": "applicability_missing"},
+      "then": {"verdict": "unevaluable", "kind": "applicability_undetermined", "flags": []},
+      "forbids": "filling applicability with industry common sense (\u901a\u5e38/\u4e00\u822c/\u5e38\u89c1/\u5927\u6982\u7387)"
+    },
+    {
+      "rule_id": "C-10",
+      "name": "standard_not_found_with_gate",
+      "when": {"evidence_state": "not_found"},
+      "then": {"verdict": "unevaluable", "kind": "standard_not_found", "flags": []},
+      "admission_gate": [
+        "at least 2 distinct query formulations (standard_no / project_name / parameter_name)",
+        "full-text read of the most relevant hit (search returns truncated preview only)",
+        "reasoning must list attempted queries and read chunks"
+      ],
+      "enforced_by": "host-side hard gate with one re-judge reprompt",
+      "rationale": "v6 \u6559\u8bad\uff1acase 13-r4 \u68c0\u7d22 9 \u6b21\u4f46 0 \u6b21\u8bfb\u5168\u6587\u5c31\u5ba3\u5e03\u6761\u6b3e\u4e0d\u5b58\u5728\u3002"
+    },
+    {
+      "rule_id": "C-11",
+      "name": "categorical_label_comparison",
+      "when": {"claim_shape": "enum", "evidence_state": "found"},
+      "then": {
+        "decision_table": {
+          "equal": {"verdict": "match", "kind": "exact", "flags": []},
+          "different": {"verdict": "mismatch", "kind": "wrong_label", "flags": []},
+          "standard_value_enumerates_several_labels": {
+            "verdict": "unevaluable",
+            "kind": "applicability_undetermined",
+            "flags": []
+          }
+        }
+      },
+      "rationale": "\u8054\u7ed3\u7ec4\u6807\u53f7\u8fd9\u7c7b\u5206\u7c7b\u503c\u662f\u771f\u5b9e\u5ba1\u67e5\u5bf9\u8c61\uff0c\u4f46 v1 \u521d\u7a3f\u6ca1\u6709\u4efb\u4f55\u89c4\u5219\u4f1a\u4ea7\u51fa wrong_label\uff0ckind \u8868\u91cc\u5374\u5217\u4e86\u5b83\u3002",
+      "must_not": "decide membership when the standard side is a concatenation such as 'Dyn11Yyn0'; a concatenated cell means the extraction lost the label boundaries and must be split before scoring",
+      "new_in_v1": true
+    },
+    {
+      "rule_id": "C-12",
+      "name": "verbatim_requirement_quote",
+      "when": {"evidence_state": "found", "claimed_value_equals_standard_value_verbatim": true},
+      "then": {"verdict": "match", "kind": "exact", "flags": []},
+      "checked_before": ["C-08", "C-11"],
+      "rationale": "\u5f88\u591a\u62a5\u544a\u76f4\u63a5\u6284\u5f55\u6807\u51c6\u539f\u6587\uff0c\u5982\u300c\u89c4\u5b9a\u7535\u538b\u6bd4\u7684\u00b10.5%\u4e0e\u5b9e\u9645\u963b\u6297\u7535\u538b\u767e\u5206\u6570\u7684\u00b11/10 \u4e2d\u8f83\u4f4e\u8005\u300d\u3002\u53cc\u65b9\u5b57\u7b26\u4e32\u76f8\u540c\u65f6\u65e0\u9700\u89e3\u6790\u5373\u53ef\u5224\u5b9a\uff1b\u521d\u7a3f\u628a\u8fd9\u7c7b case \u5f52\u4e3a\u89e3\u6790\u5931\u8d25\u3002",
+      "normalization": "compare after markup stripping, full-width folding, whitespace removal and case folding",
+      "new_in_v1": true
+    }
+  ],
+  "removed_from_v7": [
+    {
+      "item": "mismatch.numeric_tighter",
+      "reason": "\u52a0\u4e25\u6539\u5224 match + within_standard + flag tighter_than_standard",
+      "rule_id": "C-01"
+    }
+  ],
+  "scoreability": {
+    "scoreable_if_any": [
+      "real.discovery_method == 'deterministic_comparison'",
+      "real.discovery_method == 'deterministic_table_binding_cell'",
+      "review.status == 'human_confirmed'"
+    ],
+    "never_scoreable": ["real.discovery_method == 'unverified_model_value'"],
+    "not_scoreable_pending_confirmation": ["real.discovery_method == 'judgment_comparison'"],
+    "blocking_precondition": {
+      "requirement": "source_report.source_present && source_report.source_hash_matches && source_report.extraction_verified",
+      "current_state": "false for all 611 cases; tmp/transformer-intake-20260907/ no longer exists",
+      "consequence": "no case in transformer_reports_v2/gold.json may be scored until the 7 source files are re-archived and verified against reports.json sha256"
+    },
+    "observed_distribution_2026_09_08": {
+      "deterministic_comparison": 83,
+      "deterministic_table_binding_cell": 7,
+      "judgment_comparison": 397,
+      "unverified_model_value": 124,
+      "total": 611,
+      "directly_trustworthy": 90,
+      "real_mismatch_total": 32,
+      "real_mismatch_deterministic": 8
+    }
+  },
+  "derivation_contract": {
+    "function": "derive(reported_requirement, real, conditions, caliber_v1) -> {verdict, kind, flags[], scoreable, derivation}",
+    "derivation_required_fields": ["rules", "comparison"],
+    "comparison_required_fields": ["left_normalized", "right_normalized", "unit_state", "relation", "tightness"],
+    "invalid_without_derivation": true
+  },
+  "crosswalk": {
+    "verdict_to_legacy_status": {
+      "match": "supported",
+      "mismatch": "mismatch",
+      "unevaluable": "insufficient_context",
+      "out_of_scope": "not_audited"
+    },
+    "legacy_status_consumers": [
+      "backend/schemas/standard_value_audit_result.schema.json#audit_assessment.status",
+      "frontend audit badges",
+      "data/evaluation_private/transformer_reports_v2/gold.json#expected_status"
+    ],
+    "migration_note": "verdict and kind should become first-class fields end to end; the sidecar currently maps verdict back to the legacy vocabulary and kind is dropped on the read side, which discards the primary audit output (which error, not merely that there is one).",
+    "defect_edit_kind": {
+      "looser": {"count": 5, "verdict": "mismatch", "kind": "numeric_looser", "rule_id": "C-01"},
+      "tighter": {"count": 5, "verdict": "match", "kind": "within_standard", "flags": ["tighter_than_standard"], "rule_id": "C-01"},
+      "different": {"count": 4, "verdict": "mismatch", "kind": "wrong_condition|numeric_looser", "rule_id": "kind_priority"},
+      "same_unit": {"count": 4, "verdict": "match", "kind": "exact", "rule_id": "C-04"},
+      "unit_equivalence": {"count": 1, "verdict": "match", "kind": "unit_equivalent", "rule_id": "C-02"},
+      "note": "All 19 existing labels are already consistent with caliber v1; no gold edits needed. The conflicting side is skill.md / prompt.ts rule 6."
+    }
+  },
+  "change_policy": {
+    "on_caliber_change": [
+      "write a new caliber_vN.md + caliber_vN.json; never edit a released version",
+      "re-run derive over all gold and emit caliber_vPREV_to_vN_diff.json",
+      "human confirmation of the diff before switching the active version",
+      "every evaluation result must record the caliber_version it was scored under"
+    ],
+    "forbidden": "manual per-case gold relabeling; fix the rule, not the label",
+    "historical_violations": [
+      "adversarial_rich23.json e14 supported->mismatch (version caliber-v5)",
+      "hbjc_end_to_end_audit_v1.json hbjc-5-r3 incorrect->correct (version 1-caliber-v5)"
+    ]
+  },
+  "open_items": [
+    "C-01 \u52a0\u4e25\u7684\u5bb9\u5fcd\u4e0a\u9650\u9608\u503c\uff08\u4e25\u4e8e\u6807\u51c6 10 \u500d\u662f\u5426\u4ecd\u7b97 match\uff09",
+    "C-06 \u5408\u540c/\u62db\u6807\u89c4\u8303\u5728\u672a\u88ab\u68c0\u6d4b\u4f9d\u636e\u58f0\u660e\u65f6\u662f\u5426\u53ef\u4f5c\u88c1\u5b9a\u4f9d\u636e",
+    "GB/T 1094.10-2022 \u4e0e GB/T 1094.101-2023 \u662f\u7248\u6b21\u66ff\u4ee3\u8fd8\u662f\u5e76\u884c\u6709\u6548\uff08\u76f4\u63a5\u5f71\u54cd C-07 \u662f\u5426\u5bf9\u62a5\u544a 01-02\u300104-07 \u89e6\u53d1\uff09",
+    "judgment_comparison \u7684 397 \u6761\u5982\u4f55\u786e\u8ba4\uff08\u5efa\u8bae\u53ea\u786e\u8ba4\u62bd\u6837\u90e8\u5206\uff0c\u4f18\u5148 24 \u6761 mismatch\uff09",
+    "\u62a5\u544a 08\uff08\u626b\u63cf\u4ef6 OCR \u5931\u8d25\uff09/ 09\uff08GB 20052 \u7248\u672c\u7f3a\u5931\uff09\u662f\u5426\u8865\u9f50\uff0c\u8865\u9f50\u53ef\u5c06\u6c60\u5b50\u4ece 611 \u6269\u5230\u7ea6 780"
+  ]
+}

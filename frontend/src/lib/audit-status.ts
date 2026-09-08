@@ -13,6 +13,7 @@ export const AUDIT_STATUS_LABELS: Record<string, string> = {
 export const AUTHORITY_LABELS: Record<string, string> = {
   programmatic_table: '程序表格',
   programmatic_formula: '程序公式',
+  programmatic_caliber: '程序口径',
   model: '模型判定',
   unknown: '',
 }
@@ -131,7 +132,7 @@ export function caseStatusLayer(item: Record<string, unknown>): CaseStatusLayer 
     || path.mode
     || '',
   ).trim()
-  const authority = source === 'programmatic_table' || source === 'programmatic_formula'
+  const authority = source === 'programmatic_table' || source === 'programmatic_formula' || source === 'programmatic_caliber'
     ? source
     : source === 'fallback_llm' || source === 'fallback_llm_rejudge' || source === 'llm' || source === 'model'
       ? 'model'
@@ -149,6 +150,7 @@ export function caseStatusLayer(item: Record<string, unknown>): CaseStatusLayer 
   const bindMap: Record<string, string> = {
     unique_bound_comparable: 'unique',
     derived_sum_comparable: 'unique',
+    agent_retrieved: 'unique',
     conflicting_table_bindings: 'conflict',
     no_authoritative_table_claim: 'unbound',
     derived_sum_incomplete: 'unbound',
@@ -160,13 +162,18 @@ export function caseStatusLayer(item: Record<string, unknown>): CaseStatusLayer 
     || bindMap[reasonCode]
     || '',
   ).trim() || 'unknown'
-  const closed = (authority === 'programmatic_table' || authority === 'programmatic_formula')
-    && (verdict === 'supported' || verdict === 'mismatch')
+  // C-05 rules a clause out of scope from the reported text alone, so the
+  // caliber closes not_audited too; the table paths never reach that verdict.
+  const closed = authority === 'programmatic_caliber'
+    ? verdict === 'supported' || verdict === 'mismatch' || verdict === 'not_audited'
+    : (authority === 'programmatic_table' || authority === 'programmatic_formula')
+      && (verdict === 'supported' || verdict === 'mismatch')
   return { verdict, authority, closed, bindState, reasonCode }
 }
 
 export const KIND_LABELS: Record<string, string> = {
   exact: '精确一致',
+  within_standard: '自行加严',
   unit_equivalent: '单位等价',
   formula_aggregate: '加和口径',
   numeric_looser: '限值放宽',

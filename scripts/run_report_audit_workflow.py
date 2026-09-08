@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -44,12 +44,14 @@ from app.audit_authority import (  # noqa: E402
     layer_from_judgment,
     summarize_status_layers,
 )
+from app.audit_caliber import derive as derive_caliber_verdict  # noqa: E402
 from app.audit_semantics import (  # noqa: E402
     annotate_candidates,
     build_deterministic_comparisons,
     evaluate_candidate_applicability,
     evaluate_table_claims,
     extract_requirement_claim,
+    numbers_in,
     resolve_applicability,
     resolve_table_claim_decision,
 )
@@ -1054,12 +1056,42 @@ def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         ),
         "text": candidate["text"],
     }
+    chunk_id = str(candidate.get("chunk_id") or candidate.get("id") or "").strip()
+    if chunk_id:
+        compact["chunk_id"] = chunk_id
     roles = [str(role) for role in candidate.get("evidence_roles") or [] if str(role)]
     if roles:
         compact["evidence_roles"] = roles
     if isinstance(candidate.get("table_row_binding"), dict):
         compact["table_row_binding"] = candidate["table_row_binding"]
     return compact
+
+
+def _retrieved_pool_for_agent(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Hand the first-recall hits to the agent so it reads them instead of searching again."""
+    pool: list[dict[str, Any]] = []
+    for candidate in candidates:
+        chunk_id = str(candidate.get("chunk_id") or candidate.get("id") or "").strip()
+        if not chunk_id:
+            continue
+        metadata = candidate.get("business_metadata") or {}
+        binding = (
+            candidate.get("table_row_binding")
+            if isinstance(candidate.get("table_row_binding"), dict)
+            else {}
+        )
+        pool.append(
+            {
+                "chunk_id": chunk_id,
+                "candidate_key": candidate.get("candidate_key"),
+                "content_type": candidate.get("content_type"),
+                "standard_no": metadata.get("standard_no"),
+                "table_no": metadata.get("table_no"),
+                "section": metadata.get("section"),
+                "bind_state": binding.get("state"),
+            }
+        )
+    return pool
 
 
 def _candidate_locator(candidate: dict[str, Any]) -> tuple[str, str, str]:
@@ -1570,80 +1602,181 @@ def _validate_judgment(
     return judgment
 
 
-def _template_table_reason(comparison: dict[str, Any], status: str) -> str:
-    tightness = str(comparison.get("tightness") or comparison.get("relation") or "")
-    report_value = comparison.get("report_value")
-    standard_value = comparison.get("standard_value")
-    column = comparison.get("target_column") or ""
-    units = comparison.get("unit_normalize") if isinstance(comparison.get("unit_normalize"), dict) else {}
-    unit = units.get("base") or units.get("left_unit") or units.get("right_unit") or ""
+CALIBER_AUTHORITY = "programmatic_caliber"
+# The caliber decides these without any model call; everything else falls back.
+CALIBER_CLOSING_VERDICTS = {"match", "mismatch", "out_of_scope"}
+_CALIBER_KIND_REASON = {
+    "exact": "精确一致",
+    "within_standard": "报告自行加严，仍在标准范围内",
+    "unit_equivalent": "单位换算后等值",
+    "formula_aggregate": "与派生的加和标准值一致",
+    "numeric_looser": "报告限值宽于标准限值",
+    "comparator_flip": "报告比较符与标准方向相反",
+    "bandwidth_exceeded": "报告带宽超出标准带宽",
+    "magnitude_error": "报告数值与标准限值量级不符",
+    "wrong_label": "报告标号与标准标号不符",
+}
+
+
+def _caliber_standard_fact(item: dict[str, Any]) -> dict[str, Any] | None:
+    """Rebuild the structured standard fact behind one deterministic comparison.
+
+    The comparison item stores base-unit scaled floats; feeding those back would
+    scale twice, so the caliber reads the unscaled evidence claim instead.
+    """
+    if not isinstance(item, dict):
+        return None
+    trace = item.get("trace") if isinstance(item.get("trace"), dict) else {}
+    value = ((trace.get("evidence_claim") or {}) if isinstance(trace, dict) else {}).get("value")
+    if not isinstance(value, dict):
+        return None
+    raw = str(value.get("raw") or value.get("normalized") or "").strip()
+    numbers = [number for number in (value.get("numbers") or []) if isinstance(number, (int, float))]
+    distinct = {round(float(number), 9) for number in numbers}
+    if not raw and not distinct:
+        return None
+    return {
+        "raw_value": raw or None,
+        "numeric_value": float(numbers[0]) if len(distinct) == 1 else None,
+        "unit": value.get("unit"),
+        "operator": value.get("operator"),
+        "discovery_method": (
+            "deterministic_table_binding_cell"
+            if isinstance(item.get("table_row_binding"), dict)
+            else "deterministic_comparison"
+        ),
+    }
+
+
+def _caliber_reason(derived: dict[str, Any], item: dict[str, Any]) -> str:
+    comparison = (derived.get("derivation") or {}).get("comparison") or {}
+    left = comparison.get("left_raw") or ""
+    right = comparison.get("right_raw") or ""
+    unit = comparison.get("right_unit") or comparison.get("left_unit") or ""
     unit_note = f" {unit}" if unit else ""
-    if comparison.get("source") == "generic_derived_sum":
-        formula = column or "加项之和"
-        if status == "supported":
-            return (
-                f"程序按 {formula} 派生标准值后比较通过：报告 {report_value}{unit_note} 相对 "
-                f"{standard_value}{unit_note} 为 {tightness}。"
-            )
-        return (
-            f"程序按 {formula} 派生标准值后比较冲突：报告 {report_value}{unit_note} 相对 "
-            f"{standard_value}{unit_note} 为 {tightness}。"
-        )
-    if status == "supported":
-        return (
-            f"表格唯一绑定后程序比较通过：报告 {report_value}{unit_note} 相对标准 "
-            f"{standard_value}{unit_note} 为 {tightness}（列 {column}）。"
-        )
+    column = item.get("target_column") or ""
+    column_note = f"（列 {column}）" if column else ""
+    if derived["verdict"] == "out_of_scope":
+        return "报告要求未给出可比较的限值，按定性条款不纳入标准值审查。"
+    headline = _CALIBER_KIND_REASON.get(str(derived.get("kind") or ""), "程序比较完成")
+    outcome = "通过" if derived["verdict"] == "match" else "冲突"
     return (
-        f"表格唯一绑定后程序比较冲突：报告 {report_value}{unit_note} 相对标准 "
-        f"{standard_value}{unit_note} 为 {tightness}（列 {column}）。"
+        f"程序按口径 {derived.get('caliber_version')} 比较{outcome}：报告 {left}{unit_note} "
+        f"相对标准 {right}{unit_note}，{headline}{column_note}。"
     )
 
 
-def _judgment_from_table_decision(
-    decision: dict[str, Any],
+def _judgment_from_caliber(
+    derived: dict[str, Any],
+    item: dict[str, Any],
     candidates: list[dict[str, Any]],
+    *,
+    mode: str,
+    reason_code: Any,
 ) -> dict[str, Any]:
-    comparison = decision.get("comparison") if isinstance(decision.get("comparison"), dict) else {}
-    status = str(decision.get("status") or "")
-    keys = [
-        str(item)
-        for item in (comparison.get("evidence_candidate_keys") or [])
-        if str(item).strip()
-    ]
-    key = str(decision.get("candidate_key") or comparison.get("candidate_key") or "")
-    if key and key not in keys:
-        keys = [key, *[item for item in keys if item != key]]
-    units = comparison.get("unit_normalize") if isinstance(comparison.get("unit_normalize"), dict) else {}
-    mode = str(decision.get("mode") or "programmatic_table")
+    """Shape one caliber verdict like a judge output, without a model call."""
+    comparison = (derived.get("derivation") or {}).get("comparison") or {}
+    keys: list[str] = []
+    for key in [
+        item.get("candidate_key"),
+        *(item.get("evidence_candidate_keys") or []),
+    ]:
+        text = str(key or "").strip()
+        if text and text not in keys:
+            keys.append(text)
     judgment = {
-        "status": status,
-        "reason": _template_table_reason(comparison, status),
+        "status": derived.get("legacy_status") or "insufficient_context",
+        "verdict": derived.get("verdict"),
+        "kind": derived.get("kind"),
+        "reason": _caliber_reason(derived, item),
         "evidence_candidate_keys": keys,
         "missing_context_fields": [],
         "comparison": {
-            "kind": str(comparison.get("kind") or "exact"),
-            "report_value": str(comparison.get("report_value") or ""),
-            "report_unit": str(units.get("left_unit") or ""),
-            "report_operator": str(comparison.get("report_operator") or "eq"),
-            "standard_value": str(comparison.get("standard_value") or ""),
-            "standard_unit": str(units.get("right_unit") or ""),
-            "standard_operator": str(comparison.get("standard_operator") or "eq"),
+            "kind": str(derived.get("kind") or "exact"),
+            "report_value": str(comparison.get("left_raw") or ""),
+            "report_unit": str(comparison.get("left_unit") or ""),
+            "report_operator": str(item.get("report_operator") or "eq"),
+            "standard_value": str(comparison.get("right_raw") or ""),
+            "standard_unit": str(comparison.get("right_unit") or ""),
+            "standard_operator": str(item.get("standard_operator") or "eq"),
             "report_tolerance": "",
             "standard_tolerance": "",
             "report_scope": "",
             "standard_scope": "",
             "relation": str(comparison.get("tightness") or comparison.get("relation") or ""),
-            "conclusion": str(comparison.get("conclusion") or ""),
+            "conclusion": "supports" if derived["verdict"] == "match" else "conflicts",
+        },
+        "caliber": {
+            "caliber_version": derived.get("caliber_version"),
+            "verdict": derived.get("verdict"),
+            "kind": derived.get("kind"),
+            "flags": derived.get("flags") or [],
+            "rules": (derived.get("derivation") or {}).get("rules") or [],
+            "comparison": comparison,
         },
         "deterministic_judge": {
             "applied": True,
             "mode": mode,
-            "reason_code": decision.get("reason_code"),
-            "binding": comparison,
+            "reason_code": reason_code,
+            "binding": item,
         },
     }
     return _validate_judgment(judgment, candidates)
+
+
+def _standard_fact_from_agent_result(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Turn the sidecar's retrieved standard value into a caliber ``real`` block."""
+    raw = str(result.get("standard_value") or "").strip()
+    if not raw:
+        return None
+    numbers = [number for number in numbers_in(raw) if isinstance(number, (int, float))]
+    distinct = {round(float(number), 9) for number in numbers}
+    return {
+        "raw_value": raw,
+        "numeric_value": float(numbers[0]) if len(distinct) == 1 else None,
+        "unit": None,
+        "operator": str(result.get("operator") or "eq"),
+        "discovery_method": "agent_retrieved",
+        "standard_no": result.get("standard_no"),
+    }
+
+
+def _open_judgment(
+    *,
+    reason: str,
+    reason_code: Any,
+    candidates: list[dict[str, Any]],
+    judge_source: str,
+    evidence: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Program and agent both declined to close: this is not a second judge."""
+    judgment = {
+        "status": "insufficient_context",
+        "reason": reason,
+        "evidence_candidate_keys": [
+            str(item.get("candidate_key") or "")
+            for item in (evidence or [])
+            if str(item.get("candidate_key") or "").strip()
+        ],
+        "missing_context_fields": [],
+        "deterministic_judge": {
+            "applied": False,
+            "mode": judge_source,
+            "reason_code": reason_code,
+        },
+    }
+    if evidence:
+        judgment["evidence"] = evidence
+    judgment = _validate_judgment(judgment, candidates)
+    apply_status_layer(
+        judgment,
+        build_status_layer(
+            verdict=judgment.get("status"),
+            judge_source=judge_source,
+            reason_code=reason_code,
+        ),
+    )
+    return judgment
 
 
 def _run_audit_judge_with_consistency(
@@ -1653,8 +1786,14 @@ def _run_audit_judge_with_consistency(
     judge_model: str,
     candidates: list[dict[str, Any]],
     sample_profile: dict[str, Any],
+    fetch_agent_evidence: Callable[[], dict[str, Any] | None] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Prefer unique table-claim comparison; fall back to Judge with a path trace."""
+    """Bind a table cell, close with caliber, or ask the agent for a standard fact.
+
+    Retrieval already happened. This step never calls the old LLM judge: a case
+    either closes under ``derive`` or stays open.
+    """
+    del judge_prompt, judge_model, sample_profile
     comparisons = list(judge_input.get("deterministic_comparisons") or [])
     execution = judge_input.get("table_claim_execution")
     reported = (
@@ -1696,122 +1835,178 @@ def _run_audit_judge_with_consistency(
         "reason_code": decision["reason_code"],
         "status": decision.get("status"),
     }
-    if decision.get("mode") in {
-        "programmatic_table",
-        "programmatic_formula",
-    } and decision.get("status") in {
-        "supported",
-        "mismatch",
-    }:
-        judgment = _judgment_from_table_decision(decision, candidates)
+
+    # C-05 is decided from the reported requirement alone: a clause that states
+    # no comparable limit leaves nothing for retrieval or the Judge to settle.
+    prefilter = derive_caliber_verdict(
+        reported,
+        None,
+        ["caliber_prefilter"],
+        project_name=project,
+    )
+    if prefilter["verdict"] == "out_of_scope":
+        judgment = _judgment_from_caliber(
+            prefilter,
+            {},
+            candidates,
+            mode=CALIBER_AUTHORITY,
+            reason_code="requirement_not_program_ready",
+        )
         apply_status_layer(
             judgment,
             build_status_layer(
                 verdict=judgment.get("status"),
-                judge_source=decision["mode"],
-                reason_code=decision.get("reason_code"),
+                judge_source=CALIBER_AUTHORITY,
+                reason_code="requirement_not_program_ready",
             ),
+        )
+        caliber_path = {**path, "caliber": "out_of_scope", "caliber_prefilter": True}
+        return judgment, {
+            "input": judge_input,
+            "output": judgment,
+            "table_claim_path": caliber_path,
+            "judge_source": CALIBER_AUTHORITY,
+        }
+
+    caliber_trace: dict[str, Any] = {"applied": False, "reason": "no_authoritative_comparison"}
+    if decision.get("mode") in {"programmatic_table", "programmatic_formula"}:
+        item = decision.get("comparison") if isinstance(decision.get("comparison"), dict) else {}
+        real = _caliber_standard_fact(item)
+        if real is None:
+            caliber_trace = {"applied": False, "reason": "standard_fact_unavailable"}
+        else:
+            derived = derive_caliber_verdict(
+                reported,
+                real,
+                [decision.get("reason_code")],
+                project_name=project,
+            )
+            caliber_trace = {
+                "applied": derived["verdict"] in CALIBER_CLOSING_VERDICTS,
+                "caliber_version": derived.get("caliber_version"),
+                "verdict": derived.get("verdict"),
+                "kind": derived.get("kind"),
+                "flags": derived.get("flags") or [],
+                "rules": (derived.get("derivation") or {}).get("rules") or [],
+                "legacy_decision_status": decision.get("status"),
+            }
+            if derived["verdict"] in CALIBER_CLOSING_VERDICTS:
+                judgment = _judgment_from_caliber(
+                    derived,
+                    item,
+                    candidates,
+                    mode=CALIBER_AUTHORITY,
+                    reason_code=decision.get("reason_code"),
+                )
+                apply_status_layer(
+                    judgment,
+                    build_status_layer(
+                        verdict=judgment.get("status"),
+                        judge_source=CALIBER_AUTHORITY,
+                        reason_code=decision.get("reason_code"),
+                    ),
+                )
+                return judgment, {
+                    "input": judge_input,
+                    "output": judgment,
+                    "table_claim_path": {**path, "caliber": caliber_trace},
+                    "judge_source": CALIBER_AUTHORITY,
+                }
+            caliber_trace["deferred_to_agent"] = True
+
+    path = {**path, "caliber": caliber_trace}
+    agent_body = fetch_agent_evidence() if fetch_agent_evidence is not None else None
+    agent_result = agent_body.get("result") if isinstance(agent_body, dict) else None
+    if isinstance(agent_result, dict):
+        real = _standard_fact_from_agent_result(agent_result)
+        if real is not None and not real.get("unit"):
+            real["unit"] = reported.get("unit")
+        derived = (
+            derive_caliber_verdict(
+                reported,
+                real,
+                ["agent_retrieved"],
+                project_name=project,
+            )
+            if real
+            else None
+        )
+        evidence = normalize_agent_evidence(
+            agent_result.get("evidence"),
+            standard_no=str(agent_result.get("standard_no") or ""),
+        )
+        evidence_candidates = [
+            item
+            for item in evidence
+            if isinstance(item, dict) and item.get("content_type")
+        ]
+        pool = candidates + evidence_candidates
+        if derived and derived["verdict"] in CALIBER_CLOSING_VERDICTS:
+            judgment = _judgment_from_caliber(
+                derived,
+                {"candidate_key": (evidence[0].get("candidate_key") if evidence else "")},
+                pool,
+                mode=CALIBER_AUTHORITY,
+                reason_code="agent_retrieved",
+            )
+            apply_status_layer(
+                judgment,
+                build_status_layer(
+                    verdict=judgment.get("status"),
+                    judge_source=CALIBER_AUTHORITY,
+                    reason_code="agent_retrieved",
+                ),
+            )
+            return judgment, {
+                "input": judge_input,
+                "output": judgment,
+                "table_claim_path": {
+                    **path,
+                    "caliber": {
+                        "applied": True,
+                        "source": "agent_retrieved",
+                        "verdict": derived.get("verdict"),
+                        "kind": derived.get("kind"),
+                        "rules": (derived.get("derivation") or {}).get("rules") or [],
+                    },
+                },
+                "judge_source": CALIBER_AUTHORITY,
+                "agent_audit": agent_body,
+            }
+        if derived is not None:
+            open_reason = str(
+                ((derived.get("derivation") or {}).get("comparison") or {}).get("reason")
+                or "agent 取到的标准事实仍无法按口径闭合，本条按依据不足处理。"
+            )
+        else:
+            open_reason = "agent 未返回可比较的标准值，本条按依据不足处理。"
+        judgment = _open_judgment(
+            reason=open_reason,
+            reason_code=decision.get("reason_code") or "no_authoritative_table_claim",
+            candidates=pool,
+            judge_source="agent_evidence",
+            evidence=evidence_candidates,
         )
         return judgment, {
             "input": judge_input,
             "output": judgment,
-            "table_claim_path": path,
-            "judge_source": decision["mode"],
+            "table_claim_path": {**path, "agent_evidence": True, "closed": False},
+            "judge_source": "agent_evidence",
+            "agent_audit": agent_body,
         }
 
-    judgment = _validate_judgment(
-        _call_model(judge_prompt, judge_input, model=judge_model),
-        candidates,
+    judgment = _open_judgment(
+        reason="程序未能对齐唯一标准格子，且未取到 agent 证据，本条按依据不足处理。",
+        reason_code=decision.get("reason_code") or "no_authoritative_table_claim",
+        candidates=candidates,
+        judge_source="unbound",
     )
-    path = {**path, "fallback_applied": True, "judge_source": "llm"}
-    trace: dict[str, Any] = {
+    return judgment, {
         "input": judge_input,
         "output": judgment,
-        "table_claim_path": path,
-        "judge_source": "fallback_llm",
+        "table_claim_path": {**path, "closed": False},
+        "judge_source": "unbound",
     }
-    consistency_issues = _collect_judgment_consistency_issues(judgment, sample_profile)
-    if not consistency_issues:
-        judgment["deterministic_judge"] = {
-            "applied": False,
-            "mode": "fallback_llm",
-            "reason_code": decision.get("reason_code"),
-        }
-        apply_status_layer(
-            judgment,
-            build_status_layer(
-                verdict=judgment.get("status"),
-                judge_source="fallback_llm",
-                reason_code=decision.get("reason_code"),
-            ),
-        )
-        return judgment, trace
-
-    previous = {
-        "status": judgment.get("status"),
-        "reason": judgment.get("reason"),
-        "missing_context_fields": list(judgment.get("missing_context_fields") or []),
-        "evidence_candidate_keys": list(judgment.get("evidence_candidate_keys") or []),
-        "validation_issues": list(judgment.get("validation_issues") or []),
-        "comparison": judgment.get("comparison"),
-    }
-    feedback_input = {
-        **judge_input,
-        "validation_feedback": {
-            "previous_judgment": previous,
-            "issues": consistency_issues,
-            "repair_instructions": [
-                "For numeric/count cases, repair comparison first; status must agree with its deterministic relation.",
-                "先前输出未通过程序一致性校验，请重新输出完整 JSON。",
-                "reason 必须与 status 一致；禁止误判/更正/改判等自我修正话术。",
-                "missing_context_fields 不得列入 sample_profile 已给出的信息"
-                "（含 from_report 与 from_model_decode）。",
-                "若结论为 supported 或 mismatch，必须填写有效的 evidence_candidate_keys。",
-            ],
-        },
-    }
-    judgment = _validate_judgment(
-        _call_model(judge_prompt, feedback_input, model=judge_model),
-        candidates,
-    )
-    remaining = _collect_judgment_consistency_issues(judgment, sample_profile)
-    issues = list(judgment.get("validation_issues") or [])
-    issues.append("rejudge triggered: " + "; ".join(consistency_issues))
-    if remaining:
-        issues.append("rejudge still inconsistent: " + "; ".join(remaining))
-        judgment["status"] = "insufficient_context"
-        judgment["reason"] = "二次判定仍未通过一致性校验，本条暂按依据不足处理。"
-        judgment["evidence_candidate_keys"] = []
-        judgment["evidence"] = []
-        judgment["missing_context_fields"] = []
-    judgment["validation_issues"] = issues
-    judgment["rejudge"] = {
-        "triggered": True,
-        "issues": consistency_issues,
-        "previous_judgment": previous,
-        "remaining_issues": remaining,
-    }
-    judgment["deterministic_judge"] = {
-        "applied": False,
-        "mode": "fallback_llm_rejudge",
-        "reason_code": decision.get("reason_code"),
-    }
-    apply_status_layer(
-        judgment,
-        build_status_layer(
-            verdict=judgment.get("status"),
-            judge_source="fallback_llm_rejudge",
-            reason_code=decision.get("reason_code"),
-        ),
-    )
-    trace["rejudge_input"] = feedback_input
-    trace["output"] = judgment
-    trace["table_claim_path"] = {
-        **path,
-        "rejudge": True,
-        "remaining_issues": remaining,
-    }
-    return judgment, trace
 
 
 def _resolve_final_delivery_quotas(raw: dict[str, Any]) -> tuple[int, int]:
@@ -2174,11 +2369,14 @@ def _audit_one_case(
     aggregate_continuation_tables: bool,
     expand_references: bool,
     retrieval_lock: threading.Lock,
+    agent_sidecar_url: str = "",
+    agent_token: str = "",
+    agent_retries: int = 2,
     report_markdown: str = "",
     recovery_mode: str = "off",
     recovery_semaphore: threading.Semaphore | None = None,
 ) -> dict[str, Any]:
-    """Run planner → retrieval → judge for one audit unit."""
+    """Retrieve, close with caliber, or ask the agent for a standard fact."""
     fresh = {"test_item": unit["test_item"], "requirement": unit["requirement"]}
     sample_profile = dict(sample_profile)
     deterministic_applicability = resolve_applicability(
@@ -2222,6 +2420,52 @@ def _audit_one_case(
         },
         "requirement_extraction": compact_extraction,
     }
+    prefilter = derive_caliber_verdict(
+        runtime_case["reported_requirement"],
+        None,
+        ["caliber_prefilter"],
+        project_name=str(runtime_case["test_item"].get("project_name") or ""),
+    )
+    if prefilter["verdict"] == "out_of_scope":
+        judgment = _judgment_from_caliber(
+            prefilter,
+            {},
+            [],
+            mode=CALIBER_AUTHORITY,
+            reason_code="requirement_not_program_ready",
+        )
+        apply_status_layer(
+            judgment,
+            build_status_layer(
+                verdict=judgment.get("status"),
+                judge_source=CALIBER_AUTHORITY,
+                reason_code="requirement_not_program_ready",
+            ),
+        )
+        return {
+            "case_id": unit["case_id"],
+            **runtime_case,
+            "queries": {},
+            "candidate_counts": {"table": 0, "section": 0},
+            "judgment": judgment,
+            "status_layer": layer_from_judgment(
+                judgment, judge_source=CALIBER_AUTHORITY
+            ),
+            "workflow_trace": {
+                "audit_judge": {
+                    "input": {
+                        "reported_requirement": runtime_case["reported_requirement"],
+                        "test_item": runtime_case["test_item"],
+                    },
+                    "output": judgment,
+                    "table_claim_path": {
+                        "caliber": "out_of_scope",
+                        "caliber_prefilter": True,
+                    },
+                    "judge_source": CALIBER_AUTHORITY,
+                }
+            },
+        }
     peer_report_context = _build_peer_report_context(
         extracted,
         fresh["test_item"],
@@ -2318,27 +2562,43 @@ def _audit_one_case(
     }
     judge_input = raw_judge_input
     compression_trace: dict[str, Any] = {
-        "mode": evidence_compression_mode,
+        "mode": "off",
         "applied": False,
         "fallback": False,
         "additional_model_calls": 0,
+        "skipped": "llm_judge_removed",
     }
-    if evidence_compression_mode == "active":
-        judge_input, compression_trace = compress_judge_input(
-            judge_input,
-            candidates,
-            call_model=lambda prompt, payload: _call_model(
-                prompt,
-                payload,
-                model=judge_model,
-            ),
-        )
+
+    def fetch_agent_evidence() -> dict[str, Any] | None:
+        if not agent_sidecar_url:
+            return None
+        payload = {
+            "case_id": unit["case_id"],
+            "sample_context": runtime_case["sample_context"],
+            "test_item": runtime_case["test_item"],
+            "reported_requirement": runtime_case["reported_requirement"],
+            "file_scope": list(evidence_file_ids or []),
+            "retrieved_candidates": _retrieved_pool_for_agent(candidates),
+        }
+        last_error: str | None = None
+        for attempt in range(max(1, agent_retries + 1)):
+            try:
+                return _call_agent_sidecar(
+                    agent_sidecar_url, payload, token=agent_token
+                )
+            except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+                last_error = str(exc)
+                if attempt < agent_retries:
+                    time.sleep(min(30.0, 2.0 * (2**attempt)))
+        return {"ok": False, "error": last_error, "result": {}}
+
     judgment, judge_trace = _run_audit_judge_with_consistency(
         judge_prompt=judge_prompt,
         judge_input=judge_input,
         judge_model=judge_model,
         candidates=candidates,
         sample_profile=sample_profile,
+        fetch_agent_evidence=fetch_agent_evidence,
     )
     judge_trace["evidence_compression"] = compression_trace
     judge_trace["requirement_extraction"] = compact_extraction
@@ -2358,7 +2618,8 @@ def _audit_one_case(
     )
     recovery_trace: dict[str, Any] | None = None
     if (
-        recovery_mode in {"shadow", "active"}
+        not agent_sidecar_url
+        and recovery_mode in {"shadow", "active"}
         and recovery_decision.get("action") == "agent_recovery"
     ):
         immutable_recovery_state = {
@@ -2589,6 +2850,11 @@ def _audit_one_case(
                 },
             },
             "audit_judge": judge_trace,
+            **(
+                {"agent_audit": judge_trace["agent_audit"]}
+                if isinstance(judge_trace.get("agent_audit"), dict)
+                else {}
+            ),
         },
     }
     return entry
@@ -2853,20 +3119,20 @@ def main() -> None:
         choices=("workflow", "agent"),
         default=str(os.environ.get("AUDIT_JUDGE_MODE") or "workflow").strip().lower(),
         help=(
-            "per-case judging backend: 'workflow' (production planner+retrieval+judge) "
-            "or 'agent' (Pi agent sidecar; extraction stays on this pipeline)."
+            "deprecated: routing is always retrieve → caliber → agent evidence. "
+            "kept so older jobs still parse."
         ),
     )
     parser.add_argument(
         "--agent-sidecar-url",
         default=str(os.environ.get("AGENT_SIDECAR_URL") or "http://127.0.0.1:8787"),
-        help="Pi agent sidecar base URL (judge-mode=agent).",
+        help="Pi agent sidecar; used only when caliber cannot close a case.",
     )
     parser.add_argument(
         "--agent-retries",
         type=int,
         default=int(os.environ.get("AGENT_CASE_RETRIES") or 2),
-        help="retries per case on transient sidecar failures (judge-mode=agent).",
+        help="retries per case on transient sidecar failures.",
     )
     args = parser.parse_args()
 
@@ -2889,47 +3155,15 @@ def main() -> None:
     )
     configured_model = str(profile["model_config"].get("model") or "deepseek-v4-flash")
     judge_model = args.judge_model or configured_model
-    # Workflow mode judges through llm.py (DeepSeek); agent mode judges in the
-    # sidecar, so any OpenAI-compatible extraction model is acceptable there.
-    if args.judge_mode == "workflow" and not judge_model.lower().startswith("deepseek"):
-        raise ValueError("judge model must be a DeepSeek model")
     judge_concurrency = _resolve_judge_concurrency(
         args.judge_concurrency,
         profile.get("model_config") if isinstance(profile.get("model_config"), dict) else {},
     )
-    if args.judge_mode == "agent":
-        # Fail fast before extraction LLM calls: a dead sidecar should kill the
-        # job with a clear cause, not produce an all-agent_error report.
-        _agent_preflight(
-            args.agent_sidecar_url,
-            token=str(os.environ.get("AGENT_SIDECAR_TOKEN") or ""),
-        )
-        # Agent judging goes through the sidecar, which now runs up to
-        # AGENT_CONCURRENCY sessions in parallel. Match that here unless the
-        # caller set an explicit CLI/env value.
-        env_conc = str(
-            os.environ.get("AUDIT_JUDGE_CONCURRENCY")
-            or os.environ.get("AGENT_CONCURRENCY")
-            or ""
-        ).strip()
-        if args.judge_concurrency is not None:
-            judge_concurrency = min(
-                max(int(args.judge_concurrency), 1), MAX_JUDGE_CONCURRENCY
-            )
-        elif env_conc:
-            try:
-                judge_concurrency = min(max(int(env_conc), 1), MAX_JUDGE_CONCURRENCY)
-            except ValueError as exc:
-                raise ValueError(
-                    f"AUDIT_JUDGE_CONCURRENCY/AGENT_CONCURRENCY must be an integer, got {env_conc!r}"
-                ) from exc
-        else:
-            judge_concurrency = 5
-        print(
-            f"judge_mode=agent sidecar={args.agent_sidecar_url} "
-            f"concurrency={judge_concurrency} retries={args.agent_retries}",
-            flush=True,
-        )
+    print(
+        f"pipeline=retrieve+caliber+agent sidecar={args.agent_sidecar_url} "
+        f"concurrency={judge_concurrency} retries={args.agent_retries}",
+        flush=True,
+    )
     retrieval_config = _retrieval_runtime_config(profile)
     peer_context_rules = _resolve_peer_context_rules(profile["retrieval_config"])
     top_k = int(retrieval_config["top_k"])
@@ -3064,18 +3298,6 @@ def main() -> None:
                 case_label=case_label[:120],
                 message=f"判定中 {done_before + 1}/{total_units}（并发 {judge_concurrency}）",
             )
-        if args.judge_mode == "agent":
-            entry = _audit_one_case_agent(
-                unit,
-                sample_profile=sample_profile,
-                evidence_file_ids=evidence_file_ids,
-                sidecar_url=args.agent_sidecar_url,
-                agent_token=str(os.environ.get("AGENT_SIDECAR_TOKEN") or ""),
-                agent_model=str(os.environ.get("PI_MODEL") or ""),
-                retries=args.agent_retries,
-                report_markdown=markdown,
-            )
-        else:
             entry = _audit_one_case(
                 unit,
                 sample_profile=sample_profile,
@@ -3100,6 +3322,9 @@ def main() -> None:
                 aggregate_continuation_tables=aggregate_continuation_tables,
                 expand_references=expand_references,
                 retrieval_lock=retrieval_lock,
+                agent_sidecar_url=args.agent_sidecar_url,
+                agent_token=str(os.environ.get("AGENT_SIDECAR_TOKEN") or ""),
+                agent_retries=args.agent_retries,
                 report_markdown=markdown,
                 recovery_mode=args.recovery_mode,
                 recovery_semaphore=recovery_semaphore,
@@ -3220,9 +3445,9 @@ def main() -> None:
             "version": few_shot_rules.get("version"),
             "item_ids": [item.get("id") for item in few_shot_rules.get("items", [])],
         },
-        "judge_provider": "deepseek" if args.judge_mode == "workflow" else "pi-agent-sidecar",
+        "judge_provider": "caliber+pi-agent",
         "judge_model": judge_model,
-        "judge_mode": args.judge_mode,
+        "judge_mode": "retrieve_caliber_agent",
         "judge_concurrency": judge_concurrency,
         "workflow_definition": {
             "version": 1,
@@ -3233,15 +3458,9 @@ def main() -> None:
             "provider_config": {
                 **llm.public_config(model=judge_model),
                 "judge_concurrency": judge_concurrency,
-                "judge_mode": args.judge_mode,
-                "judge_provider": (
-                    "deepseek" if args.judge_mode == "workflow" else "pi-agent-sidecar"
-                ),
-                **(
-                    {"agent_sidecar_url": args.agent_sidecar_url}
-                    if args.judge_mode == "agent"
-                    else {}
-                ),
+                "judge_mode": "retrieve_caliber_agent",
+                "judge_provider": "caliber+pi-agent",
+                "agent_sidecar_url": args.agent_sidecar_url,
             },
             "retrieval_config": {
                 "backend": "hybrid_search",

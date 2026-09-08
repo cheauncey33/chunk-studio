@@ -191,12 +191,12 @@ RUN_IN_PROCESS_WORKER = os.environ.get(
     "0" if _postgres_profile else "1",
 ).strip().casefold() in {"1", "true", "yes", "on"}
 
-# Audit judge backend: "workflow" (production planner+retrieval+judge) or
-# "agent" (Pi agent sidecar; extraction still runs on the production pipeline).
-# The sidecar itself runs separately: services/pi-audit-sidecar (npm start).
+# Single pipeline: retrieve → caliber → Pi agent evidence if the cell did not close.
+# The env name is kept so older deployments still parse; it no longer switches
+# away from retrieval.
 AUDIT_JUDGE_MODE = os.environ.get(
     "CHUNK_STUDIO_AUDIT_JUDGE_MODE",
-    os.environ.get("AUDIT_JUDGE_MODE", "agent"),
+    os.environ.get("AUDIT_JUDGE_MODE", "workflow"),
 ).strip().casefold()
 if AUDIT_JUDGE_MODE not in {"workflow", "agent"}:
     AUDIT_JUDGE_MODE = "workflow"

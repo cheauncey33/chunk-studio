@@ -10,17 +10,24 @@ from collections import Counter
 from typing import Any
 
 
-PROGRAMMATIC_AUTHORITIES = ("programmatic_table", "programmatic_formula")
+PROGRAMMATIC_AUTHORITIES = (
+    "programmatic_table",
+    "programmatic_formula",
+    "programmatic_caliber",
+)
 MODEL_AUTHORITIES = ("model",)
 KNOWN_AUTHORITIES = PROGRAMMATIC_AUTHORITIES + MODEL_AUTHORITIES + ("unknown",)
 
 _SOURCE_TO_AUTHORITY = {
     "programmatic_table": "programmatic_table",
     "programmatic_formula": "programmatic_formula",
+    "programmatic_caliber": "programmatic_caliber",
     "fallback_llm": "model",
     "fallback_llm_rejudge": "model",
     "llm": "model",
     "model": "model",
+    "agent_evidence": "model",
+    "unbound": "unknown",
     "agent": "model",
     "agent_error": "model",
 }
@@ -32,9 +39,13 @@ _REASON_TO_BIND_STATE = {
     "no_authoritative_table_claim": "unbound",
     "derived_sum_incomplete": "unbound",
     "requirement_not_program_ready": "not_ready",
+    "agent_retrieved": "unique",
 }
 
 CLOSED_VERDICTS = {"supported", "mismatch"}
+# C-05 rules a clause out of standard-value scope from the reported text alone,
+# which is as final as a closed comparison. The table paths can never reach it.
+_CALIBER_CLOSED_VERDICTS = CLOSED_VERDICTS | {"not_audited"}
 
 
 def normalize_authority(source: Any) -> str:
@@ -48,6 +59,8 @@ def bind_state_for_reason(reason_code: Any) -> str:
 
 
 def is_closed_authority(authority: str, verdict: str) -> bool:
+    if authority == "programmatic_caliber":
+        return verdict in _CALIBER_CLOSED_VERDICTS
     return authority in PROGRAMMATIC_AUTHORITIES and verdict in CLOSED_VERDICTS
 
 

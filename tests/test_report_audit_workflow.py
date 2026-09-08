@@ -500,6 +500,38 @@ def test_compact_candidate_attaches_standard_priority() -> None:
     assert compact["business_metadata"]["standard_no"] == "Q/GDW 12126.4-2024"
 
 
+def test_retrieved_pool_for_agent_keeps_chunk_ids_without_full_text() -> None:
+    pool = workflow._retrieved_pool_for_agent(
+        [
+            {
+                "chunk_id": "chk-1",
+                "candidate_key": "c01",
+                "content_type": "table",
+                "business_metadata": {"standard_no": "GB/T 1094.1-2013", "table_no": "1"},
+                "table_row_binding": {"state": "matched"},
+                "text": "<table>很大</table>",
+            },
+            {
+                "candidate_key": "c02",
+                "content_type": "section",
+                "business_metadata": {},
+                "text": "无 id 的片段不交给 agent",
+            },
+        ]
+    )
+    assert pool == [
+        {
+            "chunk_id": "chk-1",
+            "candidate_key": "c01",
+            "content_type": "table",
+            "standard_no": "GB/T 1094.1-2013",
+            "table_no": "1",
+            "section": None,
+            "bind_state": "matched",
+        }
+    ]
+
+
 def test_judge_validation_maps_legacy_status_and_builds_locators() -> None:
     candidates = [_candidate("c01"), _candidate("c02", text="其他证据")]
 
@@ -916,25 +948,9 @@ def test_consistency_keeps_clean_judgment() -> None:
     assert issues == []
 
 
-def test_run_audit_judge_rejudeges_on_consistency_failure(monkeypatch) -> None:
-    candidates = [_candidate("c01")]
-    calls: list[dict] = []
-
+def test_run_audit_judge_does_not_call_llm_on_consistency_shaped_input(monkeypatch) -> None:
     def fake_call_model(prompt: str, payload: dict, *, model: str):
-        calls.append(payload)
-        if "validation_feedback" in payload:
-            return {
-                "status": "supported",
-                "reason": "报告要求与标准一致。",
-                "evidence_candidate_keys": ["c01"],
-                "missing_context_fields": [],
-            }
-        return {
-            "status": "insufficient_context",
-            "reason": "与报告要求一致，但缺少额定电压Ur。",
-            "evidence_candidate_keys": [],
-            "missing_context_fields": ["额定电压Ur"],
-        }
+        raise AssertionError("the LLM judge is not part of the pipeline")
 
     monkeypatch.setattr(workflow, "_call_model", fake_call_model)
     judgment, trace = workflow._run_audit_judge_with_consistency(
@@ -944,16 +960,12 @@ def test_run_audit_judge_rejudeges_on_consistency_failure(monkeypatch) -> None:
             "candidates": [],
         },
         judge_model="deepseek-chat",
-        candidates=candidates,
+        candidates=[_candidate("c01")],
         sample_profile=_sample_profile_fixture(),
     )
 
-    assert len(calls) == 2
-    assert "validation_feedback" in calls[1]
-    assert judgment["status"] == "supported"
-    assert judgment["rejudge"]["triggered"] is True
-    assert "rejudge_input" in trace
-    assert any("rejudge triggered" in issue for issue in judgment["validation_issues"])
+    assert judgment["status"] == "insufficient_context"
+    assert trace["judge_source"] == "unbound"
 
 
 def test_run_audit_judge_applies_retrieved_deterministic_conflict_without_rejudge(
@@ -976,6 +988,8 @@ def test_run_audit_judge_applies_retrieved_deterministic_conflict_without_rejudg
     judgment, _trace = workflow._run_audit_judge_with_consistency(
         judge_prompt="judge",
         judge_input={
+            "reported_requirement": {"text": "持续时间：25", "unit": None},
+            "test_item": {"project_name": "持续时间"},
             "deterministic_comparisons": [{
                 "source": "generic_bound_table_claim",
                 "candidate_key": "c01",
@@ -984,11 +998,28 @@ def test_run_audit_judge_applies_retrieved_deterministic_conflict_without_rejudg
                 "standard_value": "30",
                 "relation": "different",
                 "conclusion": "conflicts",
+                "table_row_binding": {"state": "matched"},
                 "trace": {
                     "report_claim": {"property": {"source_text": "持续时间"}},
-                    "evidence_claim": {"property": {"source_text": "持续时间"}},
+                    "evidence_claim": {
+                        "property": {"source_text": "持续时间"},
+                        "value": {
+                            "kind": "quantity",
+                            "raw": "30",
+                            "normalized": "30",
+                            "numbers": [30.0],
+                            "unit": None,
+                            "operator": "eq",
+                        },
+                    },
                 },
             }],
+            "table_claim_execution": {
+                "mode": "programmatic_table",
+                "reason_code": "unique_bound_comparable",
+                "status": "mismatch",
+                "nodes": [],
+            },
         },
         judge_model="deepseek-v4-flash",
         candidates=[candidate],
@@ -997,11 +1028,13 @@ def test_run_audit_judge_applies_retrieved_deterministic_conflict_without_rejudg
 
     assert len(calls) == 0
     assert judgment["status"] == "mismatch"
+    assert judgment["kind"] == "numeric_looser"
+    assert judgment["caliber"]["rules"] == ["C-00", "kind_priority"]
     assert judgment["evidence_candidate_keys"] == ["c01"]
     assert judgment["deterministic_judge"]["applied"] is True
-    assert _trace["judge_source"] == "programmatic_table"
+    assert _trace["judge_source"] == "programmatic_caliber"
     assert _trace["table_claim_path"]["mode"] == "programmatic_table"
-    assert judgment["authority"] == "programmatic_table"
+    assert judgment["authority"] == "programmatic_caliber"
     assert judgment["authority_closed"] is True
     assert judgment["bind_state"] == "unique"
 
@@ -1017,6 +1050,8 @@ def test_run_audit_judge_applies_derived_sum_without_llm(monkeypatch) -> None:
     judgment, trace = workflow._run_audit_judge_with_consistency(
         judge_prompt="judge",
         judge_input={
+            "reported_requirement": {"text": "总损耗：3.985", "unit": "kW"},
+            "test_item": {"project_name": "总损耗"},
             "deterministic_comparisons": [{
                 "source": "generic_derived_sum",
                 "candidate_key": "c01",
@@ -1030,6 +1065,20 @@ def test_run_audit_judge_applies_derived_sum_without_llm(monkeypatch) -> None:
                 "status": "supported",
                 "target_column": "空载损耗P0(kW) + 负载损耗Pk(kW)",
                 "unit_normalize": {"base": "kw", "left_unit": "kw", "right_unit": "kw"},
+                "trace": {
+                    "report_claim": {"property": {"source_text": "总损耗"}},
+                    "evidence_claim": {
+                        "property": {"source_text": "总损耗"},
+                        "value": {
+                            "kind": "quantity",
+                            "raw": "3.985",
+                            "normalized": "3.985",
+                            "numbers": [3.985],
+                            "unit": "kW",
+                            "operator": "eq",
+                        },
+                    },
+                },
             }],
             "table_claim_execution": {
                 "mode": "programmatic_formula",
@@ -1046,26 +1095,19 @@ def test_run_audit_judge_applies_derived_sum_without_llm(monkeypatch) -> None:
     assert calls == []
     assert judgment["status"] == "supported"
     assert judgment["evidence_candidate_keys"] == ["c01", "c02"]
-    assert judgment["deterministic_judge"]["mode"] == "programmatic_formula"
-    assert "P0" in judgment["reason"] or "派生" in judgment["reason"]
-    assert trace["judge_source"] == "programmatic_formula"
+    assert judgment["kind"] == "formula_aggregate"
+    assert judgment["deterministic_judge"]["mode"] == "programmatic_caliber"
+    assert "P0" in judgment["reason"] or "加和" in judgment["reason"]
+    assert trace["judge_source"] == "programmatic_caliber"
     assert trace["table_claim_path"]["mode"] == "programmatic_formula"
-    assert judgment["authority"] == "programmatic_formula"
+    assert judgment["authority"] == "programmatic_caliber"
     assert judgment["authority_closed"] is True
     assert judgment["bind_state"] == "unique"
 
 
-def test_run_audit_judge_falls_back_to_llm_when_no_table_claim(monkeypatch) -> None:
-    calls = []
-
+def test_run_audit_judge_stays_open_when_no_table_claim(monkeypatch) -> None:
     def fake_call_model(prompt: str, payload: dict, *, model: str):
-        calls.append(payload)
-        return {
-            "status": "not_audited",
-            "reason": "候选中没有可绑定的表格限值。",
-            "evidence_candidate_keys": [],
-            "missing_context_fields": [],
-        }
+        raise AssertionError("the LLM judge is not part of the pipeline")
 
     monkeypatch.setattr(workflow, "_call_model", fake_call_model)
     judgment, trace = workflow._run_audit_judge_with_consistency(
@@ -1080,52 +1122,76 @@ def test_run_audit_judge_falls_back_to_llm_when_no_table_claim(monkeypatch) -> N
         sample_profile=_sample_profile_fixture(),
     )
 
-    assert len(calls) == 1
-    assert judgment["status"] == "not_audited"
-    assert trace["judge_source"] == "fallback_llm"
+    assert judgment["status"] == "insufficient_context"
+    assert trace["judge_source"] == "unbound"
     assert judgment["deterministic_judge"]["applied"] is False
-    assert trace["table_claim_path"]["fallback_applied"] is True
-    assert judgment["authority"] == "model"
     assert judgment["authority_closed"] is False
-    assert judgment["bind_state"] == "unbound"
 
 
-def test_run_audit_judge_downgrades_when_rejudge_remains_inconsistent(
+def test_run_audit_judge_closes_from_agent_standard_fact(monkeypatch) -> None:
+    def fake_call_model(prompt: str, payload: dict, *, model: str):
+        raise AssertionError("agent evidence is not an LLM judge call")
+
+    monkeypatch.setattr(workflow, "_call_model", fake_call_model)
+
+    def fetch_agent_evidence():
+        return {
+            "ok": True,
+            "result": {
+                "standard_value": "75 kV",
+                "standard_no": "GB/T 1094.3-2017",
+                "evidence": [{"candidate_key": "c01", "content_type": "table", "text": "雷电冲击 75 kV"}],
+            },
+        }
+
+    judgment, trace = workflow._run_audit_judge_with_consistency(
+        judge_prompt="judge",
+        judge_input={
+            "reported_requirement": {"text": "冲击电压: 75 kV", "unit": "kV"},
+            "test_item": {"project_name": "雷电冲击"},
+            "deterministic_comparisons": [],
+        },
+        judge_model="deepseek-v4-flash",
+        candidates=[_candidate("c01")],
+        sample_profile=_sample_profile_fixture(),
+        fetch_agent_evidence=fetch_agent_evidence,
+    )
+
+    assert judgment["status"] == "supported"
+    assert judgment["verdict"] == "match"
+    assert trace["judge_source"] == "programmatic_caliber"
+    assert trace["table_claim_path"]["caliber"]["source"] == "agent_retrieved"
+    assert "agent_audit" in trace
+
+
+def test_run_audit_judge_rules_qualitative_clause_out_of_scope_without_llm(
     monkeypatch,
 ) -> None:
-    candidates = [_candidate("c01")]
-
     def fake_call_model(prompt: str, payload: dict, *, model: str):
-        return {
-            "status": "supported",
-            "reason": "报告要求与标准冲突。",
-            "evidence_candidate_keys": ["c01"],
-            "missing_context_fields": [],
-        }
+        raise AssertionError("a qualitative clause must not reach the judge model")
 
     monkeypatch.setattr(workflow, "_call_model", fake_call_model)
     judgment, trace = workflow._run_audit_judge_with_consistency(
         judge_prompt="judge",
         judge_input={
-            "sample_profile": _sample_profile_fixture(),
-            "candidates": [],
+            "reported_requirement": {"text": "油箱及所有附件应无渗漏油现象", "unit": None},
+            "test_item": {"project_name": "外观检查"},
+            "deterministic_comparisons": [],
+            "table_claim_execution": {"nodes": [], "attempts": []},
         },
-        judge_model="deepseek-chat",
-        candidates=candidates,
+        judge_model="deepseek-v4-flash",
+        candidates=[_candidate("c01")],
         sample_profile=_sample_profile_fixture(),
     )
 
-    assert judgment["status"] == "insufficient_context"
-    assert judgment["reason"] == "二次判定仍未通过一致性校验，本条暂按依据不足处理。"
+    assert judgment["status"] == "not_audited"
+    assert judgment["verdict"] == "out_of_scope"
+    assert judgment["caliber"]["rules"] == ["C-05"]
     assert judgment["evidence_candidate_keys"] == []
-    assert judgment["evidence"] == []
-    assert judgment["missing_context_fields"] == []
-    assert judgment["rejudge"]["remaining_issues"]
-    assert trace["output"] == judgment
-    assert any(
-        "rejudge still inconsistent" in issue
-        for issue in judgment["validation_issues"]
-    )
+    assert trace["judge_source"] == "programmatic_caliber"
+    assert trace["table_claim_path"]["caliber_prefilter"] is True
+    assert judgment["authority"] == "programmatic_caliber"
+    assert judgment["authority_closed"] is True
 
 
 def test_retrieve_hybrid_candidates_maps_hits_and_passes_scope(monkeypatch) -> None:

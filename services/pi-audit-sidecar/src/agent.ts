@@ -31,6 +31,8 @@ export type AgentCaseInput = {
 	reported_requirement?: Record<string, unknown> | null;
 	/** Default file_ids for search_standards (assistant-bound KB scope); [] = unrestricted. */
 	file_scope?: string[] | null;
+	/** First-recall hits. When present the agent reads these instead of searching again. */
+	retrieved_candidates?: Array<Record<string, unknown>> | null;
 	tool_budget?: number | null;
 };
 
@@ -136,6 +138,21 @@ async function getModel(): Promise<{ runtime: any; model: any; modelId: string }
 
 function casePrompt(c: AgentCaseInput): string {
 	const ctx = c.sample_context ?? {};
+	const retrieved = Array.isArray(c.retrieved_candidates) ? c.retrieved_candidates : [];
+	const retrievedBlock =
+		retrieved.length > 0
+			? [
+					``,
+					`## 已召回的标准片段（禁止再 search_standards）`,
+					`工作流已经检索过标准库，下面是交给你的命中。用 read_chunk 读这些 chunk_id 的全文，取出适用限值。`,
+					`不要再调用 search_standards。读完仍取不到可比较的标准值，就 unevaluable。`,
+					JSON.stringify(retrieved, null, 2),
+				].join("\n")
+			: "";
+	const closer =
+		retrieved.length > 0
+			? `请从已召回片段中核实该声称值对应的标准限值，并按任务定义给出的 JSON 格式输出。`
+			: `请检索标准知识库，核实该声称值是否与适用标准的限值一致，并按任务定义给出的 JSON 格式输出判定。`;
 	return [
 		`请审查以下检测报告标准值。`,
 		``,
@@ -149,8 +166,9 @@ function casePrompt(c: AgentCaseInput): string {
 		``,
 		`## 报告声称值`,
 		JSON.stringify(c.reported_requirement ?? {}, null, 2),
+		retrievedBlock,
 		``,
-		`请检索标准知识库，核实该声称值是否与适用标准的限值一致，并按任务定义给出的 JSON 格式输出判定。`,
+		closer,
 	].join("\n");
 }
 
@@ -255,7 +273,10 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 	if (typeof input.tool_budget === "number" && input.tool_budget > 0) {
 		toolCallBudget = Math.floor(input.tool_budget);
 	}
-	const tools = createAuditTools(input.file_scope);
+	const searchEnabled = !(
+		Array.isArray(input.retrieved_candidates) && input.retrieved_candidates.length > 0
+	);
+	const tools = createAuditTools(input.file_scope, { searchEnabled });
 
 	const trace: any[] = [];
 	let finalText = "";
@@ -268,7 +289,7 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 	const loader = new DefaultResourceLoader({
 		cwd: process.cwd(),
 		agentDir: join(process.env.HOME ?? process.env.USERPROFILE ?? ".", ".pi", "agent"),
-		systemPromptOverride: () => systemPrompt(),
+		systemPromptOverride: () => systemPrompt({ searchEnabled }),
 		appendSystemPromptOverride: () => [],
 		extensionFactories: [
 			// 硬预算：超过上限即阻止并让模型直接收尾出判定（省 token/时间）。
@@ -348,9 +369,12 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 		try {
 			await withTimeout(
 				session.prompt(
-					`你给出了 unevaluable + standard_not_found，但本会话从未用 read_chunk 读取任何命中片段的完整原文。` +
-						`search_standards 只返回截断预览，预览里没有不等于条款不存在。` +
-						`请对最相关的命中执行 read_chunk 核实原文后重新输出最终 JSON 判定；若 read 后仍无法定位条款，可维持 unevaluable，但 reasoning 须列出已读片段与已尝试的检索式。`,
+					searchEnabled
+						? `你给出了 unevaluable + standard_not_found，但本会话从未用 read_chunk 读取任何命中片段的完整原文。` +
+							`search_standards 只返回截断预览，预览里没有不等于条款不存在。` +
+							`请对最相关的命中执行 read_chunk 核实原文后重新输出最终 JSON 判定；若 read 后仍无法定位条款，可维持 unevaluable，但 reasoning 须列出已读片段与已尝试的检索式。`
+						: `你给出了 unevaluable + standard_not_found，但本会话从未用 read_chunk 读取任何已召回片段的完整原文。` +
+							`请对任务里给出的 chunk_id 执行 read_chunk 核实原文后重新输出最终 JSON 判定；若 read 后仍无法定位条款，可维持 unevaluable，但 reasoning 须列出已读片段。禁止再搜索。`,
 				),
 				120000,
 				"gate re-prompt timeout",

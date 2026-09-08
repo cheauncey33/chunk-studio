@@ -1029,6 +1029,31 @@ def _bound_tightness(report_value: float, standard_value: float, operator: str) 
     return "equal" if equal else "different"
 
 
+def plain_text(value: Any) -> str:
+    """Public primitive: strip markup and collapse whitespace."""
+    return _plain(value)
+
+
+def numbers_in(value: Any) -> list[float]:
+    """Public primitive: every number in one statement, in reading order."""
+    return _numbers(value)
+
+
+def comparator_of(text: Any) -> str:
+    """Public primitive: the comparator implied by one statement."""
+    return _operator(text)
+
+
+def operator_direction(operator: str) -> str | None:
+    """Public primitive: bound direction implied by one comparator."""
+    return _operator_direction(operator)
+
+
+def bound_tightness(report_value: float, standard_value: float, operator: str) -> str:
+    """Public primitive: how a reported bound sits against a standard bound."""
+    return _bound_tightness(report_value, standard_value, operator)
+
+
 def compare_claims(report_claim: dict[str, Any], evidence_claim: dict[str, Any]) -> dict[str, Any]:
     """Compare two already-bound claims using generic value semantics."""
     left = report_claim.get("value") or {}
