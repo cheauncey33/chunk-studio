@@ -112,7 +112,7 @@ def _json_object(value: Any) -> dict[str, Any]:
 
 def _load_chunk_for_evidence(chunk_id: str) -> dict[str, Any] | None:
     cid = str(chunk_id or "").strip()
-    if not cid:
+    if not cid or "placeholder" in cid:
         return None
     try:
         repository = _content_repository()
@@ -126,56 +126,18 @@ def _load_chunk_for_evidence(chunk_id: str) -> dict[str, Any] | None:
         return None
 
 
-def _chunk_row_dict(row: Any) -> dict[str, Any]:
-    return dict(row) if row is not None and not isinstance(row, dict) else dict(row or {})
-
-
-def _pick_hydrated_chunk(rows: list[Any]) -> dict[str, Any] | None:
-    parsed = [_chunk_row_dict(row) for row in rows if row is not None]
-    if not parsed:
-        return None
-    with_table = [row for row in parsed if "<table" in str(row.get("text") or "").lower()]
-    pool = with_table or parsed
-    return max(pool, key=lambda row: len(str(row.get("text") or "")))
-
-
-def _load_chunk_for_locator(
-    *,
-    standard_no: str = "",
-    table_no: str = "",
-    section: str = "",
-) -> dict[str, Any] | None:
-    """Best-effort lookup when the agent cited a table/clause but omitted chunk_id."""
-    standard_no = str(standard_no or "").strip()
-    table_no = str(table_no or "").strip()
-    section = str(section or "").strip()
-    if not standard_no or not (table_no or section):
-        return None
-    try:
-        if table_no:
-            rows = db.get_conn().execute(
-                """SELECT * FROM chunks
-                   WHERE json_extract(business_metadata, '$.standard_no') = ?
-                     AND json_extract(business_metadata, '$.table_no') = ?
-                   ORDER BY page, created_at
-                   LIMIT 8""",
-                (standard_no, table_no),
-            ).fetchall()
-        else:
-            rows = db.get_conn().execute(
-                """SELECT * FROM chunks
-                   WHERE json_extract(business_metadata, '$.standard_no') = ?
-                     AND (
-                        json_extract(business_metadata, '$.section') = ?
-                        OR json_extract(business_metadata, '$.section') LIKE ?
-                     )
-                   ORDER BY page, created_at
-                   LIMIT 8""",
-                (standard_no, section, f"{section}%"),
-            ).fetchall()
-        return _pick_hydrated_chunk(list(rows or []))
-    except Exception:
-        return None
+def _sidecar_cited_chunk_id(item: Any) -> str:
+    """Only the sidecar's chunk_id field (or explicit chunk_id= in a string) counts."""
+    if isinstance(item, dict):
+        cid = str(item.get("chunk_id") or "").strip()
+    elif isinstance(item, str):
+        match = _AGENT_CHUNK_ID_RE.search(item)
+        cid = str(match.group(1) if match else "").strip()
+    else:
+        cid = ""
+    if not cid or "placeholder" in cid:
+        return ""
+    return cid
 
 
 def _chunk_to_evidence(chunk: dict[str, Any], index: int) -> dict[str, Any]:
@@ -193,6 +155,7 @@ def _chunk_to_evidence(chunk: dict[str, Any], index: int) -> dict[str, Any]:
     }
     compact = _compact_candidate(candidate)
     compact["locator"] = _evidence_locator(candidate)
+    compact["chunk_id"] = str(chunk.get("id") or "")
     return compact
 
 
@@ -221,7 +184,8 @@ def normalize_agent_evidence(
     *,
     standard_no: str = "",
 ) -> list[dict[str, Any]]:
-    """Adapt sidecar evidence (strings / {source,location,text,chunk_id}) to UI candidates."""
+    """Keep sidecar-cited chunk_ids only. Never invent a citation from 表号/条款."""
+    del standard_no
     if raw is None:
         items: list[Any] = []
     elif isinstance(raw, list):
@@ -229,112 +193,36 @@ def normalize_agent_evidence(
     else:
         items = [raw]
     normalized: list[dict[str, Any]] = []
-    seen_keys: set[str] = set()
     seen_chunk_ids: set[str] = set()
 
-    def _append(entry: dict[str, Any], chunk_id: str = "") -> None:
-        key = str(entry.get("candidate_key") or "")
-        if key and key in seen_keys:
-            return
-        cid = str(chunk_id or "").strip()
-        if cid:
-            if cid in seen_chunk_ids:
-                return
-            seen_chunk_ids.add(cid)
-        if key:
-            seen_keys.add(key)
-        normalized.append(entry)
-
     for index, item in enumerate(items):
-        parsed: dict[str, Any]
-        compact_fallback: dict[str, Any] | None = None
-        if isinstance(item, str):
-            parsed = _parse_agent_evidence_blob(item)
-        elif isinstance(item, dict):
-            locator = item.get("locator") if isinstance(item.get("locator"), dict) else {}
-            meta = (
-                item.get("business_metadata")
-                if isinstance(item.get("business_metadata"), dict)
-                else {}
-            )
-            blob = " ".join(
-                str(part or "")
-                for part in (
-                    item.get("source"),
-                    item.get("location"),
-                    item.get("text"),
-                    item.get("chunk_id"),
-                    locator.get("standard_no"),
-                    locator.get("table_no") and f"表{locator.get('table_no')}",
-                    locator.get("section") and f"第{locator.get('section')}条",
-                    meta.get("standard_no"),
-                    meta.get("table_no") and f"表{meta.get('table_no')}",
-                    meta.get("section") and f"第{meta.get('section')}条",
-                )
-            )
-            parsed = _parse_agent_evidence_blob(blob)
-            if item.get("chunk_id"):
-                parsed["chunk_id"] = str(item.get("chunk_id") or "").strip()
-            if item.get("text"):
-                parsed["text"] = str(item.get("text") or "").strip()
-            if item.get("source") and not parsed.get("standard_no"):
-                parsed["standard_no"] = str(item.get("source") or "").strip()
-            if locator.get("table_no") and not parsed.get("table_no"):
-                parsed["table_no"] = str(locator.get("table_no") or "").strip()
-            if locator.get("section") and not parsed.get("section"):
-                parsed["section"] = str(locator.get("section") or "").strip()
-            if locator.get("standard_no") and not parsed.get("standard_no"):
-                parsed["standard_no"] = str(locator.get("standard_no") or "").strip()
-            if locator.get("page_start") and not parsed.get("page"):
-                parsed["page"] = locator.get("page_start")
-            if item.get("candidate_key") and item.get("text"):
-                compact_fallback = dict(item)
-                if not compact_fallback.get("candidate_key"):
-                    compact_fallback["candidate_key"] = f"a{index + 1:02d}"
-        else:
+        chunk_id = _sidecar_cited_chunk_id(item)
+        if not chunk_id or chunk_id in seen_chunk_ids:
             continue
-        chunk_id = str(parsed.get("chunk_id") or "")
-        chunk = _load_chunk_for_evidence(chunk_id) if chunk_id else None
-        existing_html = "<table" in str(parsed.get("text") or "").lower()
-        if chunk is None and not existing_html:
-            chunk = _load_chunk_for_locator(
-                standard_no=str(parsed.get("standard_no") or standard_no or ""),
-                table_no=str(parsed.get("table_no") or ""),
-                section=str(parsed.get("section") or ""),
-            )
+        seen_chunk_ids.add(chunk_id)
+        chunk = _load_chunk_for_evidence(chunk_id)
         if chunk:
-            _append(_chunk_to_evidence(chunk, index), str(chunk.get("id") or chunk_id))
+            entry = _chunk_to_evidence(chunk, index)
+            entry["chunk_id"] = chunk_id
+            normalized.append(entry)
             continue
-        if compact_fallback is not None:
-            _append(compact_fallback)
-            continue
-        text = str(parsed.get("text") or "").strip()
-        if not text:
-            continue
-        meta = {
-            "standard_no": parsed.get("standard_no") or standard_no or "",
-        }
-        if parsed.get("table_no"):
-            meta["table_no"] = parsed["table_no"]
-            meta["content_type"] = "table"
-        if parsed.get("section"):
-            meta["section"] = parsed["section"]
-        locator = {
-            "standard_no": meta["standard_no"],
-            "content_type": meta.get("content_type") or "section",
-        }
-        if parsed.get("table_no"):
-            locator["table_no"] = parsed["table_no"]
-        if parsed.get("section"):
-            locator["section"] = parsed["section"]
-        if parsed.get("page"):
-            locator["page_start"] = parsed["page"]
-            locator["page_end"] = parsed["page"]
-        _append({
+        source = ""
+        location = ""
+        text = ""
+        if isinstance(item, dict):
+            source = str(item.get("source") or "")
+            location = str(item.get("location") or "")
+            text = str(item.get("text") or "")
+        elif isinstance(item, str):
+            parsed = _parse_agent_evidence_blob(item)
+            source = str(parsed.get("standard_no") or "")
+            text = str(parsed.get("text") or item)
+        normalized.append({
             "candidate_key": f"a{index + 1:02d}",
-            "content_type": locator["content_type"],
-            "business_metadata": meta,
-            "locator": locator,
+            "chunk_id": chunk_id,
+            "content_type": "section",
+            "business_metadata": {"standard_no": source} if source else {},
+            "locator": {"standard_no": source, "location": location},
             "text": text,
         })
     return normalized
@@ -1751,6 +1639,8 @@ def _judgment_from_agent_result(
     status = AGENT_VERDICT_TO_STATUS.get(verdict)
     if status is None:
         return None
+    stats = agent_body.get("stats") if isinstance(agent_body.get("stats"), dict) else {}
+    protocol_error = bool(stats.get("protocol_error"))
     evidence = normalize_agent_evidence(
         result.get("evidence"),
         standard_no=str(result.get("standard_no") or ""),
@@ -1770,6 +1660,7 @@ def _judgment_from_agent_result(
         "verdict": verdict,
         "kind": result.get("kind"),
         "judge_source": "agent",
+        "protocol_error": protocol_error,
         "deterministic_judge": {
             "applied": False,
             "mode": "agent",
@@ -3038,6 +2929,7 @@ def _audit_one_case_agent(
                 result.get("evidence"),
                 standard_no=str(result.get("standard_no") or ""),
             )
+            stats = agent_response.get("stats") if isinstance(agent_response.get("stats"), dict) else {}
             judgment = {
                 "status": status,
                 "reason": str(result.get("reasoning") or ""),
@@ -3054,6 +2946,7 @@ def _audit_one_case_agent(
                 "verdict": verdict,
                 "kind": result.get("kind"),
                 "judge_source": "agent",
+                "protocol_error": bool(stats.get("protocol_error")),
                 "agent_model": agent_model,
             }
     else:

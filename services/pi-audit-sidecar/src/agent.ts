@@ -2,9 +2,10 @@
  * Pi agent session execution for one audit case (port of experiment runner.ts v7).
  *
  * Per case: budget reset → createAgentSession → subscribe (trace + read gate
- * counters) → prompt → read=0 / citation protocol gates (one re-prompt each) →
- * Host fills evidence.text from readBodies → return result + stats + trace.
- * Host never rewrites the agent verdict.
+ * counters) → prompt → read=0 gates → freeze post-read verdict → citation
+ * protocol gate (restore that frozen verdict, not the first raw) → Host fills
+ * evidence.text from readBodies → return result + stats + trace.
+ * Host never rewrites the agent verdict. raw_verdict in stats stays first raw.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -471,7 +472,10 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 		);
 	}
 
-	// 引用协议：只要求列出已读 chunk_id。失败不改写业务判定。
+	// 引用协议只锁 read 之后的判定，不锁第一次 raw。
+	const postReadVerdict = parsed.value?.verdict;
+	const postReadKind = parsed.value?.kind;
+
 	let protocolError = false;
 	const firstProvenance = closeEvidence({
 		verdict: parsed.value?.verdict,
@@ -492,15 +496,15 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 				`不要重新判断。请原样保留刚才的 verdict 和 kind，只返回实际读过的 evidence chunk_id（source/location 可保留）。不要写 evidence.text。`,
 			"citation protocol re-prompt",
 		);
-		if (parsed.value && isMatchMismatch({ verdict: firstRawVerdict })) {
-			parsed.value.verdict = firstRawVerdict;
-			if (firstRawKind !== undefined) parsed.value.kind = firstRawKind;
-		} else if (!parsed.value && isMatchMismatch({ verdict: firstRawVerdict })) {
+		if (parsed.value && isMatchMismatch({ verdict: postReadVerdict })) {
+			parsed.value.verdict = postReadVerdict;
+			if (postReadKind !== undefined) parsed.value.kind = postReadKind;
+		} else if (!parsed.value && isMatchMismatch({ verdict: postReadVerdict })) {
 			parsed = {
 				...parsed,
 				value: {
-					verdict: firstRawVerdict,
-					kind: firstRawKind,
+					verdict: postReadVerdict,
+					kind: postReadKind,
 					evidence: [],
 				},
 			};

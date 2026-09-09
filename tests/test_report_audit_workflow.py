@@ -1604,7 +1604,6 @@ def test_audit_one_case_agent_writes_compatible_judgment(monkeypatch) -> None:
 
     monkeypatch.setattr(workflow, "_call_agent_sidecar", fake_call)
     monkeypatch.setattr(workflow, "_load_chunk_for_evidence", lambda _cid: None)
-    monkeypatch.setattr(workflow, "_load_chunk_for_locator", lambda **_kwargs: None)
     entry = workflow._audit_one_case_agent(
         _agent_unit(),
         sample_profile={"from_report": {"model": "S20-M.RL-400/10-NX2"}},
@@ -1651,38 +1650,17 @@ def test_normalize_agent_evidence_hydrates_chunk(monkeypatch) -> None:
     assert "<table>" in items[0]["text"]
 
 
-def test_normalize_agent_evidence_keeps_string_excerpt(monkeypatch) -> None:
-    monkeypatch.setattr(workflow, "_load_chunk_for_locator", lambda **_kwargs: None)
+def test_normalize_agent_evidence_keeps_string_excerpt_only_with_chunk_id(monkeypatch) -> None:
+    monkeypatch.setattr(workflow, "_load_chunk_for_evidence", lambda _cid: None)
     items = workflow.normalize_agent_evidence(
         ["GB/T 6451-2023 第4.3.2条 表4 p12：线电阻不平衡率不应大于 2%"],
         standard_no="GB/T 6451-2023",
     )
-    assert len(items) == 1
-    assert items[0]["locator"]["standard_no"] == "GB/T 6451-2023"
-    assert items[0]["locator"]["table_no"] == "4"
-    assert items[0]["locator"]["page_start"] == 12
-    assert items[0]["locator"]["section"] == "4.3.2"
-    assert "2%" in items[0]["text"]
+    assert items == []
 
 
-def test_normalize_agent_evidence_hydrates_table_locator(monkeypatch) -> None:
+def test_normalize_agent_evidence_does_not_fill_citation_from_table_locator(monkeypatch) -> None:
     monkeypatch.setattr(workflow, "_load_chunk_for_evidence", lambda _cid: None)
-    monkeypatch.setattr(
-        workflow,
-        "_load_chunk_for_locator",
-        lambda **_kwargs: {
-            "id": "b" * 32,
-            "page": 34,
-            "text": "<table><tr><td>偏差</td></tr></table>",
-            "business_metadata": {
-                "standard_no": "Q/GDW 12126.4-2024",
-                "content_type": "table",
-                "table_no": "30",
-                "table_title": "例行试验判定标准",
-            },
-            "source_trace": {"page_start": 34, "page_end": 34},
-        },
-    )
     items = workflow.normalize_agent_evidence(
         [{
             "source": "Q/GDW 12126.4-2024",
@@ -1691,9 +1669,51 @@ def test_normalize_agent_evidence_hydrates_table_locator(monkeypatch) -> None:
         }],
         standard_no="Q/GDW 12126.4-2024",
     )
-    assert len(items) == 1
-    assert items[0]["locator"]["table_no"] == "30"
-    assert "<table>" in items[0]["text"]
+    assert items == []
+
+
+def test_normalize_agent_evidence_drops_placeholder_chunk_id(monkeypatch) -> None:
+    monkeypatch.setattr(workflow, "_load_chunk_for_evidence", lambda _cid: None)
+    items = workflow.normalize_agent_evidence(
+        [{
+            "chunk_id": "7c549...placeholder",
+            "source": "Q/GDW 12126.4-2024",
+            "location": "表30",
+            "text": "其他分接: 匝数比设计值的±0.5 %",
+        }],
+        standard_no="Q/GDW 12126.4-2024",
+    )
+    assert items == []
+
+
+def test_judgment_from_agent_keeps_verdict_on_protocol_error_without_locator_fill(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(workflow, "_load_chunk_for_evidence", lambda _cid: None)
+    judgment = workflow._judgment_from_agent_result(
+        {
+            "result": {
+                "verdict": "mismatch",
+                "kind": "looser",
+                "reasoning": "表30 限值更严，但未给出已读 chunk_id",
+                "standard_no": "Q/GDW 12126.4-2024",
+                "evidence": [{
+                    "source": "Q/GDW 12126.4-2024",
+                    "location": "表30",
+                    "text": "其他分接: 匝数比设计值的±0.5 %",
+                }],
+            },
+            "stats": {"protocol_error": True},
+        },
+        reason_code="agent_retrieved",
+    )
+    assert judgment is not None
+    assert judgment["verdict"] == "mismatch"
+    assert judgment["status"] == "mismatch"
+    assert judgment["kind"] == "looser"
+    assert judgment["protocol_error"] is True
+    assert judgment["evidence"] == []
+    assert judgment["evidence_candidate_keys"] == []
 
 
 def test_audit_one_case_agent_degrades_on_sidecar_failure(monkeypatch) -> None:
