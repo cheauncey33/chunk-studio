@@ -750,6 +750,8 @@ class PostgresJobRepository:
         lease_seconds: int = 300,
         job_types: set[str] | None = None,
     ) -> list[dict[str, Any]]:
+        from .. import audit_claim
+
         bounded_limit = max(1, min(int(limit), 100))
         clauses = [
             "((status='queued' AND (available_at IS NULL OR available_at <= now())) "
@@ -760,8 +762,19 @@ class PostgresJobRepository:
         if job_types:
             clauses.append("type = ANY(%s)")
             params.append(sorted(job_types))
-        params.append(bounded_limit)
+        audit_aware = audit_claim.claims_audit_jobs(job_types)
+        scan_limit = (
+            max(bounded_limit, audit_claim.AUDIT_CLAIM_SCAN_LIMIT)
+            if audit_aware
+            else bounded_limit
+        )
+        params.append(scan_limit)
         with self._connect() as conn:
+            if audit_aware:
+                conn.execute(
+                    "SELECT pg_advisory_xact_lock(%s)",
+                    (audit_claim.AUDIT_CLAIM_ADVISORY_LOCK_KEY,),
+                )
             rows = conn.execute(
                 """SELECT * FROM jobs
                    WHERE """ + " AND ".join(clauses) + """
@@ -771,6 +784,9 @@ class PostgresJobRepository:
             ).fetchall()
             claimed: list[dict[str, Any]] = []
             for row in rows:
+                job = self._job(row)
+                if audit_aware and not self._postgres_batch_claim_ok(conn, job):
+                    continue
                 updated = conn.execute(
                     """UPDATE jobs
                        SET status='running', attempts=attempts+1,
@@ -783,7 +799,44 @@ class PostgresJobRepository:
                 ).fetchone()
                 if updated:
                     claimed.append(self._job(updated))
+                    if len(claimed) >= bounded_limit:
+                        break
         return claimed
+
+    @staticmethod
+    def _postgres_batch_claim_ok(conn: Any, job: dict[str, Any]) -> bool:
+        from .. import audit_claim
+
+        if not audit_claim.is_batch_audit_job(job):
+            return True
+        batch_id = audit_claim.job_batch_id(job)
+        batch = conn.execute(
+            audit_claim.batch_max_concurrency_sql(postgres=True, for_update=True),
+            (batch_id,),
+        ).fetchone()
+        if batch is None:
+            return False
+        if str(job.get("status") or "") == "running":
+            return True
+        job_id = str(job.get("id") or "")
+        running_for_batch = audit_claim.count_from_row(
+            conn.execute(
+                audit_claim.running_for_batch_sql(postgres=True),
+                (batch_id, job_id),
+            ).fetchone()
+        )
+        running_global = audit_claim.count_from_row(
+            conn.execute(
+                audit_claim.running_batch_global_sql(postgres=True),
+                (job_id,),
+            ).fetchone()
+        )
+        return audit_claim.batch_claim_allowed(
+            is_batch=True,
+            running_for_batch=running_for_batch,
+            batch_max=int(batch["max_concurrency"] or 1),
+            running_batch_global=running_global,
+        )
 
     def extend_lease(self, job_id: str, lease_seconds: int) -> None:
         with self._connect() as conn:
@@ -2640,7 +2693,7 @@ def postgres_schema_sql() -> list[str]:
              mode TEXT NOT NULL DEFAULT 'night',
              status TEXT NOT NULL DEFAULT 'scheduled',
              scheduled_at TIMESTAMPTZ NOT NULL,
-             max_concurrency INTEGER NOT NULL DEFAULT 1,
+             max_concurrency INTEGER NOT NULL DEFAULT 3,
              created_by TEXT NOT NULL DEFAULT '',
              created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
              updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),

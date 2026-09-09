@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from . import artifacts, chunk_schema, config, current_user, db, extractors, observability
+from . import artifacts, audit_claim, chunk_schema, config, current_user, db, extractors, observability
 from .adapters import ocr as ocr_adapter
 from .job_errors import (
     NON_RETRYABLE,
@@ -992,6 +992,33 @@ def latest_job_for_target(target_id: str, type_: str = "ocr") -> dict[str, Any] 
 
 
 async def worker_loop(job_types: set[str] | None = None) -> None:
+    """Run audit jobs on a pool; keep OCR/parse/chunk/embed on one serial loop.
+
+    Night Batch report slots are enforced in claim, not by spawning extra
+    catch-all workers. Interactive audits share the audit pool and win on
+    priority when a slot frees.
+    """
+    requested = set(job_types) if job_types is not None else None
+    include_audit = requested is None or "audit" in requested
+    other_types = (
+        set(audit_claim.non_audit_job_types())
+        if requested is None
+        else (requested - {"audit"})
+    )
+    workers: list[asyncio.Task[None]] = []
+    if include_audit:
+        pool_size = max(1, int(config.AUDIT_WORKER_CONCURRENCY))
+        for _ in range(pool_size):
+            workers.append(asyncio.create_task(_worker_loop_serial({"audit"})))
+    if other_types:
+        workers.append(asyncio.create_task(_worker_loop_serial(other_types)))
+    if not workers:
+        await _worker_loop_serial(requested or set())
+        return
+    await asyncio.gather(*workers)
+
+
+async def _worker_loop_serial(job_types: set[str] | None) -> None:
     while True:
         try:
             job = _claim_next_job(job_types)
@@ -1070,6 +1097,38 @@ async def _dispatch_job(job: dict[str, Any]) -> None:
         current_user.reset_current_user(token)
 
 
+def _sqlite_batch_claim_ok(conn: Any, job: dict[str, Any]) -> bool:
+    """Return True when this SQLite candidate may be claimed under Night Batch caps."""
+    if not audit_claim.is_batch_audit_job(job):
+        return True
+    batch_id = audit_claim.job_batch_id(job)
+    batch = conn.execute(
+        audit_claim.batch_max_concurrency_sql(postgres=False),
+        (batch_id,),
+    ).fetchone()
+    if batch is None:
+        return False
+    job_id = str(job.get("id") or "")
+    running_for_batch = audit_claim.count_from_row(
+        conn.execute(
+            audit_claim.running_for_batch_sql(postgres=False),
+            (batch_id, job_id),
+        ).fetchone()
+    )
+    running_global = audit_claim.count_from_row(
+        conn.execute(
+            audit_claim.running_batch_global_sql(postgres=False),
+            (job_id,),
+        ).fetchone()
+    )
+    return audit_claim.batch_claim_allowed(
+        is_batch=True,
+        running_for_batch=running_for_batch,
+        batch_max=int(batch["max_concurrency"] or 1),
+        running_batch_global=running_global,
+    )
+
+
 def _claim_next_job(job_types: set[str] | None = None) -> dict[str, Any] | None:
     repository = _job_repository()
     if repository is not None:
@@ -1090,6 +1149,7 @@ def _claim_next_job(job_types: set[str] | None = None) -> dict[str, Any] | None:
         type_clause = " AND type IN (" + ",".join("?" for _ in ordered) + ")"
         params.extend(ordered)
     clock = utc_now()
+    audit_aware = audit_claim.claims_audit_jobs(job_types)
     with db.transaction() as conn:
         rows = conn.execute(
             """SELECT * FROM jobs
@@ -1100,9 +1160,12 @@ def _claim_next_job(job_types: set[str] | None = None) -> dict[str, Any] | None:
         ).fetchall()
         row = None
         for candidate in rows:
-            if available_at_reached(candidate["available_at"], now=clock):
-                row = candidate
-                break
+            if not available_at_reached(candidate["available_at"], now=clock):
+                continue
+            if audit_aware and not _sqlite_batch_claim_ok(conn, _row_to_job(candidate)):
+                continue
+            row = candidate
+            break
         if not row:
             return None
         started = now_iso()
@@ -1274,6 +1337,11 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
         if stored_name
         else audit_run.audit_run_identity(assistant_id=assistant_id, run_id=run_id)
     )
+    judge_concurrency = (
+        int(config.AUDIT_BATCH_CASE_CONCURRENCY)
+        if audit_claim.is_batch_audit_job(job)
+        else None
+    )
     merge_job_result(
         str(job.get("id") or ""),
         {
@@ -1301,6 +1369,7 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
             run_id=identity["run_id"],
             report_name=identity["report_name"],
             job_attempt=int(job.get("attempts") or 1),
+            judge_concurrency=judge_concurrency,
         )
     except JobFailure as exc:
         _fail_job(job, str(exc), retryable=exc.retryable, error_code=exc.code)

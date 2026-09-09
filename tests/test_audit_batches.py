@@ -140,7 +140,7 @@ def test_postgres_schema_includes_audit_batches() -> None:
     assert "CREATE TABLE IF NOT EXISTS audit_batch_items" in schema
     assert "UNIQUE (batch_id, report_file_id)" in schema
     assert "UNIQUE (audit_job_id)" in schema
-    assert "max_concurrency INTEGER NOT NULL DEFAULT 1" in schema
+    assert "max_concurrency INTEGER NOT NULL DEFAULT 3" in schema
 
 
 def test_normalize_job_schedule_time_converts_offsets_to_utc() -> None:
@@ -452,15 +452,31 @@ def test_existing_enqueue_assistant_audit_is_unchanged(monkeypatch, tmp_path: Pa
     _close_temp_db(monkeypatch)
 
 
-def test_max_concurrency_greater_than_one_is_rejected(monkeypatch, tmp_path: Path) -> None:
+def test_max_concurrency_is_stored_and_capped_by_global_slots(
+    monkeypatch, tmp_path: Path
+) -> None:
     _init_temp_db(monkeypatch, tmp_path)
     _seed_reports(tmp_path, ["r1"])
-    with pytest.raises(ValueError, match="max_concurrency must be 1"):
+    created = audit_batches.create_night_batch(
+        assistant_id=ASSISTANT_ID,
+        report_file_ids=["r1"],
+        scheduled_at=FUTURE_LOCAL,
+        max_concurrency=2,
+    )
+    assert created["max_concurrency"] == 2
+    with pytest.raises(ValueError, match="max_concurrency must be between 1 and"):
         audit_batches.create_night_batch(
             assistant_id=ASSISTANT_ID,
             report_file_ids=["r1"],
             scheduled_at=FUTURE_LOCAL,
-            max_concurrency=2,
+            max_concurrency=0,
+        )
+    with pytest.raises(ValueError, match="max_concurrency must be between 1 and"):
+        audit_batches.create_night_batch(
+            assistant_id=ASSISTANT_ID,
+            report_file_ids=["r1"],
+            scheduled_at=FUTURE_LOCAL,
+            max_concurrency=99,
         )
     _close_temp_db(monkeypatch)
 

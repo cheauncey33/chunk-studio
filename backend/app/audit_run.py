@@ -199,6 +199,7 @@ def run_assistant_audit(
     run_id: str | None = None,
     report_name: str | None = None,
     job_attempt: int | None = None,
+    judge_concurrency: int | None = None,
 ) -> dict[str, Any]:
     """Run the end-to-end audit workflow and write a stable report JSON.
 
@@ -261,6 +262,8 @@ def run_assistant_audit(
         cmd.extend(["--run-id", resolved_run_id])
     attempt = max(1, int(job_attempt or 1))
     cmd.extend(["--job-attempt", str(attempt)])
+    if judge_concurrency is not None:
+        cmd.extend(["--judge-concurrency", str(max(1, int(judge_concurrency)))])
     if resolved_naming_id:
         cmd.extend(["--naming-rule-file-id", resolved_naming_id])
     run_env = os.environ.copy()

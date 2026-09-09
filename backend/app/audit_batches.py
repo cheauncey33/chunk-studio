@@ -4,8 +4,9 @@ A batch is an aggregation and scheduling layer. Each report still maps to one
 Audit Job. The worker continues to claim and execute ordinary ``type=audit``
 jobs; it never iterates reports itself.
 
-``max_concurrency`` is stored for a later batch-slot design. Phase 1 does not
-enforce it: report concurrency stays 1 only with a single ``worker_loop``.
+``max_concurrency`` is a report-level slot budget. Claim checks running child
+jobs against this value and ``AUDIT_BATCH_GLOBAL_SLOTS`` in the same
+transaction; extra workers cannot oversubscribe a batch.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from . import current_user, jobs, observability
+from . import audit_claim, current_user, jobs, observability
 from .storage.batch_repository import (
     BATCH_MAX_CONCURRENCY,
     BATCH_MODE_NIGHT,
@@ -330,8 +331,7 @@ def create_night_batch(
         )
     if len(ids) != len(set(ids)):
         raise ValueError("duplicate report_file_id")
-    if int(max_concurrency) != BATCH_MAX_CONCURRENCY:
-        raise ValueError("max_concurrency must be 1")
+    concurrency = audit_claim.validated_batch_max_concurrency(max_concurrency)
 
     scheduled = jobs.normalize_job_schedule_time(scheduled_at)
     resolved_naming = _preflight_reports(assistant_id, ids, naming_rule_file_id)
@@ -378,7 +378,7 @@ def create_night_batch(
             "mode": BATCH_MODE_NIGHT,
             "status": BATCH_STATUS_SCHEDULED,
             "scheduled_at": scheduled,
-            "max_concurrency": BATCH_MAX_CONCURRENCY,
+            "max_concurrency": concurrency,
             "created_by": current_user.get_current_user().user_id,
             "created_at": created,
             "updated_at": created,
@@ -398,7 +398,7 @@ def create_night_batch(
         "mode": BATCH_MODE_NIGHT,
         "status": refreshed.get("status") or BATCH_STATUS_SCHEDULED,
         "scheduled_at": scheduled,
-        "max_concurrency": BATCH_MAX_CONCURRENCY,
+        "max_concurrency": concurrency,
         "assistant_id": assistant_id,
         "naming_rule_file_id": resolved_naming,
         "total": len(ids),

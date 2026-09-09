@@ -13,9 +13,9 @@ from .. import config, db
 
 
 BATCH_MODE_NIGHT = "night"
-# Phase 1 stores this field but does not enforce a batch slot. Report
-# concurrency is 1 only while a single worker_loop process claims the queue.
-BATCH_MAX_CONCURRENCY = 1
+# Default report-level concurrency for a Night Batch. Claim enforces this and
+# ``config.AUDIT_BATCH_GLOBAL_SLOTS`` inside the job-queue transaction.
+BATCH_MAX_CONCURRENCY = 3
 NIGHT_BATCH_PRIORITY = -5
 NIGHT_BATCH_MAX_REPORTS = 200
 
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS audit_batches (
     mode               TEXT NOT NULL DEFAULT 'night',
     status             TEXT NOT NULL DEFAULT 'scheduled',
     scheduled_at       TEXT NOT NULL,
-    max_concurrency    INTEGER NOT NULL DEFAULT 1,
+    max_concurrency    INTEGER NOT NULL DEFAULT 3,
     created_by         TEXT NOT NULL DEFAULT '',
     created_at         TEXT NOT NULL,
     updated_at         TEXT NOT NULL,
@@ -83,7 +83,7 @@ AUDIT_BATCHES_POSTGRES_DDL = [
          mode TEXT NOT NULL DEFAULT 'night',
          status TEXT NOT NULL DEFAULT 'scheduled',
          scheduled_at TIMESTAMPTZ NOT NULL,
-         max_concurrency INTEGER NOT NULL DEFAULT 1,
+         max_concurrency INTEGER NOT NULL DEFAULT 3,
          created_by TEXT NOT NULL DEFAULT '',
          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),

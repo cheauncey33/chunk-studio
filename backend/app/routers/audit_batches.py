@@ -21,7 +21,8 @@ class AuditBatchCreateRequest(BaseModel):
     )
     max_concurrency: int = Field(
         default=BATCH_MAX_CONCURRENCY,
-        description="Phase 1 only accepts 1. Multi-worker report slots are not enforced yet.",
+        ge=1,
+        description="Report-level Night Batch slot budget, enforced at job claim.",
     )
 
 
