@@ -11,6 +11,13 @@ from app.audit_policy import (
     RECOVERY_MAX_TOOL_CALLS,
     RECOVERY_MAX_TURNS,
 )
+from app.job_errors import (
+    AUDIT_EXIT_NON_RETRYABLE,
+    AUDIT_EXIT_RETRYABLE,
+    NonRetryableJobError,
+    RetryableJobError,
+    classify_audit_subprocess_failure,
+)
 
 
 def test_production_audit_policy_is_compression_first_and_bounded() -> None:
@@ -68,3 +75,35 @@ def test_resolve_markdown_path_requires_done_parse(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA_DIR", tmp_path)
     with pytest.raises(ValueError, match="no completed parse"):
         audit_run.resolve_markdown_path("missing-file")
+
+
+def test_audit_run_identity_is_stable_for_the_same_run_id(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    first = audit_run.audit_run_identity(assistant_id="assistant_oil_transformer_audit", run_id="abc123")
+    second = audit_run.audit_run_identity(assistant_id="assistant_oil_transformer_audit", run_id="abc123")
+    assert first == second
+    assert first["run_id"] == "abc123"
+    assert first["report_name"] == "end_to_end_audit_oil_transformer_audit_abc123.json"
+    assert first["checkpoint_path"].endswith(
+        "end_to_end_audit_oil_transformer_audit_abc123.checkpoint.json"
+    )
+
+
+def test_classify_audit_subprocess_missing_standard_is_not_retryable() -> None:
+    error = classify_audit_subprocess_failure(
+        1,
+        "报告检测依据中的标准未在当前知识库找到：GB/T 7595",
+    )
+    assert isinstance(error, NonRetryableJobError)
+    assert error.retryable is False
+
+
+def test_classify_audit_subprocess_exit_2_is_not_retryable() -> None:
+    error = classify_audit_subprocess_failure(AUDIT_EXIT_NON_RETRYABLE, "invalid assistant config")
+    assert isinstance(error, NonRetryableJobError)
+
+
+def test_classify_audit_subprocess_crash_is_retryable() -> None:
+    error = classify_audit_subprocess_failure(AUDIT_EXIT_RETRYABLE, "agent sidecar 5xx (502)")
+    assert isinstance(error, RetryableJobError)
+    assert error.retryable is True

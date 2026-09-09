@@ -25,7 +25,8 @@ def _first_env(*names: str) -> str:
     return ""
 
 
-# Transient TLS / connection drops (e.g. UNEXPECTED_EOF_WHILE_READING).
+# L0 request retry: transport jitter only (Connect/Read/Timeout). HTTP 429/5xx
+# are not retried here; they surface to the caller and may retry at L2.
 _HTTP_RETRY_ATTEMPTS = max(1, int(os.environ.get("LLM_HTTP_RETRIES", "4")))
 _HTTP_RETRY_BASE_DELAY_S = float(os.environ.get("LLM_HTTP_RETRY_BASE_DELAY_S", "1.0"))
 _TRANSIENT_HTTPX_ERRORS = (

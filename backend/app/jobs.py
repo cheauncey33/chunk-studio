@@ -10,6 +10,11 @@ from typing import Any
 
 from . import artifacts, chunk_schema, config, current_user, db, extractors, observability
 from .adapters import ocr as ocr_adapter
+from .job_errors import (
+    NON_RETRYABLE,
+    RETRYABLE,
+    JobFailure,
+)
 from .storage.repositories import get_content_write_repository, get_job_repository
 from .storage.object_store import get_object_store
 
@@ -17,6 +22,7 @@ logger = logging.getLogger(__name__)
 JOB_POLL_SECONDS = 1.0
 JOB_DEPENDENCY_BACKOFF_SECONDS = 5.0
 JOB_TIMEOUT_SECONDS = 15 * 60
+AUDIT_JOB_MAX_ATTEMPTS = 3  # L2: same run_id/checkpoint; business errors skip retry
 
 
 def _timeout_for_job(job: dict[str, Any] | None) -> int:
@@ -453,10 +459,12 @@ def enqueue_assistant_audit(
 
     jid = uuid.uuid4().hex
     created = now_iso()
+    identity = audit_run.audit_run_identity(assistant_id=assistant_id, run_id=jid)
     payload = {
         "assistant_id": assistant_id,
         "report_file_id": report_file_id,
         "naming_rule_file_id": resolved_naming_id,
+        **identity,
     }
     return _create_job_record(
         job_id=jid,
@@ -465,7 +473,7 @@ def enqueue_assistant_audit(
         target_type="assistant",
         target_id=assistant_id,
         priority=priority,
-        max_attempts=1,
+        max_attempts=AUDIT_JOB_MAX_ATTEMPTS,
         result=payload,
         created_at=created,
     )
@@ -764,16 +772,24 @@ async def worker_loop(job_types: set[str] | None = None) -> None:
             await _record_job_failure(
                 job,
                 f"job timed out after {timeout} seconds",
+                retryable=True,
+                error_code="timeout",
             )
         except Exception as exc:
             logger.exception("job %s failed outside handler", job.get("id"))
-            await _record_job_failure(job, str(exc))
+            await _record_job_failure(job, str(exc), retryable=True, error_code="runtime")
 
 
-async def _record_job_failure(job: dict[str, Any], error: str) -> None:
+async def _record_job_failure(
+    job: dict[str, Any],
+    error: str,
+    *,
+    retryable: bool | None = None,
+    error_code: str = "",
+) -> None:
     """Keep the worker alive if persisting a job failure also loses its dependency."""
     try:
-        _fail_job(job, error)
+        _fail_job(job, error, retryable=retryable, error_code=error_code)
     except Exception as exc:
         logger.exception("worker could not persist failure for job %s", job.get("id"))
         observability.metrics.increment(
@@ -808,7 +824,7 @@ async def _dispatch_job(job: dict[str, Any]) -> None:
         elif job["type"] == "embed" and job["target_type"] == "corpus":
             await _run_embed_job(job)
         else:
-            _fail_job(job, f"unknown job type {job['type']}")
+            _fail_job(job, f"unknown job type {job['type']}", retryable=False, error_code="unknown_type")
     finally:
         current_user.reset_current_user(token)
 
@@ -1002,19 +1018,27 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
     report_file_id = str(payload.get("report_file_id") or "")
     naming_rule_file_id = payload.get("naming_rule_file_id") or None
     if not report_file_id:
-        _fail_job(job, "audit job missing report_file_id")
+        _fail_job(job, "audit job missing report_file_id", retryable=False, error_code="invalid_input")
         return
 
+    run_id = str(payload.get("run_id") or job.get("id") or "").strip()
+    stored_name = str(payload.get("report_name") or "").strip()
+    identity = (
+        audit_run.audit_output_paths(stored_name, run_id=run_id)
+        if stored_name
+        else audit_run.audit_run_identity(assistant_id=assistant_id, run_id=run_id)
+    )
     merge_job_result(
         str(job.get("id") or ""),
         {
+            **identity,
             "progress": {
                 "stage": "starting",
                 "stage_label": "启动审查",
                 "percent": 1,
                 "message": "正在启动审查工作流…",
                 "updated_at": now_iso(),
-            }
+            },
         },
     )
 
@@ -1026,14 +1050,23 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
             naming_rule_file_id=naming_rule_file_id,
             job_id=str(job.get("id") or "") or None,
             started_at=str(job.get("started_at") or "") or None,
+            run_id=identity["run_id"],
+            report_name=identity["report_name"],
         )
-    except (ValueError, RuntimeError, OSError) as exc:
-        _fail_job(job, str(exc))
+    except JobFailure as exc:
+        _fail_job(job, str(exc), retryable=exc.retryable, error_code=exc.code)
+        return
+    except ValueError as exc:
+        _fail_job(job, str(exc), retryable=False, error_code="invalid_input")
+        return
+    except (RuntimeError, OSError) as exc:
+        _fail_job(job, str(exc), retryable=True, error_code="runtime")
         return
 
     finished = now_iso()
     result = {
         **payload,
+        **identity,
         **outcome,
         "job_id": job.get("id"),
         "progress": {
@@ -1044,6 +1077,8 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
             "updated_at": finished,
         },
     }
+    result.pop("error_class", None)
+    result.pop("error_code", None)
     _mark_job_done(job["id"], result)
 
 
@@ -1327,17 +1362,35 @@ def _requeue_job(job: dict[str, Any], error: str) -> None:
         )
 
 
-def _fail_job(job: dict[str, Any], error: str) -> None:
+def _fail_job(
+    job: dict[str, Any],
+    error: str,
+    *,
+    retryable: bool | None = None,
+    error_code: str = "",
+) -> None:
     finished = now_iso()
     attempts = int(job.get("attempts") or 0)
     max_attempts = int(job.get("max_attempts") or 1)
-    retry = attempts < max_attempts
+    allow_retry = True if retryable is None else bool(retryable)
+    retry = allow_retry and attempts < max_attempts
     available = None
+    retry_delay = 30
     if retry:
         retry_delay = min(300, 2 ** max(0, attempts - 1) * 5)
         available = time.strftime(
             "%Y-%m-%d %H:%M:%S",
             time.localtime(time.time() + retry_delay),
+        )
+    job_id = str(job.get("id") or "")
+    if job_id:
+        merge_job_result(
+            job_id,
+            {
+                "error_class": RETRYABLE if allow_retry else NON_RETRYABLE,
+                "error_code": error_code
+                or ("transient" if allow_retry else "business"),
+            },
         )
     repository = _job_repository()
     if repository is not None:
@@ -1345,6 +1398,7 @@ def _fail_job(job: dict[str, Any], error: str) -> None:
             job["id"],
             error or "job failed",
             retry_delay_seconds=(retry_delay if retry else 30),
+            retryable=retry,
         )
         return
     with db.transaction() as conn:

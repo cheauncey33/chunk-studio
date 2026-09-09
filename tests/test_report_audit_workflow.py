@@ -1418,7 +1418,15 @@ def test_enqueue_accepts_report_outside_knowledge_base(monkeypatch, tmp_path) ->
         "assistant_id",
         "report_file_id",
         "naming_rule_file_id",
+        "run_id",
+        "report_name",
+        "report_path",
+        "checkpoint_path",
     }
+    assert job["max_attempts"] == jobs.AUDIT_JOB_MAX_ATTEMPTS
+    assert job["result"]["run_id"] == job["id"]
+    assert job["result"]["report_name"].endswith(f"{job['id']}.json")
+    assert job["result"]["checkpoint_path"].endswith(".checkpoint.json")
     _close_temp_db(monkeypatch)
 
 

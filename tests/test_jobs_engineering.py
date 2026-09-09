@@ -64,7 +64,7 @@ def test_worker_retries_when_queue_dependency_is_temporarily_unavailable(monkeyp
 def test_worker_survives_failure_persistence_dependency_error(monkeypatch) -> None:
     sleeps: list[float] = []
 
-    def fake_fail(_job, _error):
+    def fake_fail(_job, _error, **_kwargs):
         raise RuntimeError("database unavailable")
 
     async def fake_sleep(seconds: float) -> None:

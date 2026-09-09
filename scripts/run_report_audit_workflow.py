@@ -26,6 +26,11 @@ sys.path.insert(0, str(BACKEND))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from app import db, embeddings, llm  # noqa: E402
+from app.job_errors import (  # noqa: E402
+    AUDIT_EXIT_NON_RETRYABLE,
+    AUDIT_EXIT_RETRYABLE,
+    NonRetryableJobError,
+)
 from app.storage.repositories import get_content_repository, get_content_write_repository  # noqa: E402
 from app.agent_runtime import AgentPolicy  # noqa: E402
 from app.audit_policy import (  # noqa: E402
@@ -3473,5 +3478,24 @@ def main() -> None:
     print(f"Wrote {args.output}")
 
 
+def _run_main() -> int:
+    """Exit 2 for business/config errors so L2 job retry does not rerun them."""
+    try:
+        main()
+        return 0
+    except NonRetryableJobError as exc:
+        print(str(exc), file=sys.stderr)
+        return AUDIT_EXIT_NON_RETRYABLE
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return AUDIT_EXIT_NON_RETRYABLE
+    except Exception as exc:
+        import traceback
+
+        traceback.print_exc()
+        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return AUDIT_EXIT_RETRYABLE
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(_run_main())

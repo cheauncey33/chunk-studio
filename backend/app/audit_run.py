@@ -15,6 +15,7 @@ from .audit_policy import (
     PRODUCTION_EVIDENCE_COMPRESSION_MODE,
     PRODUCTION_RECOVERY_MODE,
 )
+from .job_errors import classify_audit_subprocess_failure
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,36 @@ DEFAULT_NAMING_RULE = (
     config.PROJECT_ROOT / "evaluation" / "prompts" / "model_naming_decode_v1.md"
 )
 REPORTS_DIR = config.DATA_DIR / "reports"
+
+
+def reports_dir() -> Path:
+    return config.DATA_DIR / "reports"
+
+
+def audit_output_paths(report_name: str, *, run_id: str = "") -> dict[str, str]:
+    """Stable report + checkpoint paths for one audit job run."""
+    name = Path(str(report_name or "").strip()).name
+    if not name.endswith(".json") or name.endswith(".checkpoint.json"):
+        raise ValueError(f"invalid audit report_name: {report_name!r}")
+    output_path = reports_dir() / name
+    return {
+        "run_id": str(run_id or "").strip(),
+        "report_name": name,
+        "report_path": config.to_rel(output_path),
+        "checkpoint_path": config.to_rel(output_path.with_suffix(".checkpoint.json")),
+    }
+
+
+def audit_run_identity(*, assistant_id: str, run_id: str) -> dict[str, str]:
+    """Build the output identity once at enqueue; retries must reuse it."""
+    rid = "".join(
+        ch if ch.isalnum() or ch in "-_" else "_" for ch in str(run_id or "").strip()
+    )[:80]
+    if not rid:
+        raise ValueError("audit run_id is required")
+    short = str(assistant_id or "").replace("assistant_", "")[:24] or "audit"
+    short = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in short)
+    return audit_output_paths(f"end_to_end_audit_{short}_{rid}.json", run_id=rid)
 
 
 def production_runtime_args() -> list[str]:
@@ -133,10 +164,13 @@ def run_assistant_audit(
     naming_rule_file_id: str | None = None,
     job_id: str | None = None,
     started_at: str | None = None,
+    run_id: str | None = None,
+    report_name: str | None = None,
 ) -> dict[str, Any]:
-    """Run the end-to-end audit workflow and write a timestamped report JSON.
+    """Run the end-to-end audit workflow and write a stable report JSON.
 
-    The workflow audits every extracted requirement in the supplied report.
+    Job retries must pass the same ``run_id`` / ``report_name`` so
+    ``output.checkpoint.json`` is reused instead of starting a new file.
     """
     if not SCRIPT_PATH.is_file():
         raise RuntimeError(f"audit workflow script missing: {SCRIPT_PATH}")
@@ -144,11 +178,18 @@ def run_assistant_audit(
     resolved_naming_id = resolve_naming_rule_file_id(assistant_id, naming_rule_file_id)
     report_md = resolve_markdown_path(report_file_id)
     naming_md = resolve_naming_rule_path(resolved_naming_id, assistant_id=assistant_id)
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    short = assistant_id.replace("assistant_", "")[:24] or "audit"
-    report_name = f"end_to_end_audit_{short}_{stamp}.json"
-    output_path = REPORTS_DIR / report_name
+    run_identity = (
+        audit_output_paths(str(report_name), run_id=str(run_id or job_id or ""))
+        if str(report_name or "").strip()
+        else audit_run_identity(
+            assistant_id=assistant_id,
+            run_id=str(run_id or job_id or "").strip()
+            or time.strftime("%Y%m%d_%H%M%S"),
+        )
+    )
+    report_name = run_identity["report_name"]
+    output_path = reports_dir() / report_name
+    reports_dir().mkdir(parents=True, exist_ok=True)
     run_started = (started_at or "").strip() or time.strftime("%Y-%m-%dT%H:%M:%S")
 
     from .storage.repositories import get_content_repository, get_content_write_repository
@@ -207,9 +248,7 @@ def run_assistant_audit(
     )
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()
-        raise RuntimeError(
-            f"audit workflow failed (exit {completed.returncode}): {detail[-2000:]}"
-        )
+        raise classify_audit_subprocess_failure(completed.returncode, detail)
     if not output_path.is_file():
         raise RuntimeError("audit workflow finished but report file was not written")
 
@@ -225,6 +264,7 @@ def run_assistant_audit(
                 ("report_file_name", report_file_name),
                 ("workspace_id", current_user.get_current_user().workspace_id),
                 ("job_id", job_id),
+                ("run_id", run_identity.get("run_id") or job_id),
                 ("started_at", run_started),
                 ("finished_at", finished_at),
             ):
@@ -242,8 +282,10 @@ def run_assistant_audit(
         pass
 
     return {
+        "run_id": run_identity.get("run_id") or job_id,
         "report_name": report_name,
-        "report_path": config.to_rel(output_path),
+        "report_path": run_identity["report_path"],
+        "checkpoint_path": run_identity["checkpoint_path"],
         "report_file_id": report_file_id,
         "report_file_name": report_file_name,
         "started_at": run_started,

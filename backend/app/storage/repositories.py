@@ -52,7 +52,14 @@ class JobRepository(Protocol):
 
     def requeue(self, job_id: str, error: str, retry_delay_seconds: int = 30) -> None: ...
 
-    def mark_failed(self, job_id: str, error: str, *, retry_delay_seconds: int = 30) -> None: ...
+    def mark_failed(
+        self,
+        job_id: str,
+        error: str,
+        *,
+        retry_delay_seconds: int = 30,
+        retryable: bool = True,
+    ) -> None: ...
 
 
 class WorkspaceRepository(Protocol):
@@ -800,19 +807,35 @@ class PostgresJobRepository:
     def mark_succeeded(self, job_id: str, result: dict[str, Any] | None = None) -> None:
         self.mark_done(job_id, result)
 
-    def mark_failed(self, job_id: str, error: str, *, retry_delay_seconds: int = 30) -> None:
+    def mark_failed(
+        self,
+        job_id: str,
+        error: str,
+        *,
+        retry_delay_seconds: int = 30,
+        retryable: bool = True,
+    ) -> None:
+        allow_retry = bool(retryable)
         with self._connect() as conn:
             conn.execute(
                 """UPDATE jobs
-                       SET status=CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END,
+                       SET status=CASE WHEN %s AND attempts < max_attempts THEN 'queued' ELSE 'failed' END,
                        error=%s,
-                       dead_letter=(attempts >= max_attempts),
-                       available_at=CASE WHEN attempts < max_attempts
+                       dead_letter=(NOT %s OR attempts >= max_attempts),
+                       available_at=CASE WHEN %s AND attempts < max_attempts
                                           THEN now() + (%s * interval '1 second') ELSE NULL END,
-                       finished_at=CASE WHEN attempts < max_attempts THEN NULL ELSE now() END,
+                       finished_at=CASE WHEN %s AND attempts < max_attempts THEN NULL ELSE now() END,
                        locked_by=NULL, locked_until=NULL
                    WHERE id=%s""",
-                (error[:4000], max(1, int(retry_delay_seconds)), job_id),
+                (
+                    allow_retry,
+                    error[:4000],
+                    allow_retry,
+                    allow_retry,
+                    max(1, int(retry_delay_seconds)),
+                    allow_retry,
+                    job_id,
+                ),
             )
 
 
