@@ -371,6 +371,15 @@ def _filter_evidence_file_ids_by_detection_basis(
     return scoped
 
 
+def write_checkpoint_atomic(path: Path, payload: dict[str, Any]) -> None:
+    """Write a complete checkpoint via temp file + os.replace so a kill cannot leave half JSON."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp = destination.with_suffix(destination.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, destination)
+
+
 def checkpoint_resume_state(
     checkpoint: dict[str, Any] | None,
     units: list[dict[str, Any]],
@@ -3166,8 +3175,7 @@ def main() -> None:
         parameter_schema=profile.get("parameter_schema"),
     )
     checkpoint["parameters"] = parameters
-    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_checkpoint_atomic(checkpoint_path, checkpoint)
     _report_job_progress(
         job_id,
         stage="test_items",
@@ -3178,7 +3186,7 @@ def main() -> None:
         args.report, prompt=item_prompt, model=judge_model
     )
     checkpoint["extracted_report"] = extracted
-    checkpoint_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_checkpoint_atomic(checkpoint_path, checkpoint)
     _report_job_progress(
         job_id,
         stage="model_decode",
@@ -3200,7 +3208,7 @@ def main() -> None:
         parameter_schema=profile.get("parameter_schema"),
     )
     checkpoint["sample_profile"] = sample_profile
-    checkpoint_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_checkpoint_atomic(checkpoint_path, checkpoint)
 
     units = _build_full_audit_units(extracted)
     repository = _content_repository()
@@ -3297,10 +3305,7 @@ def main() -> None:
             results.append(entry)
             results.sort(key=lambda item: unit_order.get(item["case_id"], 10**9))
             checkpoint["cases"] = results
-            checkpoint_path.write_text(
-                json.dumps(checkpoint, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            write_checkpoint_atomic(checkpoint_path, checkpoint)
             done_after = len(results)
             percent = 20 + int(75 * done_after / total_units) if total_units else 95
             _report_job_progress(

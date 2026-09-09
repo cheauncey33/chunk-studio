@@ -153,6 +153,40 @@ def test_checkpoint_resume_fresh_run_executes_every_case() -> None:
     assert state["resumed_case_count"] == 0
 
 
+def test_write_checkpoint_atomic_leaves_a_complete_json_file(tmp_path: Path) -> None:
+    path = tmp_path / "run.checkpoint.json"
+    workflow.write_checkpoint_atomic(
+        path,
+        {"version": 1, "cases": [{"case_id": "c1"}]},
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["cases"][0]["case_id"] == "c1"
+    assert not path.with_suffix(path.suffix + ".tmp").exists()
+
+
+def test_write_checkpoint_atomic_keeps_previous_file_if_replace_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "run.checkpoint.json"
+    workflow.write_checkpoint_atomic(
+        path,
+        {"version": 1, "cases": [{"case_id": "c1"}]},
+    )
+
+    def fail_replace(_src, _dst):
+        raise OSError("killed before replace")
+
+    monkeypatch.setattr(workflow.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="killed before replace"):
+        workflow.write_checkpoint_atomic(
+            path,
+            {"version": 1, "cases": [{"case_id": "c2"}]},
+        )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["cases"][0]["case_id"] == "c1"
+
+
 def test_runtime_retrieval_config_and_selection_apply_version_values() -> None:
     profile = {
         "retrieval_config": {
