@@ -340,6 +340,38 @@ CREATE TABLE IF NOT EXISTS chat_events (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_events_conversation
     ON chat_events(conversation_id, sequence);
+
+CREATE TABLE IF NOT EXISTS llm_usage_events (
+    id                    TEXT PRIMARY KEY,
+    workspace_id          TEXT NOT NULL,
+    job_id                TEXT,
+    run_id                TEXT,
+    case_id               TEXT,
+    job_attempt           INTEGER,
+    request_attempt       INTEGER NOT NULL DEFAULT 1,
+    stage                 TEXT NOT NULL DEFAULT 'other',
+    provider              TEXT NOT NULL DEFAULT '',
+    model                 TEXT NOT NULL DEFAULT '',
+    request_id            TEXT NOT NULL UNIQUE,
+    status                TEXT NOT NULL DEFAULT 'success',
+    input_tokens          INTEGER,
+    output_tokens         INTEGER,
+    reasoning_tokens      INTEGER,
+    cache_read_tokens     INTEGER,
+    cache_write_tokens    INTEGER,
+    total_tokens          INTEGER,
+    cost_microunits       INTEGER,
+    pricing_missing       INTEGER NOT NULL DEFAULT 0,
+    pricing_snapshot      TEXT,
+    usage_source          TEXT NOT NULL DEFAULT 'unknown',
+    created_at            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_events_job
+    ON llm_usage_events(workspace_id, job_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_events_case
+    ON llm_usage_events(workspace_id, job_id, case_id);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_events_attempt
+    ON llm_usage_events(job_id, job_attempt);
 """
 
 _db_lock = threading.Lock()
@@ -397,8 +429,17 @@ def init_db() -> None:
     _backfill_applied_init_profiles()
     _migrate_assistant_kb_one_to_one()
     _migrate_assistant_single_version()
+    _migrate_llm_usage_events()
     _ensure_knowledge_base_assistants()
     _conn.commit()
+
+
+def _migrate_llm_usage_events() -> None:
+    """Add the usage ledger to databases created before token metering."""
+    from .storage.usage_repository import LLM_USAGE_EVENTS_SQLITE_DDL
+
+    assert _conn is not None
+    _conn.executescript(LLM_USAGE_EVENTS_SQLITE_DDL)
 
 
 def _migrate_chat_conversation_summary() -> None:

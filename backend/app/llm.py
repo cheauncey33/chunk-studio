@@ -10,6 +10,15 @@ from typing import Any, Callable
 import httpx
 
 from . import db
+from .llm_usage import (
+    STATUS_FAILED,
+    STATUS_SUCCESS,
+    UsageContext,
+    new_request_id,
+    normalize_openai_usage,
+    record_normalized_usage,
+    unknown_usage,
+)
 
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
@@ -76,6 +85,53 @@ def resolve_config(*, model: str | None = None) -> dict[str, str]:
     }
 
 
+def infer_provider(config: dict[str, str] | None = None, *, base_url: str = "", model: str = "") -> str:
+    """Best-effort provider id for metering labels. Not a billing key."""
+    visible = config or {}
+    base = str(base_url or visible.get("base_url") or "").lower()
+    model_id = str(model or visible.get("model") or "").lower()
+    if "bigmodel" in base or "zhipu" in base:
+        return "zhipu"
+    if "dashscope" in base:
+        return "dashscope"
+    if "deepseek" in base:
+        return "deepseek"
+    if model_id.startswith("glm"):
+        return "zhipu"
+    if model_id.startswith("qwen") or model_id.startswith("zhipu/"):
+        return "qwen"
+    return "openai"
+
+
+def _meter_openai_response(
+    *,
+    config: dict[str, str],
+    response_json: Any,
+    usage_context: UsageContext | None,
+    status: str,
+    request_id: str | None = None,
+) -> None:
+    """Best-effort ledger write. Never raises into the chat caller."""
+    if usage_context is None:
+        return
+    try:
+        usage = (
+            normalize_openai_usage(response_json)
+            if status == STATUS_SUCCESS and isinstance(response_json, dict)
+            else unknown_usage()
+        )
+        record_normalized_usage(
+            context=usage_context,
+            request_id=request_id or new_request_id(),
+            usage=usage,
+            status=status,
+            provider=infer_provider(config),
+            model=str(config.get("model") or usage_context.model or ""),
+        )
+    except Exception:
+        return
+
+
 def _post_chat_completions(
     *,
     config: dict[str, str],
@@ -109,9 +165,11 @@ def chat_text(
     model: str | None = None,
     temperature: float = 0,
     timeout: float = 180,
+    usage_context: UsageContext | None = None,
 ) -> str:
     """Plain-text chat completion (no JSON response_format)."""
     config = resolve_config(model=model)
+    request_id = new_request_id() if usage_context is not None else None
     response = _post_chat_completions(
         config=config,
         payload=_apply_thinking_fields(
@@ -126,14 +184,36 @@ def chat_text(
         timeout=timeout,
     )
     if response.status_code != HTTPStatus.OK:
+        _meter_openai_response(
+            config=config,
+            response_json=None,
+            usage_context=usage_context,
+            status=STATUS_FAILED,
+            request_id=request_id,
+        )
         raise RuntimeError(
             f"DeepSeek call failed: status={response.status_code} "
             f"body={response.text[:500]}"
         )
     try:
-        content = response.json()["choices"][0]["message"]["content"]
+        payload = response.json()
+        content = payload["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
+        _meter_openai_response(
+            config=config,
+            response_json=None,
+            usage_context=usage_context,
+            status=STATUS_FAILED,
+            request_id=request_id,
+        )
         raise RuntimeError("DeepSeek returned an invalid chat response") from exc
+    _meter_openai_response(
+        config=config,
+        response_json=payload,
+        usage_context=usage_context,
+        status=STATUS_SUCCESS,
+        request_id=request_id,
+    )
     if isinstance(content, list):
         content = "".join(
             str(item.get("text") or "") if isinstance(item, dict) else str(item)
@@ -150,11 +230,13 @@ def chat_tools(
     temperature: float = 0,
     timeout: float = 180,
     tool_choice: str = "auto",
+    usage_context: UsageContext | None = None,
 ) -> dict[str, Any]:
     """Return one OpenAI-compatible assistant message with native tool calls."""
     if not tools:
         raise ValueError("tools must not be empty")
     config = resolve_config(model=model)
+    request_id = new_request_id() if usage_context is not None else None
     response = _post_chat_completions(
         config=config,
         payload=_apply_thinking_fields(
@@ -171,14 +253,36 @@ def chat_tools(
         timeout=timeout,
     )
     if response.status_code != HTTPStatus.OK:
+        _meter_openai_response(
+            config=config,
+            response_json=None,
+            usage_context=usage_context,
+            status=STATUS_FAILED,
+            request_id=request_id,
+        )
         raise RuntimeError(
             f"DeepSeek call failed: status={response.status_code} "
             f"body={response.text[:500]}"
         )
     try:
-        message = response.json()["choices"][0]["message"]
+        payload = response.json()
+        message = payload["choices"][0]["message"]
     except (KeyError, IndexError, TypeError) as exc:
+        _meter_openai_response(
+            config=config,
+            response_json=None,
+            usage_context=usage_context,
+            status=STATUS_FAILED,
+            request_id=request_id,
+        )
         raise RuntimeError("DeepSeek returned an invalid tool chat response") from exc
+    _meter_openai_response(
+        config=config,
+        response_json=payload,
+        usage_context=usage_context,
+        status=STATUS_SUCCESS,
+        request_id=request_id,
+    )
     if not isinstance(message, dict):
         raise RuntimeError("DeepSeek returned an invalid assistant message")
     content = message.get("content")
@@ -203,6 +307,7 @@ def chat_tools_stream(
     timeout: float = 180,
     event_sink: Callable[[dict[str, Any]], None] | None = None,
     tool_choice: str = "auto",
+    usage_context: UsageContext | None = None,
 ) -> dict[str, Any]:
     """Stream content/tool-call deltas and return the aggregated message."""
     if not tools:
@@ -228,6 +333,8 @@ def chat_tools_stream(
     content_parts: list[str] = []
     tool_calls: dict[int, dict[str, Any]] = {}
     finish_reason: str | None = None
+    stream_usage: dict[str, Any] | None = None
+    request_id = new_request_id() if usage_context is not None else None
     try:
         with httpx.stream(url=url, method="POST", headers=headers, json=payload, timeout=timeout) as response:
             if response.status_code != HTTPStatus.OK:
@@ -235,6 +342,13 @@ def chat_tools_stream(
                 # response.text before read() raises another exception and
                 # hides the provider's actual error body from the Agent UI.
                 response.read()
+                _meter_openai_response(
+                    config=config,
+                    response_json=None,
+                    usage_context=usage_context,
+                    status=STATUS_FAILED,
+                    request_id=request_id,
+                )
                 raise RuntimeError(
                     f"DeepSeek stream failed: status={response.status_code} "
                     f"body={response.text[:500]}"
@@ -254,6 +368,8 @@ def chat_tools_stream(
                     continue
                 if not isinstance(chunk, dict):
                     continue
+                if isinstance(chunk.get("usage"), dict):
+                    stream_usage = chunk.get("usage")
                 choices = chunk.get("choices") or []
                 if not choices or not isinstance(choices[0], dict):
                     continue
@@ -300,7 +416,21 @@ def chat_tools_stream(
                             "arguments": target["function"]["arguments"],
                         })
     except _TRANSIENT_HTTPX_ERRORS as exc:
+        _meter_openai_response(
+            config=config,
+            response_json=None,
+            usage_context=usage_context,
+            status=STATUS_FAILED,
+            request_id=request_id,
+        )
         raise RuntimeError(f"DeepSeek streaming connection failed: {exc}") from exc
+    _meter_openai_response(
+        config=config,
+        response_json={"usage": stream_usage} if stream_usage else {},
+        usage_context=usage_context,
+        status=STATUS_SUCCESS,
+        request_id=request_id,
+    )
     return {
         "role": "assistant",
         "content": "".join(content_parts),
@@ -393,8 +523,10 @@ def chat_json(
     model: str | None = None,
     temperature: float = 0,
     timeout: float = 180,
+    usage_context: UsageContext | None = None,
 ) -> dict[str, Any]:
     config = resolve_config(model=model)
+    request_id = new_request_id() if usage_context is not None else None
     response = _post_chat_completions(
         config=config,
         payload=_apply_thinking_fields(
@@ -410,15 +542,38 @@ def chat_json(
         timeout=timeout,
     )
     if response.status_code != HTTPStatus.OK:
+        _meter_openai_response(
+            config=config,
+            response_json=None,
+            usage_context=usage_context,
+            status=STATUS_FAILED,
+            request_id=request_id,
+        )
         raise RuntimeError(
             f"DeepSeek call failed: status={response.status_code} "
             f"body={response.text[:500]}"
         )
     try:
-        content = response.json()["choices"][0]["message"]["content"]
-        return parse_json_object(content)
+        payload = response.json()
+        content = payload["choices"][0]["message"]["content"]
+        parsed = parse_json_object(content)
     except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        _meter_openai_response(
+            config=config,
+            response_json=None,
+            usage_context=usage_context,
+            status=STATUS_FAILED,
+            request_id=request_id,
+        )
         raise RuntimeError("DeepSeek returned an invalid JSON response") from exc
+    _meter_openai_response(
+        config=config,
+        response_json=payload,
+        usage_context=usage_context,
+        status=STATUS_SUCCESS,
+        request_id=request_id,
+    )
+    return parsed
 
 
 def parse_json_object(content: Any) -> dict[str, Any]:

@@ -293,7 +293,7 @@ def test_oil_schema_backfill_preserves_existing_fields_and_appends_new_ones(
 def test_extract_parameters_uses_schema_and_open_list(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_call_model(prompt: str, payload: dict, *, model: str):
+    def fake_call_model(prompt: str, payload: dict, *, model: str, **_kwargs):
         captured["payload"] = payload
         captured["model"] = model
         return {
@@ -329,7 +329,7 @@ def test_extract_parameters_uses_schema_and_open_list(monkeypatch) -> None:
 
 
 def test_extract_parameters_accepts_legacy_flat_oil_output(monkeypatch) -> None:
-    def fake_call_model(prompt: str, payload: dict, *, model: str):
+    def fake_call_model(prompt: str, payload: dict, *, model: str, **_kwargs):
         return {
             "model": "S20",
             "rated_capacity": "400 kVA",
@@ -1058,7 +1058,7 @@ def test_consistency_keeps_clean_judgment() -> None:
 
 
 def test_run_audit_judge_does_not_call_llm_on_consistency_shaped_input(monkeypatch) -> None:
-    def fake_call_model(prompt: str, payload: dict, *, model: str):
+    def fake_call_model(prompt: str, payload: dict, *, model: str, **_kwargs):
         raise AssertionError("the LLM judge is not part of the pipeline")
 
     monkeypatch.setattr(workflow, "_call_model", fake_call_model)
@@ -1084,7 +1084,7 @@ def test_run_audit_judge_applies_retrieved_deterministic_conflict_without_rejudg
     candidate["evidence_roles"] = ["nominal_rule"]
     calls = []
 
-    def fake_call_model(prompt: str, payload: dict, *, model: str):
+    def fake_call_model(prompt: str, payload: dict, *, model: str, **_kwargs):
         calls.append(payload)
         return {
             "status": "insufficient_context",
@@ -1151,7 +1151,7 @@ def test_run_audit_judge_applies_retrieved_deterministic_conflict_without_rejudg
 def test_run_audit_judge_applies_derived_sum_without_llm(monkeypatch) -> None:
     calls = []
 
-    def fake_call_model(prompt: str, payload: dict, *, model: str):
+    def fake_call_model(prompt: str, payload: dict, *, model: str, **_kwargs):
         calls.append(payload)
         raise AssertionError("derived sum should not call the judge model")
 
@@ -1215,7 +1215,7 @@ def test_run_audit_judge_applies_derived_sum_without_llm(monkeypatch) -> None:
 
 
 def test_run_audit_judge_stays_open_when_no_table_claim(monkeypatch) -> None:
-    def fake_call_model(prompt: str, payload: dict, *, model: str):
+    def fake_call_model(prompt: str, payload: dict, *, model: str, **_kwargs):
         raise AssertionError("the LLM judge is not part of the pipeline")
 
     monkeypatch.setattr(workflow, "_call_model", fake_call_model)
@@ -1238,7 +1238,7 @@ def test_run_audit_judge_stays_open_when_no_table_claim(monkeypatch) -> None:
 
 
 def test_run_audit_judge_keeps_agent_verdict_without_caliber_rejudge(monkeypatch) -> None:
-    def fake_call_model(prompt: str, payload: dict, *, model: str):
+    def fake_call_model(prompt: str, payload: dict, *, model: str, **_kwargs):
         raise AssertionError("agent evidence is not an LLM judge call")
 
     monkeypatch.setattr(workflow, "_call_model", fake_call_model)
@@ -1280,7 +1280,7 @@ def test_run_audit_judge_keeps_agent_verdict_without_caliber_rejudge(monkeypatch
 def test_run_audit_judge_rules_qualitative_clause_out_of_scope_without_llm(
     monkeypatch,
 ) -> None:
-    def fake_call_model(prompt: str, payload: dict, *, model: str):
+    def fake_call_model(prompt: str, payload: dict, *, model: str, **_kwargs):
         raise AssertionError("a qualitative clause must not reach the judge model")
 
     monkeypatch.setattr(workflow, "_call_model", fake_call_model)
@@ -1569,7 +1569,7 @@ def test_build_sample_profile_merges_report_and_decode() -> None:
 def test_decode_model_passes_empty_schema_fields_and_filters_fills(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_call_model(prompt: str, payload: dict, *, model: str):
+    def fake_call_model(prompt: str, payload: dict, *, model: str, **_kwargs):
         captured["payload"] = payload
         return {
             "raw_model": "S20-M.RL-400/10-NX2",

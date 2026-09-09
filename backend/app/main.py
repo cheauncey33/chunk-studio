@@ -46,6 +46,7 @@ from .routers import (
     search,
     settings,
     workspaces,
+    internal,
 )
 
 # Ensure data dirs exist before StaticFiles mounts reference them (mounts happen
@@ -71,6 +72,7 @@ async def bind_current_user(request, call_next):
     if request.url.path in {
         "/api/health", "/api/health/live", "/api/health/ready",
         "/docs", "/openapi.json",
+        "/internal/llm-usage",
     }:
         return await call_next(request)
     try:
@@ -181,6 +183,8 @@ for r in (files.router, chunks.router, auto_chunks.router, fields.router, settin
           jobs.router, extract.router, ocr.router, export.router, search.router,
           embeddings.router, workspaces.router):
     app.include_router(r, prefix=api_prefix)
+
+app.include_router(internal.router)
 
 
 # Crop images served by chunk crop_url (e.g. /crops/<file>.png)

@@ -65,6 +65,8 @@ from app.parameter_schema import (  # noqa: E402
     resolve_parameter_schema,
 )
 from app.prompt_vars import build_prompt_var_context, compose_runtime_prompt  # noqa: E402
+from app.llm_usage import UsageContext  # noqa: E402
+from app import current_user  # noqa: E402
 from app.query_planner_routes import (  # noqa: E402
     enabled_query_planner_route_ids,
     resolve_query_planner_routes,
@@ -237,7 +239,60 @@ def _content_repository():
     return get_content_repository() or get_content_write_repository()
 
 
-def _call_model(system_prompt: str, payload: dict[str, Any], *, model: str) -> dict[str, Any]:
+# Process-wide metering identity. Set once in main() before the case pool
+# starts; worker threads read it. Do not use contextvars here.
+_USAGE_IDENTITY: dict[str, Any] = {
+    "workspace_id": "",
+    "job_id": "",
+    "run_id": "",
+    "job_attempt": None,
+}
+
+
+def _usage_context(stage: str, case_id: str | None = None) -> UsageContext:
+    ident = _USAGE_IDENTITY
+    workspace = str(ident.get("workspace_id") or "").strip()
+    if not workspace:
+        try:
+            workspace = current_user.get_current_user().workspace_id
+        except Exception:
+            workspace = ""
+    attempt = ident.get("job_attempt")
+    job_attempt = int(attempt) if attempt not in (None, "") else None
+    return UsageContext(
+        workspace_id=workspace,
+        job_id=str(ident.get("job_id") or "").strip(),
+        run_id=str(ident.get("run_id") or "").strip(),
+        case_id=str(case_id or "").strip(),
+        job_attempt=job_attempt,
+        stage=stage,
+    )
+
+
+def _sidecar_execution_fields(case_id: str) -> dict[str, Any]:
+    """Observability identity only. Never interpolated into the agent prompt."""
+    payload: dict[str, Any] = {"case_id": case_id}
+    job_id = str(_USAGE_IDENTITY.get("job_id") or "").strip()
+    run_id = str(_USAGE_IDENTITY.get("run_id") or "").strip()
+    attempt = _USAGE_IDENTITY.get("job_attempt")
+    if job_id:
+        payload["job_id"] = job_id
+    if run_id:
+        payload["run_id"] = run_id
+    if attempt not in (None, ""):
+        payload["job_attempt"] = int(attempt)
+    return payload
+
+
+def _call_model(
+    system_prompt: str,
+    payload: dict[str, Any],
+    *,
+    model: str,
+    stage: str = "other",
+    case_id: str | None = None,
+    usage_context: UsageContext | None = None,
+) -> dict[str, Any]:
     return llm.chat_json(
         [
             {"role": "system", "content": system_prompt},
@@ -245,6 +300,7 @@ def _call_model(system_prompt: str, payload: dict[str, Any], *, model: str) -> d
         ],
         model=model,
         temperature=0,
+        usage_context=usage_context or _usage_context(stage, case_id=case_id),
     )
 
 
@@ -596,6 +652,7 @@ def _extract_parameters(
         prompt,
         {"report_markdown": markdown},
         model=model,
+        stage="report_parameters",
     )
     return normalize_extracted_parameters(result, schema)
 
@@ -646,6 +703,7 @@ def _decode_model(
             "naming_rule_markdown": naming_markdown,
         },
         model=model,
+        stage="model_decode",
     )
     if result.get("raw_model") != parameters["model"]:
         raise ValueError("naming decoder changed the raw model")
@@ -2447,7 +2505,13 @@ def _audit_one_case(
         "test_item": runtime_case["test_item"],
         "reported_requirement": runtime_case["reported_requirement"],
     }
-    planned = _call_model(query_prompt, planner_input, model=judge_model)
+    planned = _call_model(
+        query_prompt,
+        planner_input,
+        model=judge_model,
+        stage="query_rewrite",
+        case_id=str(unit.get("case_id") or ""),
+    )
     queries = _collect_enabled_planner_queries(
         planned if isinstance(planned, dict) else {},
         query_planner_routes=(profile.get("retrieval_config") or {}).get(
@@ -2541,7 +2605,7 @@ def _audit_one_case(
         if not agent_sidecar_url:
             return None
         payload = {
-            "case_id": unit["case_id"],
+            **_sidecar_execution_fields(unit["case_id"]),
             "sample_context": runtime_case["sample_context"],
             "test_item": runtime_case["test_item"],
             "reported_requirement": runtime_case["reported_requirement"],
@@ -2945,7 +3009,7 @@ def _audit_one_case_agent(
     del report_markdown  # the agent re-derives context via its own RAG tools
     runtime_case, profile_copy = _agent_runtime_case(unit, sample_profile)
     payload = {
-        "case_id": unit["case_id"],
+        **_sidecar_execution_fields(unit["case_id"]),
         "sample_context": runtime_case["sample_context"],
         "test_item": runtime_case["test_item"],
         "reported_requirement": runtime_case["reported_requirement"],
@@ -3055,6 +3119,8 @@ def main() -> None:
     parser.add_argument("--report-file-id")
     parser.add_argument("--naming-rule-file-id")
     parser.add_argument("--job-id", default="")
+    parser.add_argument("--run-id", default="")
+    parser.add_argument("--job-attempt", type=int, default=0)
     parser.add_argument("--started-at", default="")
     parser.add_argument("--judge-model")
     parser.add_argument(
@@ -3156,6 +3222,20 @@ def main() -> None:
     query_prompt = _prompt_content(profile, "query_planner", var_context=prompt_vars)
     judge_prompt = _prompt_content(profile, "audit_judge", var_context=prompt_vars)
     job_id = str(args.job_id or "").strip()
+    run_id = (
+        str(args.run_id or "").strip()
+        or str(os.environ.get("CHUNK_STUDIO_RUN_ID") or "").strip()
+        or job_id
+    )
+    job_attempt_raw = args.job_attempt or os.environ.get("CHUNK_STUDIO_JOB_ATTEMPT") or 1
+    try:
+        job_attempt = max(1, int(job_attempt_raw))
+    except (TypeError, ValueError):
+        job_attempt = 1
+    _USAGE_IDENTITY["workspace_id"] = current_user.get_current_user().workspace_id
+    _USAGE_IDENTITY["job_id"] = job_id or str(os.environ.get("CHUNK_STUDIO_JOB_ID") or "").strip()
+    _USAGE_IDENTITY["run_id"] = run_id
+    _USAGE_IDENTITY["job_attempt"] = job_attempt
     checkpoint_path = args.output.with_suffix(".checkpoint.json")
     checkpoint = (
         json.loads(checkpoint_path.read_text(encoding="utf-8"))
@@ -3183,7 +3263,10 @@ def main() -> None:
         message="正在提取检测项目…",
     )
     extracted = checkpoint.get("extracted_report") or extract_report(
-        args.report, prompt=item_prompt, model=judge_model
+        args.report,
+        prompt=item_prompt,
+        model=judge_model,
+        usage_context=_usage_context("test_items"),
     )
     checkpoint["extracted_report"] = extracted
     write_checkpoint_atomic(checkpoint_path, checkpoint)

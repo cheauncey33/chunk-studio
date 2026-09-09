@@ -198,6 +198,7 @@ def run_assistant_audit(
     started_at: str | None = None,
     run_id: str | None = None,
     report_name: str | None = None,
+    job_attempt: int | None = None,
 ) -> dict[str, Any]:
     """Run the end-to-end audit workflow and write a stable report JSON.
 
@@ -255,6 +256,11 @@ def run_assistant_audit(
     cmd.extend(production_runtime_args())
     if job_id:
         cmd.extend(["--job-id", job_id])
+    resolved_run_id = str(run_identity.get("run_id") or job_id or "").strip()
+    if resolved_run_id:
+        cmd.extend(["--run-id", resolved_run_id])
+    attempt = max(1, int(job_attempt or 1))
+    cmd.extend(["--job-attempt", str(attempt)])
     if resolved_naming_id:
         cmd.extend(["--naming-rule-file-id", resolved_naming_id])
     run_env = os.environ.copy()
@@ -263,6 +269,11 @@ def run_assistant_audit(
     run_env["AGENT_SIDECAR_URL"] = config.AGENT_SIDECAR_URL
     if config.AGENT_SIDECAR_TOKEN:
         run_env["AGENT_SIDECAR_TOKEN"] = config.AGENT_SIDECAR_TOKEN
+    if job_id:
+        run_env["CHUNK_STUDIO_JOB_ID"] = job_id
+    if resolved_run_id:
+        run_env["CHUNK_STUDIO_RUN_ID"] = resolved_run_id
+    run_env["CHUNK_STUDIO_JOB_ATTEMPT"] = str(attempt)
     run_env["CHUNK_STUDIO_DEFAULT_WORKSPACE_ID"] = identity.workspace_id
     run_env["DEFAULT_WORKSPACE_ID"] = identity.workspace_id
     run_env["CHUNK_STUDIO_DEFAULT_USER_ID"] = identity.user_id

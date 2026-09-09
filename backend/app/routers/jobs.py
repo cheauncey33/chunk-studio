@@ -32,3 +32,11 @@ def get_job(job_id: str):
         )
     except KeyError:
         raise HTTPException(404, "job not found")
+
+
+@router.get("/{job_id}/usage")
+def get_job_usage(job_id: str):
+    try:
+        return job_service.get_job_usage(job_id)
+    except KeyError:
+        raise HTTPException(404, "job not found")

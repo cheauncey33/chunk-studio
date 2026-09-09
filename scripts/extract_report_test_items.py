@@ -118,7 +118,13 @@ def _validate_report(result: dict[str, Any], expected_report_id: str) -> None:
                 raise ValueError(f"item[{index}].requirements[{req_index}] contains a result field")
 
 
-def extract_report(path: Path, *, prompt: str, model: str) -> dict[str, Any]:
+def extract_report(
+    path: Path,
+    *,
+    prompt: str,
+    model: str,
+    usage_context=None,
+) -> dict[str, Any]:
     report_id = _report_id(path)
     payload = json.dumps(
         {
@@ -134,6 +140,7 @@ def extract_report(path: Path, *, prompt: str, model: str) -> dict[str, Any]:
         ],
         model=model,
         temperature=0,
+        usage_context=usage_context,
     )
     if not isinstance(result, dict):
         raise ValueError("response must be a JSON object")

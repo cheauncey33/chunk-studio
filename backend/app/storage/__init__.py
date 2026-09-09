@@ -12,6 +12,12 @@ from .repositories import (
     postgres_content_schema_sql,
     postgres_schema_sql,
 )
+from .usage_repository import (
+    PostgresUsageRepository,
+    SqliteUsageRepository,
+    UsageEvent,
+    get_usage_repository,
+)
 from .vector_store import PgVectorStore, SQLiteVectorStore, VectorStore, get_vector_store
 
 __all__ = [
@@ -33,4 +39,8 @@ __all__ = [
     "get_job_repository",
     "postgres_content_schema_sql",
     "postgres_schema_sql",
+    "PostgresUsageRepository",
+    "SqliteUsageRepository",
+    "UsageEvent",
+    "get_usage_repository",
 ]

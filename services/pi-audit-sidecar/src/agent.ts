@@ -22,6 +22,7 @@ import { systemPrompt } from "./prompt.ts";
 import { parseVerdictDetailed } from "./parse.ts";
 import { formatFirstRoundCards } from "./preview.ts";
 import { applyEvidenceClosure, closeEvidence } from "./closure.ts";
+import { recordAssistantMessageUsage, type ExecutionIdentity } from "./usage.ts";
 
 // 工具调用硬预算：每个 case 一个全新 loader（extensionFactories 闭包随之独立），
 // 预算计数是 case 内局部变量，天然无跨 session 泄漏；并发 case 互不干扰。
@@ -31,6 +32,10 @@ function defaultToolBudget(): number {
 
 export type AgentCaseInput = {
 	case_id: string;
+	/** Observability / metering only. Never interpolated into the agent prompt. */
+	job_id?: string | null;
+	run_id?: string | null;
+	job_attempt?: number | null;
 	sample_context?: Record<string, unknown> | null;
 	test_item?: Record<string, unknown> | null;
 	reported_requirement?: Record<string, unknown> | null;
@@ -321,6 +326,13 @@ function summarizeMessageText(content: unknown): string {
 export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> {
 	const started = Date.now();
 	const { model, runtime, modelId } = await getModel();
+	const usageIdentity: ExecutionIdentity = {
+		job_id: input.job_id,
+		run_id: input.run_id,
+		job_attempt: typeof input.job_attempt === "number" ? input.job_attempt : Number(input.job_attempt || 0) || null,
+		case_id: input.case_id,
+	};
+	const usagePosts: Promise<unknown>[] = [];
 
 	// Per-case budget (request override wins; else env default).
 	let toolCallBudget = defaultToolBudget();
@@ -405,6 +417,7 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 			trace.push({ type: event.type, ts: Date.now(), ...strip(event) });
 		}
 		if (event.type === "message_end" && event.message?.role === "assistant") {
+			usagePosts.push(recordAssistantMessageUsage(usageIdentity, event.message));
 			const content = event.message.content ?? [];
 			const text = (Array.isArray(content) ? content : [content])
 				.map((b: any) => (typeof b === "string" ? b : b?.text ?? ""))
@@ -511,6 +524,7 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 		}
 	}
 	session.dispose();
+	await Promise.allSettled(usagePosts);
 
 	const closed = applyEvidenceClosure(parsed.value, readBodies);
 	parsed = { ...parsed, value: closed.result };

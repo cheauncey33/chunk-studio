@@ -640,6 +640,33 @@ def get_job(
     return _row_to_job(row)
 
 
+def get_job_usage(job_id: str) -> dict[str, Any]:
+    """Workspace-scoped usage aggregate. Ledger rows are the source of truth."""
+    job = get_job(job_id, workspace_id_value=workspace_id())
+    from .storage.usage_repository import get_usage_repository
+
+    summary = get_usage_repository().get_usage_summary(
+        workspace_id=str(job.get("workspace_id") or workspace_id()),
+        job_id=str(job.get("id") or job_id),
+    )
+    summary["job_id"] = str(job.get("id") or job_id)
+    return summary
+
+
+def _usage_summary_snapshot(job_id: str, workspace: str | None = None) -> dict[str, Any] | None:
+    try:
+        from .storage.usage_repository import compact_usage_summary, get_usage_repository
+
+        summary = get_usage_repository().get_usage_summary(
+            workspace_id=str(workspace or workspace_id()),
+            job_id=str(job_id),
+        )
+        return compact_usage_summary(summary)
+    except Exception:
+        logger.exception("usage summary snapshot failed for job %s", job_id)
+        return None
+
+
 def merge_job_result(job_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
     """Merge fields into a queued/running job's result JSON (e.g. live progress).
 
@@ -1062,6 +1089,7 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
             started_at=str(job.get("started_at") or "") or None,
             run_id=identity["run_id"],
             report_name=identity["report_name"],
+            job_attempt=int(job.get("attempts") or 1),
         )
     except JobFailure as exc:
         _fail_job(job, str(exc), retryable=exc.retryable, error_code=exc.code)
@@ -1103,6 +1131,9 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
     result["resumed_case_count"] = result["progress"]["resumed_case_count"]
     result.pop("error_class", None)
     result.pop("error_code", None)
+    snapshot = _usage_summary_snapshot(str(job.get("id") or ""), str(job.get("workspace_id") or "") or None)
+    if snapshot is not None:
+        result["usage_summary"] = snapshot
     _mark_job_done(job["id"], result)
 
 
