@@ -500,7 +500,7 @@ def test_compact_candidate_attaches_standard_priority() -> None:
     assert compact["business_metadata"]["standard_no"] == "Q/GDW 12126.4-2024"
 
 
-def test_retrieved_pool_for_agent_keeps_chunk_ids_without_full_text() -> None:
+def test_retrieved_pool_for_agent_keeps_section_text_but_strips_table_content() -> None:
     pool = workflow._retrieved_pool_for_agent(
         [
             {

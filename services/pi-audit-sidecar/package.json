@@ -6,7 +6,8 @@
   "description": "Stateless Pi-agent audit case executor for chunk-studio (one agent session per HTTP request).",
   "scripts": {
     "start": "node --env-file=.env --import tsx src/server.ts",
-    "start:plain": "node --import tsx src/server.ts"
+    "start:plain": "node --import tsx src/server.ts",
+    "test": "node --import tsx --test src/preview.test.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
