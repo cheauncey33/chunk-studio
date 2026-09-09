@@ -289,11 +289,18 @@ def normalize_pi_sdk_usage(message_or_usage: Any) -> NormalizedUsage:
 
 
 def price_usage(usage: NormalizedUsage, *, provider: str, model: str) -> tuple[int | None, bool, dict[str, Any] | None]:
-    """Return (cost_microunits, pricing_missing, snapshot)."""
-    if usage.usage_source == USAGE_SOURCE_UNKNOWN:
-        return None, True, None
+    """Return (cost_microunits, pricing_missing, snapshot).
+
+    ``pricing_missing`` means the model has no unit price. Unknown token
+    usage (timeout, missing provider counters) does **not** imply missing
+    prices: those events are ``usage_source=unknown`` with cost NULL.
+    """
     price = llm_pricing.lookup_price(provider, model)
-    if price is None:
+    missing = price is None
+    snapshot = price.snapshot() if price is not None else None
+    if usage.usage_source == USAGE_SOURCE_UNKNOWN:
+        return None, missing, snapshot
+    if missing:
         return None, True, None
     try:
         cost = llm_pricing.compute_cost_microunits(
@@ -303,11 +310,12 @@ def price_usage(usage: NormalizedUsage, *, provider: str, model: str) -> tuple[i
             cache_write_tokens=usage.cache_write_tokens,
             reasoning_tokens=usage.reasoning_tokens,
             price=price,
+            usage_source=usage.usage_source,
         )
     except Exception:
         logger.exception("llm pricing calculation failed for %s/%s", provider, model)
         return None, True, None
-    return cost, False, price.snapshot()
+    return cost, False, snapshot
 
 
 def _metric_labels(event: UsageEvent) -> dict[str, str]:
@@ -354,10 +362,6 @@ def build_usage_event(
     cost, missing, snapshot = price_usage(
         usage, provider=provider_id, model=model_id
     )
-    if usage.usage_source == USAGE_SOURCE_UNKNOWN and status == STATUS_FAILED:
-        missing = True
-        cost = None
-        snapshot = None
     return UsageEvent(
         id=str(uuid.uuid4()),
         workspace_id=str(context.workspace_id or "").strip(),
@@ -390,7 +394,8 @@ def record_usage_event(event: UsageEvent) -> bool:
         if not event.request_id:
             raise ValueError("request_id is required")
         inserted = get_usage_repository().record_usage(event)
-        _observe_recorded(event)
+        if inserted:
+            _observe_recorded(event)
         return inserted
     except Exception:
         logger.exception(

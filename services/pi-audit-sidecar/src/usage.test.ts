@@ -21,10 +21,9 @@ test("three assistant message_end payloads become three usage events", () => {
 	];
 	const events = turns.map((message) => usageFromAssistantMessage(identity, message));
 	assert.equal(events.length, 3);
-	assert.deepEqual(
-		events.map((item) => item?.request_id),
-		["pi:msg-1", "pi:msg-2", "pi:msg-3"],
-	);
+	const ids = events.map((item) => item?.request_id);
+	assert.equal(new Set(ids).size, 3);
+	assert.ok(ids.every((id) => /^pi:[a-f0-9]{64}$/.test(String(id))));
 	const total = events.reduce((sum, item) => sum + Number(item?.total_tokens || 0), 0);
 	assert.equal(total, 2200);
 	assert.equal(events[1]?.reasoning_tokens, 40);
@@ -45,7 +44,20 @@ test("duplicate message id yields the same request_id", () => {
 		requestIdForAssistantMessage(identity, message),
 		requestIdForAssistantMessage(identity, message),
 	);
-	assert.equal(usageFromAssistantMessage(identity, message)?.request_id, "pi:msg-dup");
+	assert.match(String(usageFromAssistantMessage(identity, message)?.request_id), /^pi:[a-f0-9]{64}$/);
+});
+
+test("same message id on a different job attempt gets a different request_id", () => {
+	const message = {
+		id: "msg-retry",
+		role: "assistant",
+		usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
+	};
+	const first = requestIdForAssistantMessage(identity, message);
+	const retried = requestIdForAssistantMessage({ ...identity, job_attempt: 3 }, message);
+	assert.notEqual(first, retried);
+	assert.match(first, /^pi:[a-f0-9]{64}$/);
+	assert.match(retried, /^pi:[a-f0-9]{64}$/);
 });
 
 test("user and tool messages are ignored", () => {

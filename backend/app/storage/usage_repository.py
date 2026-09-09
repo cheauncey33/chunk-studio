@@ -183,110 +183,174 @@ def _row_to_event(row: Any) -> dict[str, Any]:
     return item
 
 
-def _empty_bucket() -> dict[str, Any]:
-    return {
-        "request_count": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "reasoning_tokens": 0,
-        "cache_read_tokens": 0,
-        "cache_write_tokens": 0,
-        "total_tokens": 0,
-        "cost_microunits": None,
-        "pricing_missing_event_count": 0,
+def _sql_int(value: Any, default: int = 0) -> int:
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
+def _usage_where(
+    placeholder: str,
+    workspace_id: str,
+    job_id: str | None,
+    case_id: str | None,
+) -> tuple[str, list[Any]]:
+    clauses = [f"workspace_id={placeholder}"]
+    params: list[Any] = [str(workspace_id)]
+    if job_id:
+        clauses.append(f"job_id={placeholder}")
+        params.append(job_id)
+    if case_id:
+        clauses.append(f"case_id={placeholder}")
+        params.append(case_id)
+    return " AND ".join(clauses), params
+
+
+def _aggregate_select(*, sqlite: bool) -> str:
+    missing_sum = (
+        "COALESCE(SUM(pricing_missing), 0)"
+        if sqlite
+        else "COALESCE(SUM(CASE WHEN pricing_missing THEN 1 ELSE 0 END), 0)"
+    )
+    return f"""
+        COUNT(*) AS request_count,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+        COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+        COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(cost_microunits), 0) AS known_cost_microunits,
+        COALESCE(SUM(CASE WHEN cost_microunits IS NULL THEN 1 ELSE 0 END), 0)
+            AS incomplete_cost_event_count,
+        {missing_sum} AS pricing_missing_event_count,
+        COALESCE(SUM(CASE WHEN usage_source = 'unknown' THEN 1 ELSE 0 END), 0)
+            AS usage_unknown_event_count
+    """
+
+
+def _finalize_aggregate(
+    row: dict[str, Any] | None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    data = dict(row or {})
+    known = _sql_int(data.get("known_cost_microunits"))
+    complete = _sql_int(data.get("incomplete_cost_event_count")) == 0
+    pricing_missing_count = _sql_int(data.get("pricing_missing_event_count"))
+    usage_unknown_count = _sql_int(data.get("usage_unknown_event_count"))
+    bucket: dict[str, Any] = {
+        "request_count": _sql_int(data.get("request_count")),
+        "input_tokens": _sql_int(data.get("input_tokens")),
+        "output_tokens": _sql_int(data.get("output_tokens")),
+        "reasoning_tokens": _sql_int(data.get("reasoning_tokens")),
+        "cache_read_tokens": _sql_int(data.get("cache_read_tokens")),
+        "cache_write_tokens": _sql_int(data.get("cache_write_tokens")),
+        "total_tokens": _sql_int(data.get("total_tokens")),
+        "known_cost_microunits": known,
+        "cost_microunits": known if complete else None,
+        "cost_complete": complete,
+        "pricing_missing_event_count": pricing_missing_count,
+        "usage_unknown_event_count": usage_unknown_count,
+        "pricing_missing": pricing_missing_count > 0,
     }
+    if extra:
+        bucket.update(extra)
+    return bucket
 
 
-def _accumulate(bucket: dict[str, Any], row: dict[str, Any]) -> None:
-    bucket["request_count"] += 1
-    for key in (
-        "input_tokens",
-        "output_tokens",
-        "reasoning_tokens",
-        "cache_read_tokens",
-        "cache_write_tokens",
-        "total_tokens",
-    ):
-        value = row.get(key)
-        if value is not None:
-            bucket[key] += int(value)
-    cost = row.get("cost_microunits")
-    if cost is not None:
-        bucket["cost_microunits"] = int(bucket["cost_microunits"] or 0) + int(cost)
-    if row.get("pricing_missing"):
-        bucket["pricing_missing_event_count"] += 1
+def _sql_usage_summary(
+    execute: Any,
+    *,
+    placeholder: str,
+    sqlite: bool,
+    workspace_id: str,
+    job_id: str | None = None,
+    case_id: str | None = None,
+) -> dict[str, Any]:
+    """Unbounded accounting aggregate. Do not SELECT rows and SUM in Python."""
+    where, params = _usage_where(placeholder, workspace_id, job_id, case_id)
+    agg = _aggregate_select(sqlite=sqlite)
+    totals_row = execute(
+        f"SELECT {agg} FROM llm_usage_events WHERE {where}",
+        params,
+    ).fetchone()
+    summary = _finalize_aggregate(dict(totals_row) if totals_row is not None else None)
+    summary["currency"] = "USD"
 
-
-def _summary_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    totals = _empty_bucket()
-    by_stage: dict[str, dict[str, Any]] = {}
-    by_model: dict[tuple[str, str], dict[str, Any]] = {}
-    by_attempt: dict[int, dict[str, Any]] = {}
-    by_case: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        _accumulate(totals, row)
-        stage = str(row.get("stage") or "other")
-        stage_bucket = by_stage.setdefault(stage, {**_empty_bucket(), "stage": stage})
-        _accumulate(stage_bucket, row)
-        provider = str(row.get("provider") or "")
-        model = str(row.get("model") or "")
-        model_bucket = by_model.setdefault(
-            (provider, model),
-            {**_empty_bucket(), "provider": provider, "model": model},
+    stage_rows = execute(
+        f"SELECT stage, {agg} FROM llm_usage_events WHERE {where} "
+        "GROUP BY stage ORDER BY stage",
+        params,
+    ).fetchall()
+    summary["by_stage"] = [
+        _finalize_aggregate(
+            dict(row), extra={"stage": str(dict(row).get("stage") or "other")}
         )
-        _accumulate(model_bucket, row)
-        attempt = row.get("job_attempt")
-        if attempt is not None:
-            attempt_bucket = by_attempt.setdefault(
-                int(attempt), {**_empty_bucket(), "attempt": int(attempt)}
-            )
-            _accumulate(attempt_bucket, row)
-        case_id = str(row.get("case_id") or "").strip()
-        if case_id:
-            case_bucket = by_case.setdefault(
-                case_id, {**_empty_bucket(), "case_id": case_id}
-            )
-            _accumulate(case_bucket, row)
-    return {
-        "request_count": totals["request_count"],
-        "input_tokens": totals["input_tokens"],
-        "output_tokens": totals["output_tokens"],
-        "reasoning_tokens": totals["reasoning_tokens"],
-        "cache_read_tokens": totals["cache_read_tokens"],
-        "cache_write_tokens": totals["cache_write_tokens"],
-        "total_tokens": totals["total_tokens"],
-        "cost_microunits": totals["cost_microunits"],
-        "currency": "USD",
-        "pricing_missing_event_count": totals["pricing_missing_event_count"],
-        "pricing_missing": totals["pricing_missing_event_count"] > 0,
-        "by_stage": [
-            by_stage[key]
-            for key in sorted(by_stage)
-        ],
-        "by_model": [
-            by_model[key]
-            for key in sorted(by_model)
-        ],
-        "by_attempt": [
-            by_attempt[key]
-            for key in sorted(by_attempt)
-        ],
-        "by_case": [
-            by_case[key]
-            for key in sorted(by_case)
-        ],
-    }
+        for row in stage_rows
+    ]
+
+    model_rows = execute(
+        f"SELECT provider, model, {agg} FROM llm_usage_events WHERE {where} "
+        "GROUP BY provider, model ORDER BY provider, model",
+        params,
+    ).fetchall()
+    summary["by_model"] = [
+        _finalize_aggregate(
+            dict(row),
+            extra={
+                "provider": str(dict(row).get("provider") or ""),
+                "model": str(dict(row).get("model") or ""),
+            },
+        )
+        for row in model_rows
+    ]
+
+    attempt_rows = execute(
+        f"SELECT job_attempt, {agg} FROM llm_usage_events WHERE {where} "
+        "AND job_attempt IS NOT NULL GROUP BY job_attempt ORDER BY job_attempt",
+        params,
+    ).fetchall()
+    summary["by_attempt"] = [
+        _finalize_aggregate(
+            dict(row), extra={"attempt": _sql_int(dict(row).get("job_attempt"))}
+        )
+        for row in attempt_rows
+    ]
+
+    case_rows = execute(
+        f"SELECT case_id, {agg} FROM llm_usage_events WHERE {where} "
+        "AND case_id IS NOT NULL AND case_id != '' "
+        "GROUP BY case_id ORDER BY case_id",
+        params,
+    ).fetchall()
+    summary["by_case"] = [
+        _finalize_aggregate(
+            dict(row), extra={"case_id": str(dict(row).get("case_id") or "")}
+        )
+        for row in case_rows
+    ]
+
+    if job_id:
+        summary["job_id"] = job_id
+    if case_id:
+        summary["case_id"] = case_id
+    return summary
 
 
 def compact_usage_summary(summary: dict[str, Any]) -> dict[str, Any]:
     return {
         "request_count": int(summary.get("request_count") or 0),
         "total_tokens": int(summary.get("total_tokens") or 0),
+        "known_cost_microunits": int(summary.get("known_cost_microunits") or 0),
         "cost_microunits": summary.get("cost_microunits"),
+        "cost_complete": bool(summary.get("cost_complete")),
         "currency": summary.get("currency") or "USD",
         "pricing_missing": bool(summary.get("pricing_missing")),
         "pricing_missing_event_count": int(
             summary.get("pricing_missing_event_count") or 0
+        ),
+        "usage_unknown_event_count": int(
+            summary.get("usage_unknown_event_count") or 0
         ),
     }
 
@@ -378,18 +442,14 @@ class SqliteUsageRepository:
         job_id: str | None = None,
         case_id: str | None = None,
     ) -> dict[str, Any]:
-        rows = self.list_usage_events(
+        return _sql_usage_summary(
+            db.get_conn().execute,
+            placeholder="?",
+            sqlite=True,
             workspace_id=workspace_id,
             job_id=job_id,
             case_id=case_id,
-            limit=5000,
         )
-        summary = _summary_from_rows(rows)
-        if job_id:
-            summary["job_id"] = job_id
-        if case_id:
-            summary["case_id"] = case_id
-        return summary
 
 
 @dataclass(frozen=True)
@@ -500,18 +560,15 @@ class PostgresUsageRepository:
         job_id: str | None = None,
         case_id: str | None = None,
     ) -> dict[str, Any]:
-        rows = self.list_usage_events(
-            workspace_id=workspace_id,
-            job_id=job_id,
-            case_id=case_id,
-            limit=5000,
-        )
-        summary = _summary_from_rows(rows)
-        if job_id:
-            summary["job_id"] = job_id
-        if case_id:
-            summary["case_id"] = case_id
-        return summary
+        with self._connect() as conn:
+            return _sql_usage_summary(
+                conn.execute,
+                placeholder="%s",
+                sqlite=False,
+                workspace_id=workspace_id,
+                job_id=job_id,
+                case_id=case_id,
+            )
 
 
 def get_usage_repository() -> UsageRepository:

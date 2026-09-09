@@ -103,6 +103,16 @@ def infer_provider(config: dict[str, str] | None = None, *, base_url: str = "", 
     return "openai"
 
 
+def _try_response_json(response: Any) -> Any:
+    """Parse a provider HTTP body when present. Transport-only failures stay None."""
+    if response is None:
+        return None
+    try:
+        return response.json()
+    except Exception:
+        return None
+
+
 def _meter_openai_response(
     *,
     config: dict[str, str],
@@ -111,13 +121,17 @@ def _meter_openai_response(
     status: str,
     request_id: str | None = None,
 ) -> None:
-    """Best-effort ledger write. Never raises into the chat caller."""
+    """Best-effort ledger write. Never raises into the chat caller.
+
+    Business parse failures still meter the provider JSON when it exists.
+    Only a missing body (transport failure) becomes ``usage_source=unknown``.
+    """
     if usage_context is None:
         return
     try:
         usage = (
             normalize_openai_usage(response_json)
-            if status == STATUS_SUCCESS and isinstance(response_json, dict)
+            if isinstance(response_json, dict)
             else unknown_usage()
         )
         record_normalized_usage(
@@ -186,7 +200,7 @@ def chat_text(
     if response.status_code != HTTPStatus.OK:
         _meter_openai_response(
             config=config,
-            response_json=None,
+            response_json=_try_response_json(response),
             usage_context=usage_context,
             status=STATUS_FAILED,
             request_id=request_id,
@@ -195,13 +209,15 @@ def chat_text(
             f"DeepSeek call failed: status={response.status_code} "
             f"body={response.text[:500]}"
         )
+    payload = _try_response_json(response)
     try:
-        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("invalid chat response body")
         content = payload["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
         _meter_openai_response(
             config=config,
-            response_json=None,
+            response_json=payload,
             usage_context=usage_context,
             status=STATUS_FAILED,
             request_id=request_id,
@@ -255,7 +271,7 @@ def chat_tools(
     if response.status_code != HTTPStatus.OK:
         _meter_openai_response(
             config=config,
-            response_json=None,
+            response_json=_try_response_json(response),
             usage_context=usage_context,
             status=STATUS_FAILED,
             request_id=request_id,
@@ -264,13 +280,15 @@ def chat_tools(
             f"DeepSeek call failed: status={response.status_code} "
             f"body={response.text[:500]}"
         )
+    payload = _try_response_json(response)
     try:
-        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("invalid tool chat response body")
         message = payload["choices"][0]["message"]
-    except (KeyError, IndexError, TypeError) as exc:
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
         _meter_openai_response(
             config=config,
-            response_json=None,
+            response_json=payload,
             usage_context=usage_context,
             status=STATUS_FAILED,
             request_id=request_id,
@@ -342,9 +360,14 @@ def chat_tools_stream(
                 # response.text before read() raises another exception and
                 # hides the provider's actual error body from the Agent UI.
                 response.read()
+                error_payload: Any = None
+                try:
+                    error_payload = json.loads(response.text)
+                except Exception:
+                    error_payload = None
                 _meter_openai_response(
                     config=config,
-                    response_json=None,
+                    response_json=error_payload,
                     usage_context=usage_context,
                     status=STATUS_FAILED,
                     request_id=request_id,
@@ -544,7 +567,7 @@ def chat_json(
     if response.status_code != HTTPStatus.OK:
         _meter_openai_response(
             config=config,
-            response_json=None,
+            response_json=_try_response_json(response),
             usage_context=usage_context,
             status=STATUS_FAILED,
             request_id=request_id,
@@ -553,14 +576,16 @@ def chat_json(
             f"DeepSeek call failed: status={response.status_code} "
             f"body={response.text[:500]}"
         )
+    payload = _try_response_json(response)
     try:
-        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("invalid JSON response body")
         content = payload["choices"][0]["message"]["content"]
         parsed = parse_json_object(content)
     except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
         _meter_openai_response(
             config=config,
-            response_json=None,
+            response_json=payload,
             usage_context=usage_context,
             status=STATUS_FAILED,
             request_id=request_id,

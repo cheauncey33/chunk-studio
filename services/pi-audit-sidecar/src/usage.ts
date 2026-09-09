@@ -59,24 +59,35 @@ function usageObject(message: Record<string, unknown>): Record<string, unknown> 
 		: null;
 }
 
+function stableRequestHash(parts: string[]): string {
+	return createHash("sha256").update(parts.join("\0")).digest("hex");
+}
+
 export function requestIdForAssistantMessage(
 	identity: ExecutionIdentity,
 	message: Record<string, unknown>,
 ): string {
 	const messageId = String(message.id || message.messageId || "").trim();
-	if (messageId) return `pi:${messageId}`;
-	const usage = usageObject(message) || {};
-	const seed = [
+	const executionSeed = [
+		"pi",
 		String(identity.job_id || ""),
-		String(identity.case_id || ""),
 		String(identity.job_attempt ?? ""),
+		String(identity.case_id || ""),
+	];
+	if (messageId) {
+		return `pi:${stableRequestHash([...executionSeed, messageId])}`;
+	}
+	const usage = usageObject(message) || {};
+	const fallbackParts = [
+		...executionSeed,
 		String(message.timestamp || ""),
 		String(usage.input ?? ""),
 		String(usage.output ?? ""),
 		String(message.stopReason || ""),
-	].join("|");
-	if (seed.replace(/\|/g, "") === "") return `pi:${randomUUID()}`;
-	return `pi:${createHash("sha256").update(seed).digest("hex").slice(0, 32)}`;
+	];
+	const hasStableSeed = fallbackParts.slice(1).some((part) => part !== "");
+	if (!hasStableSeed) return `pi:${randomUUID()}`;
+	return `pi:${stableRequestHash(fallbackParts)}`;
 }
 
 export function usageFromAssistantMessage(

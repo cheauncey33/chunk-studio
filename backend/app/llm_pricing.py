@@ -170,6 +170,58 @@ def _token_cost(tokens: int | None, rate: Decimal | None) -> Decimal:
     return (Decimal(int(tokens)) * rate) / TOKENS_PER_MILLION
 
 
+def _exclusive_billable_buckets(
+    *,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cache_read_tokens: int | None,
+    cache_write_tokens: int | None,
+    reasoning_tokens: int | None,
+    price: ModelPrice,
+    usage_source: str = "provider",
+) -> tuple[int, int, int, int, int]:
+    """Split reported counters into mutually exclusive billed buckets.
+
+    OpenAI-compatible (``provider``): ``cached_tokens`` is a subset of
+    ``prompt_tokens``, and ``reasoning_tokens`` is a subset of
+    ``completion_tokens``. Billing those counters at a second rate without
+    subtracting them first double-charges.
+
+    Pi SDK (``sdk``): ``input`` / ``cacheRead`` / ``cacheWrite`` are already
+    exclusive (``prompt = input + cacheRead + cacheWrite`` in pi-coding-agent
+    cache-stats). Do not subtract cache from input.
+    """
+    input_count = int(input_tokens or 0)
+    output_count = int(output_tokens or 0)
+    cache_read = int(cache_read_tokens or 0)
+    cache_write = int(cache_write_tokens or 0)
+    reasoning = int(reasoning_tokens or 0)
+
+    if str(usage_source or "") == "sdk":
+        uncached_input = input_count
+        billed_reasoning = reasoning if price.reasoning_per_million is not None else 0
+        billed_output = output_count
+    else:
+        # OpenAI-compatible: cache ⊆ prompt. Only peel cache out of input
+        # when a distinct cache_read rate exists; otherwise cached tokens
+        # stay in the input bucket at the input rate.
+        if price.cache_read_per_million is not None:
+            cache_read = min(cache_read, input_count)
+            uncached_input = max(0, input_count - cache_read)
+        else:
+            uncached_input = input_count
+            cache_read = 0
+        if price.reasoning_per_million is not None:
+            billed_reasoning = min(reasoning, output_count)
+            billed_output = max(0, output_count - billed_reasoning)
+        else:
+            billed_reasoning = 0
+            billed_output = output_count
+    if price.cache_write_per_million is None:
+        cache_write = 0
+    return uncached_input, cache_read, cache_write, billed_output, billed_reasoning
+
+
 def compute_cost_microunits(
     *,
     input_tokens: int | None,
@@ -178,22 +230,35 @@ def compute_cost_microunits(
     cache_write_tokens: int | None = None,
     reasoning_tokens: int | None = None,
     price: ModelPrice,
+    usage_source: str = "provider",
 ) -> int:
     """Return integer USD microunits for one normalized usage row.
 
-    Reasoning tokens are billed only when the registry defines
-    ``reasoning_per_million``. Otherwise they are assumed to already sit
-    inside ``output_tokens`` (OpenAI-compatible / Zhipu / Qwen default).
+    Cost buckets are exclusive. Cached prompt tokens are not billed at both
+    the input rate and the cache-read rate. Reasoning is billed at
+    ``reasoning_per_million`` only when that rate is configured, and then
+    subtracted from OpenAI-compatible output so it is not charged twice.
     """
+    uncached_input, cache_read, cache_write, billed_output, billed_reasoning = (
+        _exclusive_billable_buckets(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            reasoning_tokens=reasoning_tokens,
+            price=price,
+            usage_source=usage_source,
+        )
+    )
     total_usd = _ZERO
-    total_usd += _token_cost(input_tokens, price.input_per_million)
-    total_usd += _token_cost(output_tokens, price.output_per_million)
+    total_usd += _token_cost(uncached_input, price.input_per_million)
+    total_usd += _token_cost(billed_output, price.output_per_million)
     if price.cache_read_per_million is not None:
-        total_usd += _token_cost(cache_read_tokens, price.cache_read_per_million)
+        total_usd += _token_cost(cache_read, price.cache_read_per_million)
     if price.cache_write_per_million is not None:
-        total_usd += _token_cost(cache_write_tokens, price.cache_write_per_million)
+        total_usd += _token_cost(cache_write, price.cache_write_per_million)
     if price.reasoning_per_million is not None:
-        total_usd += _token_cost(reasoning_tokens, price.reasoning_per_million)
+        total_usd += _token_cost(billed_reasoning, price.reasoning_per_million)
     microunits = (total_usd * Decimal(MICROUNITS_PER_USD)).quantize(
         Decimal("1"), rounding=ROUND_HALF_UP
     )

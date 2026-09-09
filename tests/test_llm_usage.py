@@ -12,11 +12,19 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from decimal import Decimal
+
 from app import db, jobs, llm, llm_usage, observability
+from app.llm_pricing import ModelPrice, compute_cost_microunits
 from app.llm_usage import UsageContext
 from app.routers import internal as internal_router
 from app.storage.repositories import postgres_schema_sql
-from app.storage.usage_repository import UsageEvent, compact_usage_summary, get_usage_repository
+from app.storage.usage_repository import (
+    SqliteUsageRepository,
+    UsageEvent,
+    compact_usage_summary,
+    get_usage_repository,
+)
 import run_report_audit_workflow as workflow
 
 
@@ -190,6 +198,71 @@ def test_cost_calculation_is_integer_microunits(monkeypatch) -> None:
     assert snapshot is not None
     assert snapshot["input_per_million"] == "1.00"
     assert snapshot["output_per_million"] == "2.00"
+
+
+def test_openai_cache_tokens_are_not_double_charged(monkeypatch) -> None:
+    _set_pricing(monkeypatch)
+    usage = llm_usage.normalize_openai_usage(
+        {
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 0,
+                "total_tokens": 100,
+                "prompt_tokens_details": {"cached_tokens": 40},
+            }
+        }
+    )
+    cost, missing, _snapshot = llm_usage.price_usage(
+        usage, provider="test", model="fake-model"
+    )
+    assert missing is False
+    # 60 uncached * $1/M + 40 cached * $0.10/M = 64 microunits
+    assert cost == 64
+
+
+def test_sdk_cache_tokens_stay_exclusive_of_input(monkeypatch) -> None:
+    _set_pricing(monkeypatch)
+    usage = llm_usage.normalize_pi_sdk_usage(
+        {"input": 100, "output": 0, "cacheRead": 40, "cacheWrite": 0, "totalTokens": 140}
+    )
+    cost, missing, _snapshot = llm_usage.price_usage(
+        usage, provider="test", model="fake-model"
+    )
+    assert missing is False
+    # Pi input and cacheRead are already exclusive: 100*$1 + 40*$0.10 = 104
+    assert cost == 104
+
+
+def test_reasoning_tokens_are_not_double_charged_when_priced() -> None:
+    price = ModelPrice(
+        key="test/reason",
+        currency="USD",
+        input_per_million=Decimal("1.00"),
+        output_per_million=Decimal("2.00"),
+        cache_read_per_million=Decimal("0.10"),
+        cache_write_per_million=None,
+        reasoning_per_million=Decimal("3.00"),
+    )
+    cost = compute_cost_microunits(
+        input_tokens=100,
+        output_tokens=40,
+        cache_read_tokens=40,
+        reasoning_tokens=10,
+        price=price,
+        usage_source="provider",
+    )
+    # 60*$1 + 40*$0.10 + 30*$2 + 10*$3 = 154
+    assert cost == 154
+
+
+def test_unknown_usage_does_not_set_pricing_missing(monkeypatch) -> None:
+    _set_pricing(monkeypatch)
+    cost, missing, snapshot = llm_usage.price_usage(
+        llm_usage.unknown_usage(), provider="test", model="fake-model"
+    )
+    assert cost is None
+    assert missing is False
+    assert snapshot is not None
 
 
 def test_pricing_missing_records_tokens_with_null_cost(monkeypatch, tmp_path: Path) -> None:
@@ -496,11 +569,122 @@ def test_compact_usage_summary_is_recomputable_snapshot(monkeypatch, tmp_path: P
     assert snapshot == {
         "request_count": 1,
         "total_tokens": 12,
+        "known_cost_microunits": 9,
         "cost_microunits": 9,
+        "cost_complete": True,
         "currency": "USD",
         "pricing_missing": False,
         "pricing_missing_event_count": 0,
+        "usage_unknown_event_count": 0,
     }
+
+
+def test_incomplete_cost_does_not_look_like_total_cost(monkeypatch, tmp_path: Path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    _record(request_id="known", total_tokens=12, cost_microunits=9, pricing_missing=False)
+    _record(
+        request_id="unknown",
+        total_tokens=None,
+        input_tokens=None,
+        output_tokens=None,
+        cost_microunits=None,
+        usage_source="unknown",
+        pricing_missing=False,
+    )
+    summary = get_usage_repository().get_usage_summary(
+        workspace_id=db.config.DEFAULT_WORKSPACE_ID, job_id="job-1"
+    )
+    assert summary["known_cost_microunits"] == 9
+    assert summary["cost_microunits"] is None
+    assert summary["cost_complete"] is False
+    assert summary["pricing_missing"] is False
+    assert summary["pricing_missing_event_count"] == 0
+    assert summary["usage_unknown_event_count"] == 1
+
+
+def test_usage_summary_does_not_use_list_limit(monkeypatch, tmp_path: Path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    _record(request_id="one", total_tokens=12, cost_microunits=9)
+
+    def _should_not_list(self, **_kwargs):
+        raise AssertionError("accounting aggregate must not list rows")
+
+    monkeypatch.setattr(SqliteUsageRepository, "list_usage_events", _should_not_list)
+    summary = get_usage_repository().get_usage_summary(
+        workspace_id=db.config.DEFAULT_WORKSPACE_ID, job_id="job-1"
+    )
+    assert summary["request_count"] == 1
+    assert summary["total_tokens"] == 12
+    assert summary["cost_complete"] is True
+
+
+def test_chat_json_parse_failure_still_records_provider_usage(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    _set_pricing(monkeypatch)
+    monkeypatch.setattr(
+        llm.db,
+        "get_setting",
+        lambda key, default="": {
+            "llm.api_key": "k",
+            "llm.base_url": "https://open.bigmodel.cn/api/paas/v4",
+            "llm.model": "glm-5.3-flash",
+        }.get(key, default),
+    )
+    _clear_llm_env(monkeypatch)
+
+    def post(url, **kwargs):
+        return SimpleNamespace(
+            status_code=200,
+            text="",
+            json=lambda: {
+                "choices": [{"message": {"content": "not-json"}}],
+                "usage": {
+                    "prompt_tokens": 5000,
+                    "completion_tokens": 0,
+                    "total_tokens": 5000,
+                },
+            },
+        )
+
+    monkeypatch.setattr(llm.httpx, "post", post)
+    with pytest.raises(RuntimeError, match="invalid JSON"):
+        llm.chat_json(
+            [{"role": "user", "content": "x"}],
+            usage_context=_context(stage="report_parameters", model="glm-5.3-flash"),
+        )
+    rows = get_usage_repository().list_usage_events(
+        workspace_id=db.config.DEFAULT_WORKSPACE_ID, job_id="job-1"
+    )
+    assert len(rows) == 1
+    assert rows[0]["total_tokens"] == 5000
+    assert rows[0]["usage_source"] == "provider"
+    assert rows[0]["status"] == "failed"
+    assert rows[0]["cost_microunits"] == 5000
+
+
+def test_duplicate_insert_does_not_double_prometheus(monkeypatch, tmp_path: Path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    _insert_job("job-prom")
+    observability.metrics.reset()
+    monkeypatch.setattr(internal_router.config, "AGENT_SIDECAR_TOKEN", "secret")
+    body = internal_router.InternalUsageIngest(
+        request_id="pi:dup-prom",
+        job_id="job-prom",
+        usage_source="sdk",
+        usage={"input": 10, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 10},
+    )
+    first = internal_router.ingest_llm_usage(body, authorization="Bearer secret")
+    second = internal_router.ingest_llm_usage(body, authorization="Bearer secret")
+    assert first["recorded"] is True
+    assert second["recorded"] is False
+    counters = [
+        item
+        for item in observability.metrics.snapshot()["counters"]
+        if item["name"] == "llm_requests_total"
+    ]
+    assert sum(item["value"] for item in counters) == 1
 
 
 def test_ingest_rejects_missing_sidecar_token(monkeypatch, tmp_path: Path) -> None:
