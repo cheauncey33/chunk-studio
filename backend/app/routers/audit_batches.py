@@ -15,8 +15,14 @@ class AuditBatchCreateRequest(BaseModel):
     assistant_id: str = Field(min_length=1)
     report_file_ids: list[str] = Field(min_length=1, max_length=NIGHT_BATCH_MAX_REPORTS)
     naming_rule_file_id: str | None = None
-    scheduled_at: str = Field(min_length=1)
-    max_concurrency: int = BATCH_MAX_CONCURRENCY
+    scheduled_at: str = Field(
+        min_length=1,
+        description="Timezone-aware ISO-8601 instant, stored and compared as UTC.",
+    )
+    max_concurrency: int = Field(
+        default=BATCH_MAX_CONCURRENCY,
+        description="Phase 1 only accepts 1. Multi-worker report slots are not enforced yet.",
+    )
 
 
 @router.post("")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
@@ -18,8 +19,9 @@ from app.storage.batch_repository import (
     BATCH_MAX_CONCURRENCY,
     NIGHT_BATCH_PRIORITY,
     get_batch_repository,
+    insert_audit_job_row,
 )
-from app.storage.repositories import postgres_schema_sql
+from app.storage.repositories import PostgresJobRepository, postgres_schema_sql
 from app.storage.usage_repository import (
     SqliteUsageRepository,
     UsageEvent,
@@ -28,6 +30,9 @@ from app.storage.usage_repository import (
 
 
 ASSISTANT_ID = "assistant_oil_transformer_audit"
+FUTURE_LOCAL = "2099-12-31T23:00:00+08:00"
+FUTURE_UTC = "2099-12-31T15:00:00Z"
+PAST_LOCAL = "2000-01-01T00:00:00+08:00"
 
 
 def _init_temp_db(monkeypatch, tmp_path: Path) -> None:
@@ -138,13 +143,15 @@ def test_postgres_schema_includes_audit_batches() -> None:
     assert "max_concurrency INTEGER NOT NULL DEFAULT 1" in schema
 
 
-def test_normalize_job_schedule_time_rejects_timezones() -> None:
-    assert jobs.normalize_job_schedule_time("2026-09-09T23:00:00") == "2026-09-09T23:00:00"
-    assert jobs.normalize_job_schedule_time("2026-09-09T23:00") == "2026-09-09T23:00:00"
-    with pytest.raises(ValueError, match="naive local format"):
-        jobs.normalize_job_schedule_time("2026-09-09T23:00:00Z")
-    with pytest.raises(ValueError, match="timezone"):
-        jobs.normalize_job_schedule_time("2026-09-09T23:00:00+08:00")
+def test_normalize_job_schedule_time_converts_offsets_to_utc() -> None:
+    assert jobs.normalize_job_schedule_time("2026-09-09T23:00:00+08:00") == "2026-09-09T15:00:00Z"
+    assert jobs.normalize_job_schedule_time("2026-09-09T15:00:00Z") == "2026-09-09T15:00:00Z"
+    naive = jobs.normalize_job_schedule_time("2026-09-09T23:00:00")
+    assert naive.endswith("Z")
+    local = datetime(2026, 9, 9, 23, 0, 0).replace(tzinfo=datetime.now().astimezone().tzinfo)
+    assert jobs.parse_job_schedule_time(naive) == local.astimezone(timezone.utc).replace(
+        microsecond=0
+    )
     with pytest.raises(ValueError, match="invalid scheduled_at"):
         jobs.normalize_job_schedule_time("tomorrow")
 
@@ -155,11 +162,12 @@ def test_night_batch_creates_one_audit_job_per_report(monkeypatch, tmp_path: Pat
     created = audit_batches.create_night_batch(
         assistant_id=ASSISTANT_ID,
         report_file_ids=["r1", "r2", "r3"],
-        scheduled_at="2099-12-31T23:00:00",
+        scheduled_at=FUTURE_LOCAL,
     )
     assert created["total"] == 3
     assert created["mode"] == "night"
     assert created["status"] == "scheduled"
+    assert created["scheduled_at"] == FUTURE_UTC
     assert created["max_concurrency"] == BATCH_MAX_CONCURRENCY
     assert len(created["jobs"]) == 3
     assert {job["type"] for job in created["jobs"]} == {"audit"}
@@ -171,7 +179,7 @@ def test_night_batch_creates_one_audit_job_per_report(monkeypatch, tmp_path: Pat
     assert len({item["audit_job_id"] for item in items}) == 3
     for job in created["jobs"]:
         assert job["priority"] == NIGHT_BATCH_PRIORITY
-        assert job["available_at"] == "2099-12-31T23:00:00"
+        assert job["available_at"] == FUTURE_UTC
         assert job["status"] == "queued"
         assert job["result"]["batch_id"] == created["id"]
         assert job["result"]["batch_item_id"]
@@ -191,15 +199,19 @@ def test_future_batch_jobs_are_not_claimed_until_scheduled_at(
     created = audit_batches.create_night_batch(
         assistant_id=ASSISTANT_ID,
         report_file_ids=["r1"],
-        scheduled_at="2099-12-31T23:00:00",
+        scheduled_at=FUTURE_LOCAL,
     )
     job_id = created["jobs"][0]["id"]
     assert jobs._claim_next_job({"audit"}) is None
     stored = jobs.get_job(job_id)
     assert stored["status"] == "queued"
-    assert stored["available_at"] == "2099-12-31T23:00:00"
+    assert stored["available_at"] == FUTURE_UTC
 
-    monkeypatch.setattr(jobs, "now_iso", lambda: "2099-12-31T23:00:00")
+    monkeypatch.setattr(
+        jobs,
+        "utc_now",
+        lambda: datetime(2099, 12, 31, 15, 0, tzinfo=timezone.utc),
+    )
     claimed = jobs._claim_next_job({"audit"})
     assert claimed is not None
     assert claimed["id"] == job_id
@@ -215,7 +227,7 @@ def test_interactive_audit_is_claimed_before_night_batch(
     audit_batches.create_night_batch(
         assistant_id=ASSISTANT_ID,
         report_file_ids=["night"],
-        scheduled_at="2000-01-01T00:00:00",
+        scheduled_at=PAST_LOCAL,
     )
     interactive = jobs.enqueue_assistant_audit(ASSISTANT_ID, report_file_id="live")
     assert interactive["priority"] == 5
@@ -235,7 +247,7 @@ def test_ten_reports_create_ten_audit_jobs_not_one_batch_job(
     created = audit_batches.create_night_batch(
         assistant_id=ASSISTANT_ID,
         report_file_ids=report_ids,
-        scheduled_at="2099-12-31T23:00:00",
+        scheduled_at=FUTURE_LOCAL,
     )
     jobs_rows = db.get_conn().execute(
         "SELECT type FROM jobs WHERE type IN ('audit','batch')"
@@ -254,7 +266,7 @@ def test_retry_keeps_the_same_batch_item_and_audit_job(
     created = audit_batches.create_night_batch(
         assistant_id=ASSISTANT_ID,
         report_file_ids=["r1"],
-        scheduled_at="2000-01-01T00:00:00",
+        scheduled_at=PAST_LOCAL,
     )
     job_id = created["jobs"][0]["id"]
     item_id = created["jobs"][0]["result"]["batch_item_id"]
@@ -283,7 +295,7 @@ def test_batch_completed_partial_failed_and_failed(monkeypatch, tmp_path: Path) 
     created = audit_batches.create_night_batch(
         assistant_id=ASSISTANT_ID,
         report_file_ids=["a", "b", "c"],
-        scheduled_at="2000-01-01T00:00:00",
+        scheduled_at=PAST_LOCAL,
     )
     job_ids = [job["id"] for job in created["jobs"]]
     for job_id in job_ids:
@@ -316,7 +328,7 @@ def test_batch_usage_sums_child_jobs_including_retries(
     created = audit_batches.create_night_batch(
         assistant_id=ASSISTANT_ID,
         report_file_ids=["r1", "r2", "r3"],
-        scheduled_at="2099-12-31T23:00:00",
+        scheduled_at=FUTURE_LOCAL,
     )
     job_ids = [job["id"] for job in created["jobs"]]
     _record_usage(job_id=job_ids[0], request_id="a1", total_tokens=100, cost_microunits=10)
@@ -347,7 +359,7 @@ def test_batch_incomplete_cost_does_not_look_like_a_total(
     created = audit_batches.create_night_batch(
         assistant_id=ASSISTANT_ID,
         report_file_ids=["r1", "r2"],
-        scheduled_at="2099-12-31T23:00:00",
+        scheduled_at=FUTURE_LOCAL,
     )
     job_ids = [job["id"] for job in created["jobs"]]
     _record_usage(job_id=job_ids[0], request_id="known", total_tokens=100, cost_microunits=9)
@@ -372,7 +384,7 @@ def test_batch_detail_is_workspace_scoped(monkeypatch, tmp_path: Path) -> None:
     created = audit_batches.create_night_batch(
         assistant_id=ASSISTANT_ID,
         report_file_ids=["r1"],
-        scheduled_at="2099-12-31T23:00:00",
+        scheduled_at=FUTURE_LOCAL,
     )
     token = current_user.set_current_user(
         CurrentUser(user_id="other", workspace_id="ws-b", roles=frozenset({"member"}))
@@ -396,7 +408,7 @@ def test_duplicate_report_ids_are_rejected(monkeypatch, tmp_path: Path) -> None:
         audit_batches.create_night_batch(
             assistant_id=ASSISTANT_ID,
             report_file_ids=["r1", "r1"],
-            scheduled_at="2099-12-31T23:00:00",
+            scheduled_at=FUTURE_LOCAL,
         )
     assert get_batch_repository().list_batches(workspace_id=db.config.DEFAULT_WORKSPACE_ID) == []
     _close_temp_db(monkeypatch)
@@ -410,7 +422,7 @@ def test_active_audit_conflict_rejects_night_batch(monkeypatch, tmp_path: Path) 
         audit_batches.create_night_batch(
             assistant_id=ASSISTANT_ID,
             report_file_ids=["r1", "r2"],
-            scheduled_at="2099-12-31T23:00:00",
+            scheduled_at=FUTURE_LOCAL,
         )
     assert existing["status"] == "queued"
     assert get_batch_repository().list_batches(workspace_id=db.config.DEFAULT_WORKSPACE_ID) == []
@@ -419,7 +431,7 @@ def test_active_audit_conflict_rejects_night_batch(monkeypatch, tmp_path: Path) 
             batch_router.AuditBatchCreateRequest(
                 assistant_id=ASSISTANT_ID,
                 report_file_ids=["r1"],
-                scheduled_at="2099-12-31T23:00:00",
+                scheduled_at=FUTURE_LOCAL,
             )
         )
     assert exc.value.status_code == 409
@@ -447,7 +459,7 @@ def test_max_concurrency_greater_than_one_is_rejected(monkeypatch, tmp_path: Pat
         audit_batches.create_night_batch(
             assistant_id=ASSISTANT_ID,
             report_file_ids=["r1"],
-            scheduled_at="2099-12-31T23:00:00",
+            scheduled_at=FUTURE_LOCAL,
             max_concurrency=2,
         )
     _close_temp_db(monkeypatch)
@@ -462,9 +474,113 @@ def test_create_batch_increments_low_cardinality_metrics(
     audit_batches.create_night_batch(
         assistant_id=ASSISTANT_ID,
         report_file_ids=["r1", "r2"],
-        scheduled_at="2099-12-31T23:00:00",
+        scheduled_at=FUTURE_LOCAL,
     )
     rendered = observability.metrics.render_prometheus()
     assert "audit_batches_created_total" in rendered
     assert "audit_batch_items_total" in rendered
     _close_temp_db(monkeypatch)
+
+
+def test_mid_write_failure_leaves_no_batch_jobs_or_items(monkeypatch, tmp_path: Path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    _seed_reports(tmp_path, ["r1", "r2", "r3"])
+    seen = {"jobs": 0}
+
+    def boom(conn, values, *, postgres: bool = False):
+        seen["jobs"] += 1
+        if seen["jobs"] >= 2:
+            raise RuntimeError("simulated write failure")
+        return insert_audit_job_row(conn, values, postgres=postgres)
+
+    monkeypatch.setattr(
+        "app.storage.batch_repository.insert_audit_job_row",
+        boom,
+    )
+    with pytest.raises(RuntimeError, match="simulated write failure"):
+        audit_batches.create_night_batch(
+            assistant_id=ASSISTANT_ID,
+            report_file_ids=["r1", "r2", "r3"],
+            scheduled_at=FUTURE_LOCAL,
+        )
+    conn = db.get_conn()
+    assert conn.execute("SELECT COUNT(*) AS n FROM audit_batches").fetchone()["n"] == 0
+    assert conn.execute("SELECT COUNT(*) AS n FROM audit_batch_items").fetchone()["n"] == 0
+    assert conn.execute("SELECT COUNT(*) AS n FROM jobs WHERE type='audit'").fetchone()["n"] == 0
+    _close_temp_db(monkeypatch)
+
+
+def test_plus_eight_schedule_claims_at_utc_equivalent(monkeypatch, tmp_path: Path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    _seed_reports(tmp_path, ["r1"])
+    created = audit_batches.create_night_batch(
+        assistant_id=ASSISTANT_ID,
+        report_file_ids=["r1"],
+        scheduled_at="2026-09-09T23:00:00+08:00",
+    )
+    assert created["scheduled_at"] == "2026-09-09T15:00:00Z"
+    assert created["jobs"][0]["available_at"] == "2026-09-09T15:00:00Z"
+    monkeypatch.setattr(
+        jobs,
+        "utc_now",
+        lambda: datetime(2026, 9, 9, 14, 59, 59, tzinfo=timezone.utc),
+    )
+    assert jobs._claim_next_job({"audit"}) is None
+    monkeypatch.setattr(
+        jobs,
+        "utc_now",
+        lambda: datetime(2026, 9, 9, 15, 0, 0, tzinfo=timezone.utc),
+    )
+    claimed = jobs._claim_next_job({"audit"})
+    assert claimed is not None
+    assert claimed["id"] == created["jobs"][0]["id"]
+    _close_temp_db(monkeypatch)
+
+
+def test_postgres_create_job_binds_utc_timestamptz(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class Result:
+        def fetchone(self):
+            return {
+                "id": "job-1",
+                "workspace_id": "ws",
+                "type": "audit",
+                "target_type": "assistant",
+                "target_id": "assistant",
+                "status": "queued",
+                "priority": -5,
+                "attempts": 0,
+                "max_attempts": 3,
+                "error": "",
+                "result": {},
+                "available_at": datetime(2026, 9, 9, 15, 0, tzinfo=timezone.utc),
+            }
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement, params):
+            captured["sql"] = statement
+            captured["params"] = params
+            return Result()
+
+    monkeypatch.setattr(PostgresJobRepository, "_connect", lambda _self: Connection())
+    available = jobs.normalize_job_schedule_time("2026-09-09T23:00:00+08:00")
+    PostgresJobRepository("postgresql://test").create_job(
+        job_id="job-1",
+        workspace_id="ws",
+        type_="audit",
+        target_type="assistant",
+        target_id="assistant",
+        priority=-5,
+        max_attempts=3,
+        result={},
+        available_at=available,
+    )
+    assert captured["params"][-1] == "2026-09-09T15:00:00Z"
+    assert "available_at" in str(captured["sql"])

@@ -6,7 +6,7 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from . import artifacts, chunk_schema, config, current_user, db, extractors, observability
@@ -81,24 +81,74 @@ def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def normalize_job_schedule_time(value: str | None) -> str:
-    """Normalize a schedule timestamp onto the same naive local clock as ``now_iso``.
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
-    Seconds precision only. Timezone-aware values are rejected so Night Batch
-    does not introduce a second time system.
+
+def format_utc(value: datetime) -> str:
+    aware = value.astimezone(timezone.utc).replace(microsecond=0)
+    return aware.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def utc_now_iso() -> str:
+    return format_utc(utc_now())
+
+
+def _local_tzinfo():
+    return datetime.now().astimezone().tzinfo or timezone.utc
+
+
+def parse_job_schedule_time(value: str | datetime | None) -> datetime | None:
+    """Parse a job schedule timestamp into UTC.
+
+    Aware values (Z / offset) are converted to UTC. Naive values are treated as
+    the host's local timezone so existing retry ``available_at`` rows keep working.
     """
-    raw = str(value or "").strip()
-    if not raw:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        raw = str(value).strip()
+        if not raw:
+            return None
+        if raw.endswith("Z") or raw.endswith("z"):
+            raw = raw[:-1] + "+00:00"
+        elif "T" not in raw[:19] and " " in raw:
+            raw = raw.replace(" ", "T", 1)
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError as exc:
+            raise ValueError("invalid scheduled_at") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_local_tzinfo())
+    return parsed.astimezone(timezone.utc).replace(microsecond=0)
+
+
+def normalize_job_schedule_time(value: str | None) -> str:
+    """Normalize API schedule times onto a canonical UTC ISO string.
+
+    ``2026-09-09T23:00:00+08:00`` and ``2026-09-09T15:00:00Z`` both become
+    ``2026-09-09T15:00:00Z``. Naive values are interpreted as local time.
+    """
+    parsed = parse_job_schedule_time(value)
+    if parsed is None:
         raise ValueError("scheduled_at is required")
-    if raw.endswith("Z") or raw.endswith("z"):
-        raise ValueError("scheduled_at must use the same naive local format as jobs.available_at")
-    try:
-        parsed = datetime.fromisoformat(raw)
-    except ValueError as exc:
-        raise ValueError("invalid scheduled_at") from exc
-    if parsed.tzinfo is not None:
-        raise ValueError("scheduled_at must not include a timezone")
-    return parsed.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%S")
+    return format_utc(parsed)
+
+
+def available_at_reached(value: str | datetime | None, *, now: datetime | None = None) -> bool:
+    """Return True when a job's ``available_at`` is due.
+
+    Empty / NULL means immediately claimable. Comparisons always happen in UTC.
+    """
+    parsed = parse_job_schedule_time(value)
+    if parsed is None:
+        return True
+    clock = now or utc_now()
+    if clock.tzinfo is None:
+        clock = clock.replace(tzinfo=_local_tzinfo())
+    return parsed <= clock.astimezone(timezone.utc).replace(microsecond=0)
 
 
 def workspace_id() -> str:
@@ -128,7 +178,10 @@ def _create_job_record(
     created_at: str | None = None,
     available_at: str | None = None,
 ) -> dict[str, Any]:
+    timestamp = created_at or now_iso()
     scheduled = str(available_at or "").strip() or None
+    if scheduled:
+        scheduled = normalize_job_schedule_time(scheduled)
     repository = _job_repository()
     if repository is not None:
         return repository.create_job(
@@ -142,7 +195,6 @@ def _create_job_record(
             result=result,
             available_at=scheduled,
         )
-    timestamp = created_at or now_iso()
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO jobs
@@ -450,6 +502,54 @@ def find_active_assistant_audit(
     return None
 
 
+def build_assistant_audit_job_spec(
+    *,
+    assistant_id: str,
+    report_file_id: str,
+    naming_rule_file_id: str | None,
+    workspace: str,
+    priority: int,
+    available_at: str | None = None,
+    batch_id: str | None = None,
+    batch_item_id: str | None = None,
+    job_id: str | None = None,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    """Build the job row Night Batch inserts in the same transaction as items."""
+    from . import audit_run
+
+    jid = str(job_id or uuid.uuid4().hex)
+    created = created_at or now_iso()
+    identity = audit_run.audit_run_identity(assistant_id=assistant_id, run_id=jid)
+    payload = {
+        "assistant_id": assistant_id,
+        "report_file_id": report_file_id,
+        "naming_rule_file_id": naming_rule_file_id,
+        **identity,
+    }
+    batch_key = str(batch_id or "").strip()
+    item_key = str(batch_item_id or "").strip()
+    if batch_key:
+        payload["batch_id"] = batch_key
+    if item_key:
+        payload["batch_item_id"] = item_key
+    scheduled = str(available_at or "").strip() or None
+    if scheduled:
+        scheduled = normalize_job_schedule_time(scheduled)
+    return {
+        "id": jid,
+        "workspace_id": workspace,
+        "type": "audit",
+        "target_type": "assistant",
+        "target_id": assistant_id,
+        "priority": int(priority),
+        "max_attempts": AUDIT_JOB_MAX_ATTEMPTS,
+        "result": payload,
+        "created_at": created,
+        "available_at": scheduled,
+    }
+
+
 def enqueue_assistant_audit(
     assistant_id: str,
     *,
@@ -547,32 +647,27 @@ def enqueue_assistant_audit(
     audit_run.resolve_markdown_path(report_file_id)
     audit_run.resolve_naming_rule_path(resolved_naming_id, assistant_id=assistant_id)
 
-    jid = uuid.uuid4().hex
-    created = now_iso()
-    identity = audit_run.audit_run_identity(assistant_id=assistant_id, run_id=jid)
-    payload = {
-        "assistant_id": assistant_id,
-        "report_file_id": report_file_id,
-        "naming_rule_file_id": resolved_naming_id,
-        **identity,
-    }
-    batch_key = str(batch_id or "").strip()
-    item_key = str(batch_item_id or "").strip()
-    if batch_key:
-        payload["batch_id"] = batch_key
-    if item_key:
-        payload["batch_item_id"] = item_key
-    return _create_job_record(
-        job_id=jid,
+    spec = build_assistant_audit_job_spec(
+        assistant_id=assistant_id,
+        report_file_id=report_file_id,
+        naming_rule_file_id=resolved_naming_id,
         workspace=row["workspace_id"],
+        priority=priority,
+        available_at=available_at,
+        batch_id=batch_id,
+        batch_item_id=batch_item_id,
+    )
+    return _create_job_record(
+        job_id=spec["id"],
+        workspace=spec["workspace_id"],
         type_="audit",
         target_type="assistant",
         target_id=assistant_id,
-        priority=priority,
-        max_attempts=AUDIT_JOB_MAX_ATTEMPTS,
-        result=payload,
-        created_at=created,
-        available_at=available_at,
+        priority=spec["priority"],
+        max_attempts=spec["max_attempts"],
+        result=spec["result"],
+        created_at=spec["created_at"],
+        available_at=spec["available_at"],
     )
 
 
@@ -989,20 +1084,25 @@ def _claim_next_job(job_types: set[str] | None = None) -> dict[str, Any] | None:
         _refresh_job_lease(job)
         return job
     type_clause = ""
-    params: list[Any] = [now_iso()]
+    params: list[Any] = []
     if job_types:
         ordered = sorted(job_types)
         type_clause = " AND type IN (" + ",".join("?" for _ in ordered) + ")"
         params.extend(ordered)
+    clock = utc_now()
     with db.transaction() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             """SELECT * FROM jobs
-               WHERE status='queued'
-                 AND (available_at IS NULL OR available_at<=?)"""
+               WHERE status='queued'"""
             + type_clause
-            + " ORDER BY priority DESC, created_at LIMIT 1",
+            + " ORDER BY priority DESC, created_at",
             params,
-        ).fetchone()
+        ).fetchall()
+        row = None
+        for candidate in rows:
+            if available_at_reached(candidate["available_at"], now=clock):
+                row = candidate
+                break
         if not row:
             return None
         started = now_iso()

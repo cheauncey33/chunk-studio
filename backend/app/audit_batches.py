@@ -3,11 +3,15 @@
 A batch is an aggregation and scheduling layer. Each report still maps to one
 Audit Job. The worker continues to claim and execute ordinary ``type=audit``
 jobs; it never iterates reports itself.
+
+``max_concurrency`` is stored for a later batch-slot design. Phase 1 does not
+enforce it: report concurrency stays 1 only with a single ``worker_loop``.
 """
 from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime
 from typing import Any
 
 from . import current_user, jobs, observability
@@ -35,18 +39,23 @@ def _workspace_id() -> str:
     return current_user.get_current_user().workspace_id
 
 
-def _now() -> str:
-    return jobs.now_iso()
+def _clock(now: datetime | str | None = None) -> datetime:
+    if now is None:
+        return jobs.utc_now()
+    if isinstance(now, datetime):
+        parsed = jobs.parse_job_schedule_time(now)
+        return parsed or jobs.utc_now()
+    parsed = jobs.parse_job_schedule_time(now)
+    return parsed or jobs.utc_now()
 
 
-def _job_schedule_bucket(job: dict[str, Any], *, now: str) -> str:
+def _job_schedule_bucket(job: dict[str, Any], *, now: datetime) -> str:
     status = str(job.get("status") or "")
     if status in {"running", "done", "failed"}:
         return status
     if status != "queued":
         return status or "queued"
-    available = str(job.get("available_at") or "").strip()
-    if available and available > now:
+    if not jobs.available_at_reached(job.get("available_at"), now=now):
         return "scheduled"
     return "queued"
 
@@ -55,10 +64,10 @@ def derive_batch_status(
     child_jobs: list[dict[str, Any]],
     *,
     scheduled_at: str,
-    now: str | None = None,
+    now: datetime | str | None = None,
 ) -> str:
     """Derive batch status from child audit jobs. Jobs are the source of truth."""
-    clock = now or _now()
+    clock = _clock(now)
     if not child_jobs:
         return BATCH_STATUS_FAILED
     buckets = [_job_schedule_bucket(job, now=clock) for job in child_jobs]
@@ -74,7 +83,7 @@ def derive_batch_status(
         if n_failed > 0:
             return BATCH_STATUS_PARTIAL_FAILED
         return BATCH_STATUS_COMPLETED
-    if n_running or n_queued or scheduled_at <= clock:
+    if n_running or n_queued or jobs.available_at_reached(scheduled_at, now=clock):
         return BATCH_STATUS_RUNNING
     if n_scheduled == len(child_jobs) - n_terminal:
         return BATCH_STATUS_SCHEDULED
@@ -82,8 +91,9 @@ def derive_batch_status(
 
 
 def _count_buckets(
-    child_jobs: list[dict[str, Any]], *, now: str
+    child_jobs: list[dict[str, Any]], *, now: datetime | str | None = None
 ) -> dict[str, int]:
+    clock = _clock(now)
     counts = {
         "scheduled": 0,
         "queued": 0,
@@ -92,7 +102,7 @@ def _count_buckets(
         "failed": 0,
     }
     for job in child_jobs:
-        bucket = _job_schedule_bucket(job, now=now)
+        bucket = _job_schedule_bucket(job, now=clock)
         if bucket == "done":
             counts["completed"] += 1
         elif bucket in counts:
@@ -163,7 +173,7 @@ def refresh_batch_status(
         return None
     items = repo.list_items(batch_id, workspace_id=workspace)
     child_jobs = _load_child_jobs(items, workspace_id=workspace)
-    now = _now()
+    now = jobs.utc_now()
     status = derive_batch_status(
         child_jobs,
         scheduled_at=str(batch.get("scheduled_at") or ""),
@@ -172,14 +182,15 @@ def refresh_batch_status(
     previous = str(batch.get("status") or "")
     started_at = None
     finished_at = batch.get("finished_at")
+    stamp = jobs.utc_now_iso()
     if status == BATCH_STATUS_RUNNING and not batch.get("started_at"):
-        started_at = now
+        started_at = stamp
     if status in {
         BATCH_STATUS_COMPLETED,
         BATCH_STATUS_PARTIAL_FAILED,
         BATCH_STATUS_FAILED,
     }:
-        finished_at = batch.get("finished_at") or now
+        finished_at = batch.get("finished_at") or stamp
     else:
         finished_at = None
     if status != previous or started_at or finished_at != batch.get("finished_at"):
@@ -189,7 +200,7 @@ def refresh_batch_status(
             status=status,
             started_at=started_at,
             finished_at=finished_at,
-            updated_at=now,
+            updated_at=stamp,
         )
         _observe_status_transition(previous, status)
         batch = repo.get_batch(batch_id, workspace_id=workspace) or batch
@@ -326,10 +337,39 @@ def create_night_batch(
     resolved_naming = _preflight_reports(assistant_id, ids, naming_rule_file_id)
 
     workspace = _workspace_id()
-    created = _now()
+    created = jobs.now_iso()
     batch_id = uuid.uuid4().hex
+    children: list[dict[str, Any]] = []
+    for ordinal, report_file_id in enumerate(ids, start=1):
+        item_id = uuid.uuid4().hex
+        spec = jobs.build_assistant_audit_job_spec(
+            assistant_id=assistant_id,
+            report_file_id=report_file_id,
+            naming_rule_file_id=resolved_naming,
+            workspace=workspace,
+            priority=NIGHT_BATCH_PRIORITY,
+            available_at=scheduled,
+            batch_id=batch_id,
+            batch_item_id=item_id,
+            created_at=created,
+        )
+        children.append(
+            {
+                "job": spec,
+                "item": {
+                    "id": item_id,
+                    "workspace_id": workspace,
+                    "batch_id": batch_id,
+                    "ordinal": ordinal,
+                    "report_file_id": report_file_id,
+                    "audit_job_id": spec["id"],
+                    "created_at": created,
+                    "updated_at": created,
+                },
+            }
+        )
     repo = get_batch_repository()
-    batch = repo.insert_batch(
+    repo.create_bundle(
         {
             "id": batch_id,
             "workspace_id": workspace,
@@ -342,42 +382,17 @@ def create_night_batch(
             "created_by": current_user.get_current_user().user_id,
             "created_at": created,
             "updated_at": created,
-        }
+        },
+        children,
     )
-    created_jobs: list[dict[str, Any]] = []
-    try:
-        for ordinal, report_file_id in enumerate(ids, start=1):
-            item_id = uuid.uuid4().hex
-            job = jobs.enqueue_assistant_audit(
-                assistant_id,
-                report_file_id=report_file_id,
-                naming_rule_file_id=resolved_naming,
-                priority=NIGHT_BATCH_PRIORITY,
-                available_at=scheduled,
-                batch_id=batch_id,
-                batch_item_id=item_id,
-                reuse_active=False,
-            )
-            repo.insert_item(
-                {
-                    "id": item_id,
-                    "workspace_id": workspace,
-                    "batch_id": batch_id,
-                    "ordinal": ordinal,
-                    "report_file_id": report_file_id,
-                    "audit_job_id": str(job["id"]),
-                    "created_at": created,
-                    "updated_at": created,
-                }
-            )
-            created_jobs.append(job)
-    except Exception:
-        logger.exception("night batch %s failed after preflight while writing jobs", batch_id)
-        raise
+    created_jobs = [
+        jobs.get_job(child["job"]["id"], workspace_id_value=workspace)
+        for child in children
+    ]
 
     observability.metrics.increment("audit_batches_created_total", mode=BATCH_MODE_NIGHT)
     observability.metrics.increment("audit_batch_items_total", amount=len(ids))
-    refreshed = refresh_batch_status(batch_id, workspace_id=workspace) or batch
+    refreshed = refresh_batch_status(batch_id, workspace_id=workspace) or {}
     return {
         "id": batch_id,
         "mode": BATCH_MODE_NIGHT,
@@ -402,7 +417,7 @@ def get_batch_detail(batch_id: str) -> dict[str, Any]:
         str(job.get("id")): job
         for job in _load_child_jobs(items, workspace_id=workspace)
     }
-    now = _now()
+    now = jobs.utc_now()
     child_jobs = [jobs_by_id[str(item["audit_job_id"])] for item in items if str(item.get("audit_job_id")) in jobs_by_id]
     counts = _count_buckets(child_jobs, now=now)
     total = len(items)
@@ -455,7 +470,7 @@ def list_batches(*, limit: int = 50) -> list[dict[str, Any]]:
         refreshed = refresh_batch_status(batch_id, workspace_id=workspace) or batch
         items = repo.list_items(batch_id, workspace_id=workspace)
         child_jobs = _load_child_jobs(items, workspace_id=workspace)
-        counts = _count_buckets(child_jobs, now=_now())
+        counts = _count_buckets(child_jobs, now=jobs.utc_now())
         usage = compact_usage_summary(usage_by_batch.get(batch_id) or {})
         summaries.append(
             {

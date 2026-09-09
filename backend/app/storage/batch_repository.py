@@ -6,12 +6,15 @@ group jobs for scheduling, listing, and usage aggregation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any, Protocol
 
 from .. import config, db
 
 
 BATCH_MODE_NIGHT = "night"
+# Phase 1 stores this field but does not enforce a batch slot. Report
+# concurrency is 1 only while a single worker_loop process claims the queue.
 BATCH_MAX_CONCURRENCY = 1
 NIGHT_BATCH_PRIORITY = -5
 NIGHT_BATCH_MAX_REPORTS = 200
@@ -109,7 +112,10 @@ def _timestamp(value: Any) -> str | None:
     if value is None or value == "":
         return None
     if isinstance(value, str):
-        return value
+        raw = value.strip()
+        if raw.endswith("+00:00"):
+            return raw[:-6] + "Z"
+        return raw
     iso = getattr(value, "isoformat", None)
     if callable(iso):
         return str(iso()).replace("+00:00", "Z")
@@ -130,6 +136,81 @@ def _row_to_item(row: Any) -> dict[str, Any]:
         item[key] = _timestamp(item.get(key))
     item["ordinal"] = int(item.get("ordinal") or 0)
     return item
+
+
+def insert_batch_row(conn: Any, values: dict[str, Any], *, postgres: bool = False) -> None:
+    placeholder = "%s" if postgres else "?"
+    conn.execute(
+        f"""INSERT INTO audit_batches
+           (id, workspace_id, assistant_id, naming_rule_file_id, mode, status,
+            scheduled_at, max_concurrency, created_by, created_at, updated_at,
+            started_at, finished_at)
+           VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder},
+                   {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                   {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                   {placeholder})""",
+        (
+            values["id"],
+            values["workspace_id"],
+            values["assistant_id"],
+            values.get("naming_rule_file_id"),
+            values.get("mode") or BATCH_MODE_NIGHT,
+            values.get("status") or BATCH_STATUS_SCHEDULED,
+            values["scheduled_at"],
+            int(values.get("max_concurrency") or BATCH_MAX_CONCURRENCY),
+            values.get("created_by") or "",
+            values["created_at"],
+            values["updated_at"],
+            values.get("started_at"),
+            values.get("finished_at"),
+        ),
+    )
+
+
+def insert_item_row(conn: Any, values: dict[str, Any], *, postgres: bool = False) -> None:
+    placeholder = "%s" if postgres else "?"
+    conn.execute(
+        f"""INSERT INTO audit_batch_items
+           (id, workspace_id, batch_id, ordinal, report_file_id, audit_job_id,
+            created_at, updated_at)
+           VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder},
+                   {placeholder}, {placeholder}, {placeholder}, {placeholder})""",
+        (
+            values["id"],
+            values["workspace_id"],
+            values["batch_id"],
+            int(values["ordinal"]),
+            values["report_file_id"],
+            values["audit_job_id"],
+            values["created_at"],
+            values["updated_at"],
+        ),
+    )
+
+
+def insert_audit_job_row(conn: Any, values: dict[str, Any], *, postgres: bool = False) -> None:
+    placeholder = "%s" if postgres else "?"
+    result_sql = f"{placeholder}::jsonb" if postgres else placeholder
+    conn.execute(
+        f"""INSERT INTO jobs
+           (id, workspace_id, type, target_type, target_id, status, priority,
+            attempts, max_attempts, error, result, created_at, available_at)
+           VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder},
+                   {placeholder}, 'queued', {placeholder}, 0, {placeholder}, '',
+                   {result_sql}, {placeholder}, {placeholder})""",
+        (
+            values["id"],
+            values["workspace_id"],
+            values.get("type") or "audit",
+            values.get("target_type") or "assistant",
+            values["target_id"],
+            int(values.get("priority") or 0),
+            max(1, int(values.get("max_attempts") or 2)),
+            json.dumps(values.get("result") or {}, ensure_ascii=False),
+            values.get("created_at"),
+            str(values.get("available_at") or "").strip() or None,
+        ),
+    )
 
 
 class BatchRepository(Protocol):
@@ -161,6 +242,12 @@ class BatchRepository(Protocol):
     ) -> None: ...
 
     def lookup_batch_for_job(self, job_id: str) -> dict[str, str] | None: ...
+
+    def create_bundle(
+        self,
+        batch: dict[str, Any],
+        children: list[dict[str, Any]],
+    ) -> None: ...
 
 
 class SqliteBatchRepository:
@@ -281,6 +368,17 @@ class SqliteBatchRepository:
             "batch_id": str(row["batch_id"]),
             "workspace_id": str(row["workspace_id"] or ""),
         }
+
+    def create_bundle(
+        self,
+        batch: dict[str, Any],
+        children: list[dict[str, Any]],
+    ) -> None:
+        with db.transaction() as conn:
+            insert_batch_row(conn, batch, postgres=False)
+            for child in children:
+                insert_audit_job_row(conn, child["job"], postgres=False)
+                insert_item_row(conn, child["item"], postgres=False)
 
 
 @dataclass(frozen=True)
@@ -412,6 +510,17 @@ class PostgresBatchRepository:
             "batch_id": batch_id,
             "workspace_id": str(data.get("workspace_id") or ""),
         }
+
+    def create_bundle(
+        self,
+        batch: dict[str, Any],
+        children: list[dict[str, Any]],
+    ) -> None:
+        with self._connect() as conn:
+            insert_batch_row(conn, batch, postgres=True)
+            for child in children:
+                insert_audit_job_row(conn, child["job"], postgres=True)
+                insert_item_row(conn, child["item"], postgres=True)
 
 
 def get_batch_repository() -> BatchRepository:
