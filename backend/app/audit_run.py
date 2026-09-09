@@ -15,7 +15,7 @@ from .audit_policy import (
     PRODUCTION_EVIDENCE_COMPRESSION_MODE,
     PRODUCTION_RECOVERY_MODE,
 )
-from .job_errors import classify_audit_subprocess_failure
+from .job_errors import RetryableJobError, classify_audit_subprocess_failure
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,38 @@ def audit_run_identity(*, assistant_id: str, run_id: str) -> dict[str, str]:
     short = str(assistant_id or "").replace("assistant_", "")[:24] or "audit"
     short = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in short)
     return audit_output_paths(f"end_to_end_audit_{short}_{rid}.json", run_id=rid)
+
+
+def audit_subprocess_timeout_seconds() -> int:
+    """Hard cap for the workflow process. Must expire before the worker wait_for."""
+    return max(1, int(config.AUDIT_JOB_TIMEOUT_SECONDS))
+
+
+def run_workflow_subprocess(
+    cmd: list[str],
+    *,
+    cwd: str,
+    env: dict[str, str],
+    timeout_seconds: int,
+) -> subprocess.CompletedProcess[str]:
+    """Run the audit CLI and kill it on timeout so a retry cannot overlap."""
+    try:
+        return subprocess.run(
+            cmd,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RetryableJobError(
+            f"audit workflow timed out after {timeout_seconds} seconds",
+            code="timeout",
+        ) from exc
 
 
 def production_runtime_args() -> list[str]:
@@ -236,15 +268,11 @@ def run_assistant_audit(
     run_env["CHUNK_STUDIO_DEFAULT_USER_ID"] = identity.user_id
     run_env["DEFAULT_USER_ID"] = identity.user_id
     logger.info("starting assistant audit: %s", " ".join(cmd))
-    completed = subprocess.run(
+    completed = run_workflow_subprocess(
         cmd,
         cwd=str(config.PROJECT_ROOT),
         env=run_env,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
+        timeout_seconds=audit_subprocess_timeout_seconds(),
     )
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()

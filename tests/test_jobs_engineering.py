@@ -80,6 +80,6 @@ def test_worker_survives_failure_persistence_dependency_error(monkeypatch) -> No
 
 def test_audit_jobs_use_extended_timeout(monkeypatch) -> None:
     monkeypatch.setattr(jobs.config, "AUDIT_JOB_TIMEOUT_SECONDS", 14400)
-    assert jobs._timeout_for_job({"type": "audit"}) == 14400
+    assert jobs._timeout_for_job({"type": "audit"}) == 14400 + jobs.AUDIT_JOB_TIMEOUT_GRACE_SECONDS
     assert jobs._timeout_for_job({"type": "chunk"}) == jobs.JOB_TIMEOUT_SECONDS
     assert jobs._timeout_for_job({"type": "parse"}) == jobs.JOB_TIMEOUT_SECONDS

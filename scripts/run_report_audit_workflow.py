@@ -316,7 +316,7 @@ def _extract_detection_basis_standard_nos(markdown: str) -> list[str]:
             if standard_no not in standards:
                 standards.append(standard_no)
     if not standards:
-        raise ValueError("报告检测依据中没有可识别的标准号")
+        raise NonRetryableJobError("报告检测依据中没有可识别的标准号")
     return standards
 
 
@@ -326,7 +326,7 @@ def _filter_evidence_file_ids_by_detection_basis(
 ) -> list[str]:
     """Keep bound-KB evidence files whose chunk standard number is declared."""
     if not file_ids:
-        raise ValueError("助手知识库没有可用标准文件")
+        raise NonRetryableJobError("助手知识库没有可用标准文件")
     repository = _content_repository()
     if repository is not None:
         rows = [
@@ -358,7 +358,7 @@ def _filter_evidence_file_ids_by_detection_basis(
             matched_standards.add(standard_no)
     missing = sorted(declared - matched_standards)
     if missing:
-        raise ValueError(
+        raise NonRetryableJobError(
             "报告检测依据中的标准未在当前知识库找到：" + "、".join(missing)
         )
     scoped = [
@@ -367,8 +367,33 @@ def _filter_evidence_file_ids_by_detection_basis(
         if standards_by_file.get(file_id, set()) & declared
     ]
     if not scoped:
-        raise ValueError("报告检测依据没有匹配到可检索的知识库文件")
+        raise NonRetryableJobError("报告检测依据没有匹配到可检索的知识库文件")
     return scoped
+
+
+def checkpoint_resume_state(
+    checkpoint: dict[str, Any] | None,
+    units: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Skip cases already stored in the checkpoint; retries only run the rest."""
+    results = [
+        item
+        for item in list((checkpoint or {}).get("cases") or [])
+        if isinstance(item, dict) and str(item.get("case_id") or "").strip()
+    ]
+    completed_ids = {str(item["case_id"]) for item in results}
+    pending = [
+        (index, unit)
+        for index, unit in enumerate(units, start=1)
+        if str(unit.get("case_id") or "") not in completed_ids
+    ]
+    return {
+        "results": results,
+        "completed_ids": completed_ids,
+        "pending": pending,
+        "resumed": len(completed_ids) > 0,
+        "resumed_case_count": len(completed_ids),
+    }
 
 
 def _report_job_progress(job_id: str, **fields: Any) -> None:
@@ -382,13 +407,27 @@ def _report_job_progress(job_id: str, **fields: Any) -> None:
         "stage_label": str(fields.get("stage_label") or STAGE_LABELS.get(stage) or stage),
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
-    for key in ("case_done", "case_total", "case_label", "percent", "message", "project_name"):
+    for key in (
+        "case_done",
+        "case_total",
+        "case_label",
+        "percent",
+        "message",
+        "project_name",
+        "attempt",
+        "resumed",
+        "resumed_case_count",
+    ):
         if key in fields and fields[key] is not None:
             progress[key] = fields[key]
+    patch: dict[str, Any] = {"progress": progress}
+    for key in ("attempt", "resumed", "resumed_case_count"):
+        if key in progress:
+            patch[key] = progress[key]
     try:
         from app import jobs
 
-        jobs.merge_job_result(jid, {"progress": progress})
+        jobs.merge_job_result(jid, patch)
     except Exception:
         pass
 # Fallback for assistant versions created before peer_context_rules moved into
@@ -445,7 +484,7 @@ def _load_assistant_version(assistant_id: str) -> dict[str, Any]:
         ).fetchone()
     )
     if not row:
-        raise ValueError(f"active assistant version not found: {assistant_id}")
+        raise NonRetryableJobError(f"active assistant version not found: {assistant_id}")
     payload = dict(row)
     for key in (
         "model_config",
@@ -465,7 +504,7 @@ def _load_assistant_version(assistant_id: str) -> dict[str, Any]:
             payload[key] = json.loads(raw or "{}")
     payload["parameter_schema"] = resolve_parameter_schema(payload.get("parameter_schema"))
     if payload["model_config"].get("provider") != "deepseek":
-        raise ValueError("only DeepSeek assistant versions can run this workflow")
+        raise NonRetryableJobError("only DeepSeek assistant versions can run this workflow")
     return payload
 
 
@@ -496,11 +535,11 @@ def _prompt_content(
     content = str(prompt.get("content") or "")
     if var_context is None:
         if not content.strip():
-            raise ValueError(f"assistant version omitted prompt: {key}")
+            raise NonRetryableJobError(f"assistant version omitted prompt: {key}")
         return content
     composed = compose_runtime_prompt(content, step_id=key, context=var_context)
     if not composed.strip():
-        raise ValueError(f"assistant version omitted prompt: {key}")
+        raise NonRetryableJobError(f"assistant version omitted prompt: {key}")
     return composed
 
 
@@ -658,9 +697,9 @@ def _load_manual_knowledge_rules(
             "assistant_oil_transformer_audit"
         )["rules"]
     if payload.get("scope") != "knowledge_base_manual_rules":
-        raise ValueError("manual knowledge rule scope mismatch")
+        raise NonRetryableJobError("manual knowledge rule scope mismatch")
     if not isinstance(payload.get("rules"), list):
-        raise ValueError("manual knowledge rules must contain a rules list")
+        raise NonRetryableJobError("manual knowledge rules must contain a rules list")
     return _overlay_seed_formulas(payload)
 
 
@@ -1979,7 +2018,7 @@ def _retrieval_runtime_config(profile: dict[str, Any]) -> dict[str, int | float 
             continue
         lower, upper = bounds[key]
         if not lower <= value <= upper:
-            raise ValueError(f"assistant retrieval setting {key} must be between {lower} and {upper}")
+            raise NonRetryableJobError(f"assistant retrieval setting {key} must be between {lower} and {upper}")
     return values
 
 
@@ -2222,9 +2261,9 @@ def _resolve_judge_concurrency(
     try:
         value = int(raw)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"judge_concurrency must be an integer, got {raw!r}") from exc
+        raise NonRetryableJobError(f"judge_concurrency must be an integer, got {raw!r}") from exc
     if value < 1:
-        raise ValueError("judge_concurrency must be >= 1 (use 1 to disable concurrency)")
+        raise NonRetryableJobError("judge_concurrency must be >= 1 (use 1 to disable concurrency)")
     return min(value, MAX_JUDGE_CONCURRENCY)
 
 
@@ -3177,15 +3216,12 @@ def main() -> None:
         )
     )
     few_shot_rules = db.merge_few_shot_rules(bound_knowledge_bases)
-    results = list(checkpoint.get("cases") or [])
-    completed_ids = {item["case_id"] for item in results}
+    resume = checkpoint_resume_state(checkpoint, units)
+    results = list(resume["results"])
+    completed_ids = resume["completed_ids"]
+    pending = resume["pending"]
     total_units = len(units)
     unit_order = {unit["case_id"]: index for index, unit in enumerate(units)}
-    pending = [
-        (index, unit)
-        for index, unit in enumerate(units, start=1)
-        if unit["case_id"] not in completed_ids
-    ]
     state_lock = threading.Lock()
     retrieval_lock = threading.Lock()
     recovery_semaphore = threading.Semaphore(2)
@@ -3195,12 +3231,17 @@ def main() -> None:
         percent=20,
         case_done=len(completed_ids),
         case_total=total_units,
+        resumed=resume["resumed"],
+        resumed_case_count=resume["resumed_case_count"],
         message=(
-            f"开始逐项判定（共 {total_units} 项，并发 {judge_concurrency}）…"
+            f"从 {resume['resumed_case_count']}/{total_units} 项继续…"
+            if resume["resumed"]
+            else f"开始逐项判定（共 {total_units} 项，并发 {judge_concurrency}）…"
         ),
     )
     print(
-        f"audit_cases pending={len(pending)} concurrency={judge_concurrency}",
+        f"audit_cases pending={len(pending)} resumed={resume['resumed_case_count']} "
+        f"concurrency={judge_concurrency}",
         flush=True,
     )
 
@@ -3479,14 +3520,11 @@ def main() -> None:
 
 
 def _run_main() -> int:
-    """Exit 2 for business/config errors so L2 job retry does not rerun them."""
+    """Exit 2 only for explicit non-retryable errors, not every ValueError."""
     try:
         main()
         return 0
     except NonRetryableJobError as exc:
-        print(str(exc), file=sys.stderr)
-        return AUDIT_EXIT_NON_RETRYABLE
-    except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return AUDIT_EXIT_NON_RETRYABLE
     except Exception as exc:

@@ -23,12 +23,20 @@ JOB_POLL_SECONDS = 1.0
 JOB_DEPENDENCY_BACKOFF_SECONDS = 5.0
 JOB_TIMEOUT_SECONDS = 15 * 60
 AUDIT_JOB_MAX_ATTEMPTS = 3  # L2: same run_id/checkpoint; business errors skip retry
+AUDIT_JOB_TIMEOUT_GRACE_SECONDS = 60  # wait_for buffer after subprocess kill
 
 
 def _timeout_for_job(job: dict[str, Any] | None) -> int:
-    """Audit jobs need a longer wall clock than OCR/parse/chunk."""
+    """Audit jobs need a longer wall clock than OCR/parse/chunk.
+
+    The workflow subprocess is killed at AUDIT_JOB_TIMEOUT_SECONDS. The worker
+    wait_for is that cap plus a short grace so the thread can surface TimeoutExpired
+    before asyncio cancels around a still-running process.
+    """
     if str((job or {}).get("type") or "") == "audit":
-        return max(JOB_TIMEOUT_SECONDS, int(config.AUDIT_JOB_TIMEOUT_SECONDS))
+        return max(JOB_TIMEOUT_SECONDS, int(config.AUDIT_JOB_TIMEOUT_SECONDS)) + (
+            AUDIT_JOB_TIMEOUT_GRACE_SECONDS
+        )
     return JOB_TIMEOUT_SECONDS
 
 
@@ -1032,12 +1040,14 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
         str(job.get("id") or ""),
         {
             **identity,
+            "attempt": int(job.get("attempts") or 1),
             "progress": {
                 "stage": "starting",
                 "stage_label": "启动审查",
                 "percent": 1,
                 "message": "正在启动审查工作流…",
                 "updated_at": now_iso(),
+                "attempt": int(job.get("attempts") or 1),
             },
         },
     )
@@ -1064,8 +1074,16 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
         return
 
     finished = now_iso()
+    current: dict[str, Any] = {}
+    try:
+        current = get_job(str(job.get("id") or "")).get("result") or {}
+    except KeyError:
+        current = {}
+    if not isinstance(current, dict):
+        current = {}
     result = {
         **payload,
+        **current,
         **identity,
         **outcome,
         "job_id": job.get("id"),
@@ -1075,8 +1093,14 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
             "percent": 100,
             "message": "审查完成",
             "updated_at": finished,
+            "attempt": current.get("attempt") or payload.get("attempt") or int(job.get("attempts") or 1),
+            "resumed": bool(current.get("resumed")),
+            "resumed_case_count": int(current.get("resumed_case_count") or 0),
         },
     }
+    result["attempt"] = result["progress"]["attempt"]
+    result["resumed"] = result["progress"]["resumed"]
+    result["resumed_case_count"] = result["progress"]["resumed_case_count"]
     result.pop("error_class", None)
     result.pop("error_code", None)
     _mark_job_done(job["id"], result)

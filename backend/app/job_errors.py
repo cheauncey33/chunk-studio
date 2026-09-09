@@ -40,7 +40,6 @@ _NON_RETRYABLE_MARKERS = (
     "active assistant version not found",
     "only DeepSeek assistant versions",
     "assistant version omitted prompt",
-    "fresh extraction did not reproduce",
     "invalid audit report_name",
     "audit job missing report_file_id",
 )

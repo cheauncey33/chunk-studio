@@ -107,6 +107,53 @@ def test_run_audit_job_reuses_stored_report_name_on_retry(monkeypatch, tmp_path:
         "end_to_end_audit_oil_transformer_audit_job_resume.json",
         "end_to_end_audit_oil_transformer_audit_job_resume.json",
     ]
+    stored = jobs.get_job("job_resume")
+    assert stored["result"]["attempt"] == 2
+
+
+def test_job_progress_records_resume_counts(monkeypatch, tmp_path: Path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    job = _insert_running_job(job_id="job_obs", attempts=2, max_attempts=3)
+    workflow._report_job_progress(
+        "job_obs",
+        stage="audit_cases",
+        case_done=17,
+        case_total=24,
+        attempt=2,
+        resumed=True,
+        resumed_case_count=17,
+        message="从 17/24 项继续…",
+    )
+    stored = jobs.get_job("job_obs")
+    assert stored["result"]["resumed"] is True
+    assert stored["result"]["resumed_case_count"] == 17
+    assert stored["result"]["attempt"] == 2
+    assert stored["result"]["progress"]["resumed_case_count"] == 17
+    assert stored["result"]["progress"]["attempt"] == 2
+
+
+def test_run_audit_job_keeps_resume_fields_on_success(monkeypatch, tmp_path: Path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    job = _insert_running_job(job_id="job_done", attempts=2, max_attempts=3)
+
+    def fake_run(**_kwargs):
+        jobs.merge_job_result(
+            "job_done",
+            {"resumed": True, "resumed_case_count": 3, "attempt": 2},
+        )
+        return {
+            "report_name": job["result"]["report_name"],
+            "summary": {"cases": 5},
+        }
+
+    monkeypatch.setattr(audit_run, "run_assistant_audit", fake_run)
+    asyncio.run(jobs._run_audit_job(job))
+    stored = jobs.get_job("job_done")
+    assert stored["status"] == "done"
+    assert stored["result"]["resumed"] is True
+    assert stored["result"]["resumed_case_count"] == 3
+    assert stored["result"]["attempt"] == 2
+    assert stored["result"]["progress"]["resumed_case_count"] == 3
 
 
 def test_run_assistant_audit_keeps_the_same_output_path(monkeypatch, tmp_path: Path) -> None:
@@ -153,10 +200,18 @@ def test_run_assistant_audit_keeps_the_same_output_path(monkeypatch, tmp_path: P
 
 def test_workflow_maps_business_errors_to_non_retryable_exit(monkeypatch) -> None:
     def boom() -> None:
-        raise ValueError("报告检测依据中的标准未在当前知识库找到：GB/T 7595")
+        raise workflow.NonRetryableJobError("报告检测依据中的标准未在当前知识库找到：GB/T 7595")
 
     monkeypatch.setattr(workflow, "main", boom)
     assert workflow._run_main() == AUDIT_EXIT_NON_RETRYABLE
+
+
+def test_workflow_maps_valueerror_to_retryable_exit(monkeypatch) -> None:
+    def boom() -> None:
+        raise ValueError("naming decoder changed the raw model")
+
+    monkeypatch.setattr(workflow, "main", boom)
+    assert workflow._run_main() == AUDIT_EXIT_RETRYABLE
 
 
 def test_workflow_maps_sidecar_crashes_to_retryable_exit(monkeypatch) -> None:

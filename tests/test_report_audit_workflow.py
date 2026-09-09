@@ -111,12 +111,46 @@ def test_detection_basis_filters_bound_files_by_chunk_standard_no(
     )
 
     assert scoped == ["oil"]
-    with pytest.raises(ValueError, match="未在当前知识库找到"):
+    with pytest.raises(workflow.NonRetryableJobError, match="未在当前知识库找到"):
         workflow._filter_evidence_file_ids_by_detection_basis(
             ["oil", "dry"],
             ["GB/T 1094.3-2017"],
         )
     _close_temp_db(monkeypatch)
+
+
+def test_checkpoint_resume_skips_completed_cases_and_only_runs_pending() -> None:
+    units = [
+        {
+            "case_id": f"c{index}",
+            "test_item": {"item_no": str(index), "project_name": f"item {index}"},
+            "requirement": {"requirement_text": f"req {index}"},
+        }
+        for index in range(1, 6)
+    ]
+    checkpoint = {
+        "cases": [
+            {"case_id": "c1", "judgment": {"status": "supported"}},
+            {"case_id": "c2", "judgment": {"status": "mismatch"}},
+            {"case_id": "c3", "judgment": {"status": "insufficient_context"}},
+        ]
+    }
+    state = workflow.checkpoint_resume_state(checkpoint, units)
+    executed: list[str] = []
+    for _index, unit in state["pending"]:
+        executed.append(unit["case_id"])
+    assert executed == ["c4", "c5"]
+    assert [item["case_id"] for item in state["results"]] == ["c1", "c2", "c3"]
+    assert state["resumed"] is True
+    assert state["resumed_case_count"] == 3
+
+
+def test_checkpoint_resume_fresh_run_executes_every_case() -> None:
+    units = [{"case_id": "c1"}, {"case_id": "c2"}]
+    state = workflow.checkpoint_resume_state({"cases": []}, units)
+    assert [unit["case_id"] for _index, unit in state["pending"]] == ["c1", "c2"]
+    assert state["resumed"] is False
+    assert state["resumed_case_count"] == 0
 
 
 def test_runtime_retrieval_config_and_selection_apply_version_values() -> None:
@@ -1556,7 +1590,7 @@ def test_resolve_judge_concurrency_priority_and_bounds(monkeypatch) -> None:
         workflow._resolve_judge_concurrency(999, {})
         == workflow.MAX_JUDGE_CONCURRENCY
     )
-    with pytest.raises(ValueError, match=">= 1"):
+    with pytest.raises(workflow.NonRetryableJobError, match=">= 1"):
         workflow._resolve_judge_concurrency(0, {})
 
 

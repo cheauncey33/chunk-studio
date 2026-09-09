@@ -1,6 +1,11 @@
 """Tests for in-app audit trial helpers."""
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import time
+
 import pytest
 
 from app import audit_run, config
@@ -107,3 +112,36 @@ def test_classify_audit_subprocess_crash_is_retryable() -> None:
     error = classify_audit_subprocess_failure(AUDIT_EXIT_RETRYABLE, "agent sidecar 5xx (502)")
     assert isinstance(error, RetryableJobError)
     assert error.retryable is True
+
+
+def test_run_workflow_subprocess_timeout_is_retryable(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        raise subprocess.TimeoutExpired(cmd=list(args[0] if args else []), timeout=int(kwargs["timeout"]))
+
+    monkeypatch.setattr(audit_run.subprocess, "run", fake_run)
+    with pytest.raises(RetryableJobError) as exc:
+        audit_run.run_workflow_subprocess(
+            [sys.executable, "-c", "pass"],
+            cwd=".",
+            env={},
+            timeout_seconds=12,
+        )
+    assert exc.value.retryable is True
+    assert exc.value.code == "timeout"
+    assert captured["timeout"] == 12
+
+
+def test_run_workflow_subprocess_kills_the_child_before_returning() -> None:
+    started = time.monotonic()
+    with pytest.raises(RetryableJobError) as exc:
+        audit_run.run_workflow_subprocess(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            cwd=".",
+            env=os.environ.copy(),
+            timeout_seconds=1,
+        )
+    assert exc.value.code == "timeout"
+    assert time.monotonic() - started < 8
