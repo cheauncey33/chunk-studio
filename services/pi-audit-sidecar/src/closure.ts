@@ -38,9 +38,14 @@ const UNIT_BASE: Record<string, [string, number]> = {
 };
 
 const UNIT_RE = "(?:kVA|kW|kV|kHz|Hz|ms|%|％|V|A|W|s)";
-const NUM_RE = "[-+]?\\d+(?:\\.\\d+)?";
+const NUM_RE = "-?\\d+(?:\\.\\d+)?";
 const TOKEN_RE = new RegExp(`(${NUM_RE})\\s*(${UNIT_RE})?`, "gi");
-const SKIP_ONE_RE = /\(\s*1\s*[+±]/;
+function isAllowanceOne(source: string, index: number, token: string, unit: string | undefined): boolean {
+	if (token !== "1" || unit) return false;
+	const before = source.slice(Math.max(0, index - 3), index);
+	const after = source.slice(index + token.length, index + token.length + 2);
+	return /\(\s*$/.test(before) && /^[+±]/.test(after);
+}
 
 function closeEnough(left: number, right: number): boolean {
 	return Math.abs(left - right) <= Math.max(1e-6, Math.abs(right) * 1e-4);
@@ -83,8 +88,7 @@ export function parseQuantities(text: string): Quantity[] {
 	let match: RegExpExecArray | null;
 	while ((match = TOKEN_RE.exec(source))) {
 		const index = match.index;
-		const prefix = source.slice(Math.max(0, index - 3), index + match[0].length);
-		if (SKIP_ONE_RE.test(prefix) && match[1] === "1" && !match[2]) continue;
+		if (isAllowanceOne(source, index, match[1], match[2])) continue;
 		out.push({
 			value: Number(match[1]),
 			unit: match[2] ? foldUnit(match[2]) : null,
@@ -141,21 +145,49 @@ function verbatimNeedle(standardValue: string): string | null {
 	return token || null;
 }
 
+function asBodyMap(
+	readBodies: Map<string, string> | Record<string, string> | undefined,
+): Map<string, string> {
+	if (!readBodies) return new Map();
+	return readBodies instanceof Map ? readBodies : new Map(Object.entries(readBodies));
+}
+
+function citedChunkId(item: Record<string, unknown> | null | undefined): string {
+	const chunkId = String(item?.chunk_id || "").trim();
+	if (!chunkId || chunkId.includes("placeholder")) return "";
+	return chunkId;
+}
+
 export function evidenceCorpus(
 	evidence: Array<Record<string, unknown>> | null | undefined,
 	readBodies: Map<string, string> | Record<string, string> = new Map(),
 ): string {
-	const bodies = readBodies instanceof Map ? readBodies : new Map(Object.entries(readBodies));
+	const bodies = asBodyMap(readBodies);
 	const parts: string[] = [];
 	for (const item of evidence || []) {
-		const chunkId = String(item?.chunk_id || "").trim();
-		if (chunkId && !chunkId.includes("placeholder") && bodies.has(chunkId)) {
-			parts.push(String(bodies.get(chunkId) || ""));
-			continue;
-		}
-		parts.push(String(item?.text || ""));
+		const chunkId = citedChunkId(item);
+		if (!chunkId || !bodies.has(chunkId)) continue;
+		parts.push(String(bodies.get(chunkId) || ""));
 	}
 	return collapseThousands(parts.join("\n").replace(/<[^>]+>/g, " "));
+}
+
+function locateQuantity(
+	qty: Quantity,
+	corpus: string,
+	found: Quantity[],
+	kind: string,
+): ClosureMode | null {
+	if (locateDirect(qty, corpus)) return "direct";
+	if (locateUnit(qty, found)) return "unit";
+	if (kind === "formula_aggregate" && locateFormula(qty, found)) return "formula";
+	return null;
+}
+
+function combineModes(modes: ClosureMode[]): ClosureMode {
+	if (modes.length > 0 && modes.every((mode) => mode === "formula")) return "formula";
+	if (modes.some((mode) => mode === "unit")) return "unit";
+	return "direct";
 }
 
 export function closeEvidence(input: {
@@ -170,9 +202,14 @@ export function closeEvidence(input: {
 		return { applied: false, passed: true, mode: null, reason: "not_match_mismatch" };
 	}
 	const standardValue = String(input.standard_value || "").trim();
-	const corpus = evidenceCorpus(input.evidence, input.readBodies);
+	const evidence = input.evidence || [];
+	const bodies = asBodyMap(input.readBodies);
+	const cited = evidence.map(citedChunkId).filter(Boolean);
+	const unread = cited.filter((id) => !bodies.has(id));
+	const corpus = evidenceCorpus(evidence, bodies);
 	if (!corpus.trim()) {
-		return { applied: true, passed: false, mode: null, reason: "no_evidence_text" };
+		const reason = cited.length > 0 && unread.length === cited.length ? "cited_chunks_not_read" : "no_evidence_text";
+		return { applied: true, passed: false, mode: null, reason };
 	}
 	if (!standardValue) {
 		return { applied: true, passed: false, mode: null, reason: "no_standard_value" };
@@ -182,22 +219,33 @@ export function closeEvidence(input: {
 	const found = parseQuantities(corpus);
 	const kind = String(input.kind || "");
 
-	for (const qty of targets) {
-		if (locateDirect(qty, corpus)) {
-			return { applied: true, passed: true, mode: "direct", reason: "number_in_evidence" };
+	if (targets.length > 0) {
+		const modes: ClosureMode[] = [];
+		for (const qty of targets) {
+			const mode = locateQuantity(qty, corpus, found, kind);
+			if (!mode) {
+				return {
+					applied: true,
+					passed: false,
+					mode: null,
+					reason: `quantity_not_in_evidence:${qty.raw}`,
+				};
+			}
+			modes.push(mode);
 		}
-		if (locateUnit(qty, found)) {
-			return { applied: true, passed: true, mode: "unit", reason: "unit_equivalent_in_evidence" };
-		}
+		return {
+			applied: true,
+			passed: true,
+			mode: combineModes(modes),
+			reason: "all_quantities_in_evidence",
+		};
 	}
-	if (kind === "formula_aggregate" && targets[0] && locateFormula(targets[0], found)) {
-		return { applied: true, passed: true, mode: "formula", reason: "addend_sum_in_evidence" };
-	}
+
 	const needle = verbatimNeedle(standardValue);
 	if (needle && corpus.includes(needle)) {
 		return { applied: true, passed: true, mode: "verbatim", reason: "label_in_evidence" };
 	}
-	if (targets.length === 0 && needle) {
+	if (needle) {
 		return { applied: true, passed: false, mode: null, reason: "label_not_in_evidence" };
 	}
 	return { applied: true, passed: false, mode: null, reason: "standard_value_not_in_evidence" };
