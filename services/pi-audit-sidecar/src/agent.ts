@@ -34,6 +34,8 @@ export type AgentCaseInput = {
 	file_scope?: string[] | null;
 	/** First-recall locator cards. Agent reads these first; may still search if they are not enough. */
 	retrieved_candidates?: Array<Record<string, unknown>> | null;
+	/** Production query used for the Python first-round hybrid search. */
+	production_query?: string | null;
 	tool_budget?: number | null;
 };
 
@@ -137,10 +139,25 @@ async function getModel(): Promise<{ runtime: any; model: any; modelId: string }
 
 // ---- per-case session execution --------------------------------------------
 
+function firstRoundQuery(c: AgentCaseInput): string {
+	const explicit = String(c.production_query || "").trim();
+	if (explicit) return explicit;
+	const reported =
+		c.reported_requirement && typeof c.reported_requirement === "object"
+			? String((c.reported_requirement as Record<string, unknown>).text || "").trim()
+			: "";
+	const project =
+		c.test_item && typeof c.test_item === "object"
+			? String((c.test_item as Record<string, unknown>).project_name || "").trim()
+			: "";
+	return [project, reported].filter(Boolean).join(" ");
+}
+
 function casePrompt(c: AgentCaseInput): string {
 	const ctx = c.sample_context ?? {};
 	const retrieved = Array.isArray(c.retrieved_candidates) ? c.retrieved_candidates : [];
-	const retrievedBlock = retrieved.length > 0 ? `\n${formatFirstRoundCards(retrieved)}` : "";
+	const retrievedBlock =
+		retrieved.length > 0 ? `\n${formatFirstRoundCards(retrieved, firstRoundQuery(c))}` : "";
 	const closer =
 		retrieved.length > 0
 			? `请先阅读第一轮候选，核实该声称值对应的标准限值；不够再检索。按任务定义给出的 JSON 格式输出判定。`

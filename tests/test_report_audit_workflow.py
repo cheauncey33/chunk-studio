@@ -521,7 +521,18 @@ def test_retrieved_pool_for_agent_keeps_chunk_ids_without_full_text() -> None:
                 "text": "<table>很大</table>",
             },
             {
+                "chunk_id": "chk-2",
                 "candidate_key": "c02",
+                "content_type": "section",
+                "business_metadata": {
+                    "standard_no": "GB/T 1094.3-2017",
+                    "section": "5.3",
+                    "section_title": "绝缘水平",
+                },
+                "text": "雷电冲击电压应不小于 75 kV，见表3。",
+            },
+            {
+                "candidate_key": "c03",
                 "content_type": "section",
                 "business_metadata": {},
                 "text": "无 id 的片段不交给 agent",
@@ -541,11 +552,25 @@ def test_retrieved_pool_for_agent_keeps_chunk_ids_without_full_text() -> None:
             "section_title": None,
             "headers": ["额定容量", "空载损耗"],
             "bind_state": "matched",
-        }
+        },
+        {
+            "chunk_id": "chk-2",
+            "candidate_key": "c02",
+            "content_type": "section",
+            "standard_no": "GB/T 1094.3-2017",
+            "table_no": None,
+            "table_title": None,
+            "table_columns": None,
+            "section": "5.3",
+            "section_title": "绝缘水平",
+            "headers": None,
+            "bind_state": None,
+            "text": "雷电冲击电压应不小于 75 kV，见表3。",
+        },
     ]
     assert "text" not in pool[0]
     assert "column_values" not in pool[0]
-    assert "<table>" not in str(pool)
+    assert "<table>" not in str(pool[0])
 
 
 def test_judge_validation_maps_legacy_status_and_builds_locators() -> None:

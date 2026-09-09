@@ -226,9 +226,11 @@ export function formatSearchHits(
 	return hits.map((hit, index) => formatHitPreview(hit, index, options)).join("\n\n");
 }
 
-export function formatFirstRoundCards(candidates: PreviewHit[]): string {
+export function formatFirstRoundCards(candidates: PreviewHit[], query?: string): string {
 	if (!candidates.length) return "";
-	const cards = candidates.map((hit, index) => formatHitPreview(hit, index));
+	const cards = candidates.map((hit, index) =>
+		formatHitPreview(hit, index, { query: query || "" }),
+	);
 	return [
 		`## 第一轮候选（先看这些）`,
 		`工作流已经做过混合检索。下面是定位卡，不是完整证据，不含表格数值。`,

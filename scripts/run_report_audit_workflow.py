@@ -1068,10 +1068,11 @@ def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
 
 
 def _retrieved_pool_for_agent(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Hand first-recall locator cards to the agent (no full text, no cell values).
+    """Hand first-recall locator cards to the agent (no table HTML, no cell values).
 
-    The agent reads these first and may still call search_standards if they
-    are not enough.
+    Section/clause hits keep ``text`` so the sidecar can build query-aware
+    snippets. The agent reads these first and may still call search_standards
+    if they are not enough.
     """
     pool: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -1086,21 +1087,25 @@ def _retrieved_pool_for_agent(candidates: list[dict[str, Any]]) -> list[dict[str
         )
         columns = metadata.get("table_columns")
         headers = binding.get("headers") if isinstance(binding.get("headers"), list) else None
-        pool.append(
-            {
-                "chunk_id": chunk_id,
-                "candidate_key": candidate.get("candidate_key"),
-                "content_type": candidate.get("content_type"),
-                "standard_no": metadata.get("standard_no"),
-                "table_no": metadata.get("table_no"),
-                "table_title": metadata.get("table_title"),
-                "table_columns": columns if isinstance(columns, list) else None,
-                "section": metadata.get("section"),
-                "section_title": metadata.get("section_title"),
-                "headers": headers,
-                "bind_state": binding.get("state"),
-            }
-        )
+        kind = str(
+            candidate.get("content_type") or metadata.get("content_type") or ""
+        ).casefold()
+        card: dict[str, Any] = {
+            "chunk_id": chunk_id,
+            "candidate_key": candidate.get("candidate_key"),
+            "content_type": candidate.get("content_type") or metadata.get("content_type"),
+            "standard_no": metadata.get("standard_no"),
+            "table_no": metadata.get("table_no"),
+            "table_title": metadata.get("table_title"),
+            "table_columns": columns if isinstance(columns, list) else None,
+            "section": metadata.get("section"),
+            "section_title": metadata.get("section_title"),
+            "headers": headers,
+            "bind_state": binding.get("state"),
+        }
+        if kind != "table":
+            card["text"] = str(candidate.get("text") or "")
+        pool.append(card)
     return pool
 
 
@@ -2590,6 +2595,7 @@ def _audit_one_case(
             "test_item": runtime_case["test_item"],
             "reported_requirement": runtime_case["reported_requirement"],
             "file_scope": list(evidence_file_ids or []),
+            "production_query": queries["production"],
             "retrieved_candidates": _retrieved_pool_for_agent(candidates),
         }
         last_error: str | None = None
