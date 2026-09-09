@@ -430,6 +430,7 @@ def init_db() -> None:
     _migrate_assistant_kb_one_to_one()
     _migrate_assistant_single_version()
     _migrate_llm_usage_events()
+    _migrate_audit_batches()
     _ensure_knowledge_base_assistants()
     _conn.commit()
 
@@ -440,6 +441,14 @@ def _migrate_llm_usage_events() -> None:
 
     assert _conn is not None
     _conn.executescript(LLM_USAGE_EVENTS_SQLITE_DDL)
+
+
+def _migrate_audit_batches() -> None:
+    """Add night-batch orchestration tables to databases created before batches."""
+    from .storage.batch_repository import AUDIT_BATCHES_SQLITE_DDL
+
+    assert _conn is not None
+    _conn.executescript(AUDIT_BATCHES_SQLITE_DDL)
 
 
 def _migrate_chat_conversation_summary() -> None:

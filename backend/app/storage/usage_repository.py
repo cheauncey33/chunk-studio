@@ -92,6 +92,14 @@ class UsageRepository(Protocol):
 
     def lookup_job_workspace(self, job_id: str) -> str | None: ...
 
+    def get_batch_usage_summary(
+        self, *, workspace_id: str, batch_id: str
+    ) -> dict[str, Any]: ...
+
+    def get_batch_usage_summaries(
+        self, *, workspace_id: str, batch_ids: list[str]
+    ) -> dict[str, dict[str, Any]]: ...
+
 
 LLM_USAGE_EVENTS_SQLITE_DDL = """
 CREATE TABLE IF NOT EXISTS llm_usage_events (
@@ -206,27 +214,96 @@ def _usage_where(
     return " AND ".join(clauses), params
 
 
-def _aggregate_select(*, sqlite: bool) -> str:
+def _aggregate_select(*, sqlite: bool, prefix: str = "") -> str:
+    col = f"{prefix}." if prefix else ""
     missing_sum = (
-        "COALESCE(SUM(pricing_missing), 0)"
+        f"COALESCE(SUM({col}pricing_missing), 0)"
         if sqlite
-        else "COALESCE(SUM(CASE WHEN pricing_missing THEN 1 ELSE 0 END), 0)"
+        else f"COALESCE(SUM(CASE WHEN {col}pricing_missing THEN 1 ELSE 0 END), 0)"
     )
     return f"""
         COUNT(*) AS request_count,
-        COALESCE(SUM(input_tokens), 0) AS input_tokens,
-        COALESCE(SUM(output_tokens), 0) AS output_tokens,
-        COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
-        COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-        COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
-        COALESCE(SUM(total_tokens), 0) AS total_tokens,
-        COALESCE(SUM(cost_microunits), 0) AS known_cost_microunits,
-        COALESCE(SUM(CASE WHEN cost_microunits IS NULL THEN 1 ELSE 0 END), 0)
+        COALESCE(SUM({col}input_tokens), 0) AS input_tokens,
+        COALESCE(SUM({col}output_tokens), 0) AS output_tokens,
+        COALESCE(SUM({col}reasoning_tokens), 0) AS reasoning_tokens,
+        COALESCE(SUM({col}cache_read_tokens), 0) AS cache_read_tokens,
+        COALESCE(SUM({col}cache_write_tokens), 0) AS cache_write_tokens,
+        COALESCE(SUM({col}total_tokens), 0) AS total_tokens,
+        COALESCE(SUM({col}cost_microunits), 0) AS known_cost_microunits,
+        COALESCE(SUM(CASE WHEN {col}cost_microunits IS NULL THEN 1 ELSE 0 END), 0)
             AS incomplete_cost_event_count,
         {missing_sum} AS pricing_missing_event_count,
-        COALESCE(SUM(CASE WHEN usage_source = 'unknown' THEN 1 ELSE 0 END), 0)
+        COALESCE(SUM(CASE WHEN {col}usage_source = 'unknown' THEN 1 ELSE 0 END), 0)
             AS usage_unknown_event_count
     """
+
+
+def _sql_batch_usage_summary(
+    execute: Any,
+    *,
+    placeholder: str,
+    sqlite: bool,
+    workspace_id: str,
+    batch_id: str,
+) -> dict[str, Any]:
+    """Unbounded SUM over child-job ledger rows. Do not load events into Python."""
+    agg = _aggregate_select(sqlite=sqlite, prefix="u")
+    totals_row = execute(
+        f"""SELECT {agg}
+            FROM llm_usage_events u
+            INNER JOIN audit_batch_items i
+              ON i.audit_job_id = u.job_id
+             AND i.workspace_id = u.workspace_id
+            WHERE i.batch_id = {placeholder}
+              AND i.workspace_id = {placeholder}""",
+        [str(batch_id), str(workspace_id)],
+    ).fetchone()
+    summary = _finalize_aggregate(dict(totals_row) if totals_row is not None else None)
+    summary["currency"] = "USD"
+    summary["batch_id"] = batch_id
+    return summary
+
+
+def _sql_batch_usage_summaries(
+    execute: Any,
+    *,
+    placeholder: str,
+    sqlite: bool,
+    workspace_id: str,
+    batch_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    ids = [str(item).strip() for item in batch_ids if str(item).strip()]
+    if not ids:
+        return {}
+    agg = _aggregate_select(sqlite=sqlite, prefix="u")
+    in_clause = ", ".join(placeholder for _ in ids)
+    rows = execute(
+        f"""SELECT i.batch_id AS batch_id, {agg}
+            FROM llm_usage_events u
+            INNER JOIN audit_batch_items i
+              ON i.audit_job_id = u.job_id
+             AND i.workspace_id = u.workspace_id
+            WHERE i.workspace_id = {placeholder}
+              AND i.batch_id IN ({in_clause})
+            GROUP BY i.batch_id""",
+        [str(workspace_id), *ids],
+    ).fetchall()
+    found: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        data = dict(row)
+        batch_id = str(data.get("batch_id") or "")
+        if not batch_id:
+            continue
+        summary = _finalize_aggregate(data)
+        summary["currency"] = "USD"
+        summary["batch_id"] = batch_id
+        found[batch_id] = summary
+    empty = _finalize_aggregate(None)
+    empty["currency"] = "USD"
+    for batch_id in ids:
+        if batch_id not in found:
+            found[batch_id] = {**empty, "batch_id": batch_id}
+    return found
 
 
 def _finalize_aggregate(
@@ -451,6 +528,28 @@ class SqliteUsageRepository:
             case_id=case_id,
         )
 
+    def get_batch_usage_summary(
+        self, *, workspace_id: str, batch_id: str
+    ) -> dict[str, Any]:
+        return _sql_batch_usage_summary(
+            db.get_conn().execute,
+            placeholder="?",
+            sqlite=True,
+            workspace_id=workspace_id,
+            batch_id=batch_id,
+        )
+
+    def get_batch_usage_summaries(
+        self, *, workspace_id: str, batch_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        return _sql_batch_usage_summaries(
+            db.get_conn().execute,
+            placeholder="?",
+            sqlite=True,
+            workspace_id=workspace_id,
+            batch_ids=batch_ids,
+        )
+
 
 @dataclass(frozen=True)
 class PostgresUsageRepository:
@@ -568,6 +667,30 @@ class PostgresUsageRepository:
                 workspace_id=workspace_id,
                 job_id=job_id,
                 case_id=case_id,
+            )
+
+    def get_batch_usage_summary(
+        self, *, workspace_id: str, batch_id: str
+    ) -> dict[str, Any]:
+        with self._connect() as conn:
+            return _sql_batch_usage_summary(
+                conn.execute,
+                placeholder="%s",
+                sqlite=False,
+                workspace_id=workspace_id,
+                batch_id=batch_id,
+            )
+
+    def get_batch_usage_summaries(
+        self, *, workspace_id: str, batch_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        with self._connect() as conn:
+            return _sql_batch_usage_summaries(
+                conn.execute,
+                placeholder="%s",
+                sqlite=False,
+                workspace_id=workspace_id,
+                batch_ids=batch_ids,
             )
 
 

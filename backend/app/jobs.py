@@ -6,6 +6,7 @@ import json
 import logging
 import time
 import uuid
+from datetime import datetime
 from typing import Any
 
 from . import artifacts, chunk_schema, config, current_user, db, extractors, observability
@@ -24,6 +25,21 @@ JOB_DEPENDENCY_BACKOFF_SECONDS = 5.0
 JOB_TIMEOUT_SECONDS = 15 * 60
 AUDIT_JOB_MAX_ATTEMPTS = 3  # L2: same run_id/checkpoint; business errors skip retry
 AUDIT_JOB_TIMEOUT_GRACE_SECONDS = 60  # wait_for buffer after subprocess kill
+NIGHT_BATCH_PRIORITY = -5
+
+
+class ActiveAuditConflict(Exception):
+    """The assistant already has a queued or running audit for this report."""
+
+    def __init__(self, report_file_ids: list[str], *, job_ids: list[str] | None = None):
+        ids = [str(item).strip() for item in report_file_ids if str(item).strip()]
+        self.report_file_ids = ids
+        self.job_ids = [str(item).strip() for item in (job_ids or []) if str(item).strip()]
+        if len(ids) == 1:
+            message = f"report {ids[0]} already has an active audit job"
+        else:
+            message = "reports already have an active audit job: " + ", ".join(ids)
+        super().__init__(message)
 
 
 def _timeout_for_job(job: dict[str, Any] | None) -> int:
@@ -65,6 +81,26 @@ def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def normalize_job_schedule_time(value: str | None) -> str:
+    """Normalize a schedule timestamp onto the same naive local clock as ``now_iso``.
+
+    Seconds precision only. Timezone-aware values are rejected so Night Batch
+    does not introduce a second time system.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("scheduled_at is required")
+    if raw.endswith("Z") or raw.endswith("z"):
+        raise ValueError("scheduled_at must use the same naive local format as jobs.available_at")
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise ValueError("invalid scheduled_at") from exc
+    if parsed.tzinfo is not None:
+        raise ValueError("scheduled_at must not include a timezone")
+    return parsed.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def workspace_id() -> str:
     return current_user.get_current_user().workspace_id
 
@@ -90,7 +126,9 @@ def _create_job_record(
     max_attempts: int,
     result: dict[str, Any] | None = None,
     created_at: str | None = None,
+    available_at: str | None = None,
 ) -> dict[str, Any]:
+    scheduled = str(available_at or "").strip() or None
     repository = _job_repository()
     if repository is not None:
         return repository.create_job(
@@ -102,14 +140,15 @@ def _create_job_record(
             priority=priority,
             max_attempts=max_attempts,
             result=result,
+            available_at=scheduled,
         )
     timestamp = created_at or now_iso()
     with db.transaction() as conn:
         conn.execute(
             """INSERT INTO jobs
                (id, workspace_id, type, target_type, target_id, status, priority,
-                attempts, max_attempts, error, result, created_at)
-               VALUES (?, ?, ?, ?, ?, 'queued', ?, 0, ?, '', ?, ?)""",
+                attempts, max_attempts, error, result, created_at, available_at)
+               VALUES (?, ?, ?, ?, ?, 'queued', ?, 0, ?, '', ?, ?, ?)""",
             (
                 job_id,
                 workspace,
@@ -120,6 +159,7 @@ def _create_job_record(
                 max_attempts,
                 json.dumps(result or {}, ensure_ascii=False),
                 timestamp,
+                scheduled,
             ),
         )
     return get_job(job_id, workspace_id_value=workspace)
@@ -360,12 +400,66 @@ def _delete_file_chunks(file_id: str) -> int:
     return len(rows)
 
 
+def list_active_assistant_audits(
+    *,
+    workspace: str,
+    assistant_id: str,
+) -> list[dict[str, Any]]:
+    """Queued or running assistant audit jobs for one assistant in a workspace."""
+    repository = _job_repository()
+    if repository is not None:
+        rows: list[dict[str, Any]] = []
+        for status in ("queued", "running"):
+            rows.extend(
+                repository.list_jobs(
+                    workspace_id=workspace,
+                    target_id=assistant_id,
+                    type_="audit",
+                    status=status,
+                    limit=500,
+                )
+            )
+        return [job for job in rows if job.get("target_type") == "assistant"]
+    return [
+        _row_to_job(item)
+        for item in db.get_conn().execute(
+            """SELECT * FROM jobs
+               WHERE workspace_id=? AND type='audit' AND target_type='assistant'
+                 AND target_id=? AND status IN ('queued','running')
+               ORDER BY created_at DESC""",
+            (workspace, assistant_id),
+        ).fetchall()
+    ]
+
+
+def find_active_assistant_audit(
+    *,
+    workspace: str,
+    assistant_id: str,
+    report_file_id: str,
+) -> dict[str, Any] | None:
+    wanted = str(report_file_id or "").strip()
+    if not wanted:
+        return None
+    for existing_job in list_active_assistant_audits(
+        workspace=workspace, assistant_id=assistant_id
+    ):
+        existing_report = str((existing_job.get("result") or {}).get("report_file_id") or "")
+        if existing_report == wanted:
+            return existing_job
+    return None
+
+
 def enqueue_assistant_audit(
     assistant_id: str,
     *,
     report_file_id: str,
     naming_rule_file_id: str | None = None,
     priority: int = 5,
+    available_at: str | None = None,
+    batch_id: str | None = None,
+    batch_item_id: str | None = None,
+    reuse_active: bool = True,
 ) -> dict[str, Any]:
     """Queue an end-to-end assistant audit run.
 
@@ -434,32 +528,20 @@ def enqueue_assistant_audit(
         db.assistant_evidence_file_ids(assistant_id, excluded_file_ids=excluded)
 
     # Reuse only an in-flight job for the same assistant + report (resume after
-    # client disconnect). Different reports must not share one job row.
-    repository = _job_repository()
-    if repository is not None:
-        existing_rows = repository.list_jobs(
-            workspace_id=row["workspace_id"],
-            target_id=assistant_id,
-            type_="audit",
-            limit=100,
-        )
-    else:
-        existing_rows = [
-            _row_to_job(item)
-            for item in db.get_conn().execute(
-                """SELECT * FROM jobs
-                   WHERE workspace_id=? AND type='audit' AND target_type='assistant' AND target_id=?
-                     AND status IN ('queued','running')
-                   ORDER BY created_at DESC""",
-                (row["workspace_id"], assistant_id),
-            ).fetchall()
-        ]
-    for existing_job in existing_rows:
-        if existing_job.get("target_type") != "assistant":
-            continue
-        existing_report = str((existing_job.get("result") or {}).get("report_file_id") or "")
-        if existing_report == report_file_id:
+    # client disconnect). Night Batch must not reuse or silently retarget that
+    # job, because scheduled_at would lose its meaning.
+    existing_job = find_active_assistant_audit(
+        workspace=row["workspace_id"],
+        assistant_id=assistant_id,
+        report_file_id=report_file_id,
+    )
+    if existing_job is not None:
+        if reuse_active:
             return existing_job
+        raise ActiveAuditConflict(
+            [report_file_id],
+            job_ids=[str(existing_job.get("id") or "")],
+        )
 
     # Validate inputs early so the API can fail fast.
     audit_run.resolve_markdown_path(report_file_id)
@@ -474,6 +556,12 @@ def enqueue_assistant_audit(
         "naming_rule_file_id": resolved_naming_id,
         **identity,
     }
+    batch_key = str(batch_id or "").strip()
+    item_key = str(batch_item_id or "").strip()
+    if batch_key:
+        payload["batch_id"] = batch_key
+    if item_key:
+        payload["batch_item_id"] = item_key
     return _create_job_record(
         job_id=jid,
         workspace=row["workspace_id"],
@@ -484,6 +572,7 @@ def enqueue_assistant_audit(
         max_attempts=AUDIT_JOB_MAX_ATTEMPTS,
         result=payload,
         created_at=created,
+        available_at=available_at,
     )
 
 
@@ -713,19 +802,41 @@ def merge_job_result(job_id: str, patch: dict[str, Any]) -> dict[str, Any] | Non
         return None
 
 
+def _refresh_parent_batch_for_job(
+    job_id: str,
+    workspace_id_value: str | None = None,
+) -> None:
+    """Recompute cached batch status from child jobs after a job changes."""
+    jid = str(job_id or "").strip()
+    if not jid:
+        return
+    try:
+        from . import audit_batches
+
+        audit_batches.refresh_batch_for_job(
+            jid, workspace_id=str(workspace_id_value or "").strip() or None
+        )
+    except Exception:
+        logger.exception("failed to refresh audit batch for job %s", jid)
+
+
 def _mark_job_done(job_id: str, result: dict[str, Any] | None = None) -> None:
     repository = _job_repository()
     if repository is not None:
         repository.mark_done(job_id, result)
-        return
-    with db.transaction() as conn:
-        conn.execute(
-            """UPDATE jobs
-               SET status='done', error='', result=?, finished_at=?,
-                   locked_by=NULL, locked_until=NULL
-               WHERE id=?""",
-            (json.dumps(result or {}, ensure_ascii=False), now_iso(), job_id),
-        )
+    else:
+        with db.transaction() as conn:
+            conn.execute(
+                """UPDATE jobs
+                   SET status='done', error='', result=?, finished_at=?,
+                       locked_by=NULL, locked_until=NULL
+                   WHERE id=?""",
+                (json.dumps(result or {}, ensure_ascii=False), now_iso(), job_id),
+            )
+    workspace = None
+    if isinstance(result, dict):
+        workspace = str(result.get("workspace_id") or "").strip() or None
+    _refresh_parent_batch_for_job(job_id, workspace)
 
 
 def list_jobs(
@@ -1129,6 +1240,10 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
     result["attempt"] = result["progress"]["attempt"]
     result["resumed"] = result["progress"]["resumed"]
     result["resumed_case_count"] = result["progress"]["resumed_case_count"]
+    for key in ("batch_id", "batch_item_id"):
+        value = payload.get(key) or current.get(key)
+        if value:
+            result[key] = value
     result.pop("error_class", None)
     result.pop("error_code", None)
     snapshot = _usage_summary_snapshot(str(job.get("id") or ""), str(job.get("workspace_id") or "") or None)
@@ -1455,21 +1570,22 @@ def _fail_job(
             retry_delay_seconds=(retry_delay if retry else 30),
             retryable=retry,
         )
-        return
-    with db.transaction() as conn:
-        conn.execute(
-            """UPDATE jobs SET status=?, error=?, finished_at=?,
-               available_at=?, locked_by=NULL, locked_until=NULL, dead_letter=?
-               WHERE id=?""",
-            (
-                "queued" if retry else "failed",
-                error or "job failed",
-                None if retry else finished,
-                available,
-                0 if retry else 1,
-                job["id"],
-            ),
-        )
+    else:
+        with db.transaction() as conn:
+            conn.execute(
+                """UPDATE jobs SET status=?, error=?, finished_at=?,
+                   available_at=?, locked_by=NULL, locked_until=NULL, dead_letter=?
+                   WHERE id=?""",
+                (
+                    "queued" if retry else "failed",
+                    error or "job failed",
+                    None if retry else finished,
+                    available,
+                    0 if retry else 1,
+                    job["id"],
+                ),
+            )
+    _refresh_parent_batch_for_job(job_id, str(job.get("workspace_id") or "") or None)
 
 
 def _row_to_job(row) -> dict[str, Any]:
@@ -1478,4 +1594,10 @@ def _row_to_job(row) -> dict[str, Any]:
         d["result"] = json.loads(d.get("result") or "{}")
     except Exception:
         d["result"] = {}
+    result = d.get("result") or {}
+    if isinstance(result, dict):
+        if result.get("batch_id"):
+            d["batch_id"] = result["batch_id"]
+        if result.get("batch_item_id"):
+            d["batch_item_id"] = result["batch_item_id"]
     return d

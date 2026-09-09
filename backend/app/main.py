@@ -33,6 +33,7 @@ from .routers import (
     assistants,
     analytics,
     audit,
+    audit_batches,
     auto_chunks,
     chunks,
     embeddings,
@@ -179,9 +180,9 @@ def metrics() -> str:
 # API routers (mounted under /api for clarity)
 api_prefix = "/api"
 for r in (files.router, chunks.router, auto_chunks.router, fields.router, settings.router,
-          knowledge_bases.router, assistants.router, audit.router, analytics.router,
-          jobs.router, extract.router, ocr.router, export.router, search.router,
-          embeddings.router, workspaces.router):
+          knowledge_bases.router, assistants.router, audit.router, audit_batches.router,
+          analytics.router, jobs.router, extract.router, ocr.router, export.router,
+          search.router, embeddings.router, workspaces.router):
     app.include_router(r, prefix=api_prefix)
 
 app.include_router(internal.router)

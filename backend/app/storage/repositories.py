@@ -633,6 +633,12 @@ class PostgresJobRepository:
     def _job(row: Any) -> dict[str, Any]:
         item = dict(row)
         item["result"] = _decode(item.get("result"))
+        result = item.get("result") or {}
+        if isinstance(result, dict):
+            if result.get("batch_id"):
+                item["batch_id"] = result["batch_id"]
+            if result.get("batch_item_id"):
+                item["batch_item_id"] = result["batch_item_id"]
         return item
 
     def create_job(
@@ -646,13 +652,15 @@ class PostgresJobRepository:
         priority: int = 0,
         max_attempts: int = 2,
         result: dict[str, Any] | None = None,
+        available_at: str | None = None,
     ) -> dict[str, Any]:
+        scheduled = str(available_at or "").strip() or None
         with self._connect() as conn:
             row = conn.execute(
                 """INSERT INTO jobs
                    (id, workspace_id, type, target_type, target_id, status,
-                    priority, attempts, max_attempts, error, result)
-                   VALUES (%s, %s, %s, %s, %s, 'queued', %s, 0, %s, '', %s::jsonb)
+                    priority, attempts, max_attempts, error, result, available_at)
+                   VALUES (%s, %s, %s, %s, %s, 'queued', %s, 0, %s, '', %s::jsonb, %s)
                    RETURNING *""",
                 (
                     job_id,
@@ -663,6 +671,7 @@ class PostgresJobRepository:
                     int(priority),
                     max(1, int(max_attempts)),
                     json.dumps(result or {}, ensure_ascii=False),
+                    scheduled,
                 ),
             ).fetchone()
         return self._job(row)
@@ -2623,6 +2632,36 @@ def postgres_schema_sql() -> list[str]:
         "CREATE INDEX IF NOT EXISTS ix_llm_usage_events_job ON llm_usage_events(workspace_id, job_id, created_at)",
         "CREATE INDEX IF NOT EXISTS ix_llm_usage_events_case ON llm_usage_events(workspace_id, job_id, case_id)",
         "CREATE INDEX IF NOT EXISTS ix_llm_usage_events_attempt ON llm_usage_events(job_id, job_attempt)",
+        """CREATE TABLE IF NOT EXISTS audit_batches (
+             id TEXT PRIMARY KEY,
+             workspace_id TEXT NOT NULL,
+             assistant_id TEXT NOT NULL,
+             naming_rule_file_id TEXT,
+             mode TEXT NOT NULL DEFAULT 'night',
+             status TEXT NOT NULL DEFAULT 'scheduled',
+             scheduled_at TIMESTAMPTZ NOT NULL,
+             max_concurrency INTEGER NOT NULL DEFAULT 1,
+             created_by TEXT NOT NULL DEFAULT '',
+             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             started_at TIMESTAMPTZ,
+             finished_at TIMESTAMPTZ
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_audit_batches_workspace ON audit_batches(workspace_id, created_at DESC)",
+        """CREATE TABLE IF NOT EXISTS audit_batch_items (
+             id TEXT PRIMARY KEY,
+             workspace_id TEXT NOT NULL,
+             batch_id TEXT NOT NULL,
+             ordinal INTEGER NOT NULL,
+             report_file_id TEXT NOT NULL,
+             audit_job_id TEXT NOT NULL,
+             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             UNIQUE (batch_id, report_file_id),
+             UNIQUE (audit_job_id)
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_audit_batch_items_batch ON audit_batch_items(batch_id, ordinal)",
+        "CREATE INDEX IF NOT EXISTS ix_audit_batch_items_workspace ON audit_batch_items(workspace_id, batch_id)",
         """CREATE TABLE IF NOT EXISTS settings (
              key TEXT PRIMARY KEY,
              value TEXT NOT NULL
