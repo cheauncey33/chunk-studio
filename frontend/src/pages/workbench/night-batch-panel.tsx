@@ -30,7 +30,7 @@ function ProgressBar({ percent }: { percent: number }) {
         <span>批次进度</span>
         <span className="tabular-nums">{Math.round(width)}%</span>
       </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-[#e5e7eb]">
+      <div className="h-1.5 overflow-hidden rounded-full bg-border-button">
         <div
           className="h-full rounded-full bg-accent-primary transition-[width] duration-500"
           style={{ width: `${width}%` }}
@@ -76,7 +76,7 @@ function BatchListRow({
         <Badge variant={batchStatusVariant(batch.status)}>
           {BATCH_STATUS_LABELS[batch.status] || batch.status}
         </Badge>
-        <span className="min-w-0 flex-1 truncate text-[15px] font-medium text-[#111827]">
+        <span className="min-w-0 flex-1 truncate text-[15px] font-medium text-text-primary">
           {batch.total} 份报告
         </span>
         <span className="shrink-0 text-[13px] tabular-nums text-text-secondary">
@@ -84,7 +84,7 @@ function BatchListRow({
           {batch.failed ? ` · 失败 ${batch.failed}` : ''}
         </span>
       </div>
-      <div className="mt-1.5 text-[13px] tabular-nums text-[#374151]">
+      <div className="mt-1.5 text-[13px] tabular-nums text-text-secondary">
         预约 {formatAuditTime(batch.scheduled_at)}
       </div>
       <div className="mt-1">
@@ -135,11 +135,11 @@ function BatchDetailView({
       </div>
 
       <div className="rounded-xl border border-border-button px-3.5 py-3">
-        <p className="text-[15px] font-medium text-[#111827]">
+        <p className="text-[15px] font-medium text-text-primary">
           {detail.total} 份报告
           {assistantName ? ` · ${assistantName}` : ''}
         </p>
-        <p className="mt-1 text-[13px] tabular-nums text-[#374151]">
+        <p className="mt-1 text-[13px] tabular-nums text-text-secondary">
           预约 {formatAuditTime(detail.scheduled_at)}
         </p>
         <div className="mt-3">
@@ -185,9 +185,9 @@ function BatchDetailView({
             {failedItems.map(item => (
               <li
                 key={item.id}
-                className="flex items-center gap-2 rounded-lg border border-state-error/20 bg-[#fff1f0] px-3 py-2"
+                className="flex items-center gap-2 rounded-lg border border-state-error/20 bg-state-error/10 px-3 py-2"
               >
-                <span className="min-w-0 flex-1 truncate text-[14px] text-[#111827]">
+                <span className="min-w-0 flex-1 truncate text-[14px] text-text-primary">
                   {reportLabel(item.report_file_id, fileNameById)}
                 </span>
                 <Badge variant="error">失败</Badge>
@@ -206,7 +206,7 @@ function BatchDetailView({
                 key={item.id}
                 className="flex items-center gap-2 rounded-lg border border-border-button px-3 py-2"
               >
-                <span className="min-w-0 flex-1 truncate text-[14px] text-[#111827]">
+                <span className="min-w-0 flex-1 truncate text-[14px] text-text-primary">
                   {reportLabel(item.report_file_id, fileNameById)}
                 </span>
                 <Badge variant={itemStatusVariant(item.status)}>

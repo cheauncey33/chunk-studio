@@ -29,7 +29,7 @@ import {
   defaultTonightDatetimeLocal,
   friendlyBatchError,
   isAwareIsoInPast,
-  localTimezoneLabel,
+  localTimezoneLabelForDatetimeLocal,
 } from '@/lib/night-batch'
 import { cn } from '@/lib/utils'
 import { NightBatchPanel } from './night-batch-panel'
@@ -704,7 +704,7 @@ export default function WorkbenchPage() {
                   <div>
                     <Explain text={helpText.workbench.nightStart} title="开始时间">
                       <label className="text-[13px] text-text-secondary" htmlFor="night-batch-start">
-                        开始时间（{localTimezoneLabel()}）
+                        开始时间（{localTimezoneLabelForDatetimeLocal(scheduledAtLocal)}）
                       </label>
                     </Explain>
                   </div>
@@ -716,7 +716,7 @@ export default function WorkbenchPage() {
                     onChange={e => setScheduledAtLocal(e.target.value)}
                   />
                   <p className="text-[12px] leading-relaxed text-text-secondary">
-                    按你电脑时区发送，例如 23:00 会带上 {localTimezoneLabel()}，不依赖服务器时区。
+                    按所选日期在你电脑时区发送，例如 23:00 会带上 {localTimezoneLabelForDatetimeLocal(scheduledAtLocal)}，不依赖服务器时区。
                   </p>
                   <Button
                     type="button"

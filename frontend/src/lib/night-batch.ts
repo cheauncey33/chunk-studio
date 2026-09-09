@@ -48,16 +48,55 @@ function pad2(n: number): string {
   return String(n).padStart(2, '0')
 }
 
-/** Browser offset as ISO-8601, e.g. `+08:00` or `-05:30`. */
-export function localTimezoneOffset(now = new Date()): string {
-  const offsetMin = -now.getTimezoneOffset()
-  const sign = offsetMin >= 0 ? '+' : '-'
-  const abs = Math.abs(offsetMin)
+/**
+ * Format a JS timezone offset (minutes east of UTC) as `+08:00` / `-05:30`.
+ * Pass `-date.getTimezoneOffset()` so DST follows the given instant.
+ */
+export function formatUtcOffset(offsetMinutes: number): string {
+  const sign = offsetMinutes >= 0 ? '+' : '-'
+  const abs = Math.abs(offsetMinutes)
   return `${sign}${pad2(Math.floor(abs / 60))}:${pad2(abs % 60)}`
 }
 
-export function localTimezoneLabel(now = new Date()): string {
-  return `UTC${localTimezoneOffset(now)}`
+/** Browser offset for a specific instant, e.g. `+08:00` or `-05:30`. */
+export function localTimezoneOffset(instant = new Date()): string {
+  return formatUtcOffset(-instant.getTimezoneOffset())
+}
+
+export function localTimezoneLabel(instant = new Date()): string {
+  return `UTC${localTimezoneOffset(instant)}`
+}
+
+/** Normalize datetime-local wall clock to `YYYY-MM-DDTHH:MM:SS`. */
+export function normalizeDatetimeLocal(localDateTime: string): string {
+  const trimmed = localDateTime.trim()
+  if (!trimmed) throw new Error('请选择开始时间')
+  const withSeconds = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmed)
+    ? `${trimmed}:00`
+    : trimmed
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(withSeconds)) {
+    throw new Error('开始时间格式无效')
+  }
+  return withSeconds
+}
+
+/**
+ * Offset of the selected wall-clock instant, not "now".
+ * DST zones must use the chosen date, or winter vs summer would be wrong.
+ */
+export function timezoneOffsetForDatetimeLocal(localDateTime: string): string {
+  const wall = normalizeDatetimeLocal(localDateTime)
+  const instant = new Date(wall)
+  if (Number.isNaN(instant.getTime())) throw new Error('开始时间格式无效')
+  return localTimezoneOffset(instant)
+}
+
+export function localTimezoneLabelForDatetimeLocal(localDateTime: string): string {
+  try {
+    return `UTC${timezoneOffsetForDatetimeLocal(localDateTime)}`
+  } catch {
+    return localTimezoneLabel()
+  }
 }
 
 export function toDatetimeLocalValue(date: Date): string {
@@ -74,18 +113,11 @@ export function defaultTonightDatetimeLocal(now = new Date()): string {
 
 /**
  * Convert `<input type="datetime-local">` to a timezone-aware ISO instant.
- * Never emit a naive timestamp.
+ * Never emit a naive timestamp. Offset follows the selected date (DST-safe).
  */
-export function datetimeLocalToAwareIso(localDateTime: string, now = new Date()): string {
-  const trimmed = localDateTime.trim()
-  if (!trimmed) throw new Error('请选择开始时间')
-  const withSeconds = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmed)
-    ? `${trimmed}:00`
-    : trimmed
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(withSeconds)) {
-    throw new Error('开始时间格式无效')
-  }
-  return `${withSeconds}${localTimezoneOffset(now)}`
+export function datetimeLocalToAwareIso(localDateTime: string): string {
+  const wall = normalizeDatetimeLocal(localDateTime)
+  return `${wall}${timezoneOffsetForDatetimeLocal(wall)}`
 }
 
 export function isAwareIsoInPast(awareIso: string, now = new Date()): boolean {
