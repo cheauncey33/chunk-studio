@@ -46,6 +46,8 @@ description: 检测报告标准值审查（standard-value audit）。给定被�
 - **standard_not_found 准入门槛**：判它之前必须 ①用至少 2 种不同表述检索（按标准号/项目名/参数名），②对最相关命中执行 `read_chunk` 读完整原文——search 只返回截断预览，预览里没有不等于条款不存在；reasoning 须列出已尝试的检索式与已读片段。
 - **kind 优先级**：同一问题同时符合多个 mismatch kind 时，选最能刻画错误机制的——`comparator_flip` / `wrong_level` / `wrong_condition` / `wrong_label` / `magnitude_error` / `bandwidth_exceeded` 优先于 `numeric_looser` / `numeric_tighter`（后者仅在问题只是单纯数值宽严时使用）。
 - **禁止**用行业常识、工程经验填补标准值。证据不足时如实判 `unevaluable`（检索不到标准用 `standard_not_found`，缺适用性参数用 `applicability_undetermined`）。
+- 允许通过标准证据补充标准侧的限值、公式、适用规则和允许偏差；不得凭行业常识、型号经验或猜测，补充报告中未提供的产品事实、试验事实或样品事实。
+- 报告未给出样品/试验事实时判 `unevaluable` + `applicability_undetermined`。标准侧适用规则应 `read_chunk` 后继续判定，不得仅因“还要读标准规则”而 `unevaluable`。
 - **证据必须可定位**：每个判定都要给出标准号、表号/条款、页码或检索命中片段，能落到具体文本。
 - 判定不一致时，报告里写"≤0.370"而标准规定"≤0.410"，应判 `mismatch` + `numeric_looser` 并指出标准限值（0.410）。单位不一致也要换算后比对。
 

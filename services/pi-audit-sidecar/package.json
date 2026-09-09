@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node --env-file=.env --import tsx src/server.ts",
     "start:plain": "node --import tsx src/server.ts",
-    "test": "node --import tsx --test src/preview.test.ts"
+    "test": "node --import tsx --test src/preview.test.ts src/progress.test.ts src/closure.test.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",

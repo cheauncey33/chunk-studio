@@ -9,7 +9,7 @@
  *   - read_report     — read a parsed inspection report's sections
  *
  * Base URL comes from CHUNK_STUDIO_API_BASE (default http://127.0.0.1:8000).
- * Tools are built per case via createAuditTools(fileScope).
+ * Tools are built per case via createAuditTools(fileScope, progress).
  * Search returns type-aware locators (table schema / query snippets), never
  * matched cell values. First-round workflow hits stay in the prompt; the agent
  * may still search if those hits are not enough.
@@ -18,6 +18,7 @@ import { Type } from "typebox";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 
 import { formatSearchHits, toLocatorHit } from "./preview.ts";
+import type { EvidenceProgress } from "./progress.ts";
 
 function apiBase(): string {
 	return (process.env.CHUNK_STUDIO_API_BASE ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
@@ -55,7 +56,10 @@ function readableHits(
  * tool instances so per-case state (default file_ids) stays isolated under
  * concurrency.
  */
-export function createAuditTools(fileScope: string[] | undefined | null) {
+export function createAuditTools(
+	fileScope: string[] | undefined | null,
+	progress?: EvidenceProgress,
+) {
 	const scope = normalizeScope(fileScope);
 	const maxCalls = Math.max(1, Number(process.env.PI_MAX_TOOL_CALLS ?? "12"));
 	let remaining = maxCalls;
@@ -103,6 +107,12 @@ export function createAuditTools(fileScope: string[] | undefined | null) {
 			),
 		}),
 		async execute(_id, params, signal, _onUpdate, _ctx) {
+			if (progress?.isSearchBlocked()) {
+				return {
+					content: [{ type: "text" as const, text: progress.searchBlockedMessage() }],
+					details: { search_blocked: true, ...progress.snapshot() },
+				};
+			}
 			const blocked = takeBudget();
 			if (blocked) return blocked;
 			// 组装 applicability 形状的 row_filter（后端 bind_table_row 契约）。
@@ -134,10 +144,23 @@ export function createAuditTools(fileScope: string[] | undefined | null) {
 				},
 			);
 			const hits = (payload as any)?.hits ?? [];
+			const locators = hits.map(toLocatorHit);
+			const note = progress
+				? progress.formatSearchNote(
+						progress.recordSearch(
+							params.query,
+							locators.map((hit) => hit.chunk_id),
+						),
+					)
+				: "";
 			const text =
 				`检索式: ${params.query}\n命中 ${hits.length} 条（定位预览，不含表格数值）：\n` +
-				readableHits(payload, { query: params.query, rowFilter: params.row_filter });
-			return { content: [{ type: "text", text }], details: { hits: hits.map(toLocatorHit) } };
+				readableHits(payload, { query: params.query, rowFilter: params.row_filter }) +
+				(note ? `\n\n${note}` : "");
+			return {
+				content: [{ type: "text", text }],
+				details: { hits: locators, ...(progress ? progress.snapshot() : {}) },
+			};
 		},
 	});
 
@@ -161,6 +184,7 @@ export function createAuditTools(fileScope: string[] | undefined | null) {
 			const blocked = takeBudget();
 			if (blocked) return blocked;
 			const payload = await apiFetch(`/api/chunks/${encodeURIComponent(params.chunk_id)}`, signal);
+			progress?.recordRead(params.chunk_id);
 			const chunk = payload as any;
 			const meta = JSON.stringify(chunk.business_metadata ?? chunk.metadata ?? {});
 			const text =

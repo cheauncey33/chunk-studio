@@ -680,9 +680,11 @@
         "unit": "%"
       },
       "edit_kind": "unit_equivalence",
+      "corpus_answerable": false,
+      "corpus_gold": "unevaluable",
       "judgment": {
         "status": "supported",
-        "reason": "1% 与 0.010 等价；应仍支持"
+        "reason": "1% 与 0.010 等价；应仍支持。当前知识库未收录 GB/T 7595 / GB 2536 等油质限值标准，corpus_gold=unevaluable。"
       }
     },
     {

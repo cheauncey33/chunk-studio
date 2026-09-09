@@ -15,9 +15,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { createAuditTools } from "./tools.ts";
+import { createEvidenceProgress, normalizeChunkId } from "./progress.ts";
 import { systemPrompt } from "./prompt.ts";
 import { parseVerdictDetailed } from "./parse.ts";
 import { formatFirstRoundCards } from "./preview.ts";
+import { applyEvidenceClosure } from "./closure.ts";
 
 // 工具调用硬预算：每个 case 一个全新 loader（extensionFactories 闭包随之独立），
 // 预算计数是 case 内局部变量，天然无跨 session 泄漏；并发 case 互不干扰。
@@ -49,6 +51,14 @@ export type AgentCaseOutcome = {
 		turns: number;
 		gate_reprompt: boolean;
 		duration_ms: number;
+		zero_new_searches: number;
+		search_blocked: boolean;
+		first_round_hit_used: boolean | null;
+		read_before_search: boolean | null;
+		raw_verdict: unknown;
+		raw_kind: unknown;
+		closure: "passed" | "failed" | "skipped";
+		closure_mode: string | null;
 	};
 	trace_file: string | null;
 	final_text_preview: string;
@@ -138,6 +148,32 @@ async function getModel(): Promise<{ runtime: any; model: any; modelId: string }
 }
 
 // ---- per-case session execution --------------------------------------------
+
+function toolResultText(result: unknown): string {
+	if (!result || typeof result !== "object") return "";
+	const content = (result as { content?: unknown }).content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((block) => {
+			if (typeof block === "string") return block;
+			if (block && typeof block === "object" && "text" in block) {
+				return String((block as { text?: unknown }).text || "");
+			}
+			return "";
+		})
+		.join("\n");
+}
+
+function evidenceChunkIds(result: Record<string, unknown> | null): string[] {
+	const evidence = result && Array.isArray(result.evidence) ? result.evidence : [];
+	const ids: string[] = [];
+	for (const item of evidence) {
+		if (!item || typeof item !== "object") continue;
+		const id = normalizeChunkId((item as Record<string, unknown>).chunk_id);
+		if (id && !id.includes("placeholder")) ids.push(id);
+	}
+	return ids;
+}
 
 function firstRoundQuery(c: AgentCaseInput): string {
 	const explicit = String(c.production_query || "").trim();
@@ -283,7 +319,11 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 		toolCallBudget = Math.floor(input.tool_budget);
 	}
 	const hasFirstRound = Array.isArray(input.retrieved_candidates) && input.retrieved_candidates.length > 0;
-	const tools = createAuditTools(input.file_scope);
+	const firstRoundIds = (input.retrieved_candidates ?? [])
+		.map((item) => normalizeChunkId(item.chunk_id ?? item.id))
+		.filter(Boolean);
+	const progress = createEvidenceProgress(firstRoundIds);
+	const tools = createAuditTools(input.file_scope, progress);
 
 	const trace: any[] = [];
 	let finalText = "";
@@ -292,6 +332,9 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 	let searchCalls = 0;
 	let turns = 0;
 	let gateReprompt = false;
+	let firstToolName: string | null = null;
+	const readBodies = new Map<string, string>();
+	const pendingReads = new Map<string, string>();
 
 	const loader = new DefaultResourceLoader({
 		cwd: process.cwd(),
@@ -331,8 +374,22 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 		// host 端门禁计数：standard_not_found 必须建立在 read_chunk 证据上。
 		if (event.type === "tool_execution_start") {
 			toolCalls += 1;
-			if (event.toolName === "read_chunk") readCount += 1;
+			if (!firstToolName && typeof event.toolName === "string") firstToolName = event.toolName;
+			if (event.toolName === "read_chunk") {
+				readCount += 1;
+				const chunkId = normalizeChunkId(event.args?.chunk_id ?? event.input?.chunk_id);
+				const callId = String(event.toolCallId || event.callId || `read-${readCount}`);
+				if (chunkId) pendingReads.set(callId, chunkId);
+			}
 			if (event.toolName === "search_standards") searchCalls += 1;
+		}
+		if (event.type === "tool_execution_end" && event.toolName === "read_chunk") {
+			const callId = String(event.toolCallId || event.callId || "");
+			const chunkId = pendingReads.get(callId) || [...pendingReads.values()].at(-1) || "";
+			if (callId) pendingReads.delete(callId);
+			else pendingReads.clear();
+			const text = toolResultText(event.result);
+			if (chunkId && text) readBodies.set(chunkId, text);
 		}
 		if (event.type === "turn_start") turns += 1;
 		if (TRACE_TYPES.has(event.type)) {
@@ -395,6 +452,9 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 	}
 	session.dispose();
 
+	const closed = applyEvidenceClosure(parsed.value, readBodies);
+	parsed = { ...parsed, value: closed.result };
+
 	// Persist per-case trace JSONL (auto-pruned by server housekeeping).
 	let traceFile: string | null = null;
 	const traceDir = process.env.TRACE_DIR || join(process.cwd(), "traces");
@@ -407,6 +467,12 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 		traceFile = null;
 	}
 
+	const usedIds = evidenceChunkIds(parsed.value);
+	const firstRoundHitUsed =
+		firstRoundIds.length === 0 || usedIds.length === 0
+			? null
+			: usedIds.some((id) => firstRoundIds.includes(id));
+	const snap = progress.snapshot();
 	let outcome: AgentCaseOutcome = {
 		result: null,
 		parse_mode: parsed.mode,
@@ -417,6 +483,14 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 			turns: turns,
 			gate_reprompt: gateReprompt,
 			duration_ms: Date.now() - started,
+			zero_new_searches: snap.zero_new_searches,
+			search_blocked: snap.search_blocked,
+			first_round_hit_used: firstRoundHitUsed,
+			read_before_search: firstToolName == null ? null : firstToolName === "read_chunk",
+			raw_verdict: closed.raw_verdict,
+			raw_kind: closed.raw_kind,
+			closure: !closed.closure.applied ? "skipped" : closed.closure.passed ? "passed" : "failed",
+			closure_mode: closed.closure.mode,
 		},
 		trace_file: traceFile,
 		final_text_preview: finalText.slice(0, 4000),

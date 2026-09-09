@@ -20,7 +20,7 @@ export function systemPrompt(options?: { hasFirstRound?: boolean }): string {
 	const toolLines = hasFirstRound
 		? [
 				`工具可用：search_standards / read_chunk / read_report。`,
-				`先 read_chunk 第一轮候选。读完能取限值就判定；不够再 search_standards（有限次），对后继命中继续 read。search 只返回定位预览，不含表格数值。`,
+				`先 read_chunk 第一轮候选。读完能取限值就判定；不够再 search_standards，对后继命中继续 read。search 只返回定位预览，不含表格数值。若检索反馈“没有获得新证据”，不要再用相似 query；连续无新证据后应收尾或判 unevaluable。`,
 			]
 		: [
 				`工具可用：search_standards / read_chunk / read_report。`,
@@ -32,6 +32,8 @@ export function systemPrompt(options?: { hasFirstRound?: boolean }): string {
 		``,
 		`约束（必须遵守）：`,
 		`1. 不用行业常识填补标准值，证据不足判 unevaluable（检索不到标准用 kind=standard_not_found，缺适用性参数用 kind=applicability_undetermined）。`,
+		`   允许通过标准证据补充标准侧的限值、公式、适用规则和允许偏差；不得凭行业常识、型号经验或猜测，补充报告中未提供的产品事实、试验事实或样品事实。`,
+		`   报告未给出样品/试验事实时判 unevaluable + applicability_undetermined。标准侧适用规则应 read_chunk 后继续判定，不得仅因“还要读标准规则”而 unevaluable。`,
 		`2. 每个判定都给出可定位的标准证据（标准号、表号/条款、片段）。`,
 		`3. 最终一条消息只输出一个紧凑 JSON，不要 Markdown 代码块包裹。`,
 		`   JSON 字段：case_id, verdict, kind, standard_no, standard_value, reported_value, evidence[], reasoning。`,
