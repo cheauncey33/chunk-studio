@@ -59,6 +59,8 @@ npm start                     # 监听 http://127.0.0.1:8787
 - `parse_mode`：strict（完整 JSON）/ loose（散列字段正则）/ prose（中文散文兜底）。
 - 失败返回 `{"ok": false, "error": "...", "retryable": true}`（HTTP 502）；
   调用方（workflow 脚本）按指数退避重试。
+- Host 只核 `match`/`mismatch` 的 `chunk_id` 是否真的 `read_chunk` 过，并用 `readBodies`
+  回填 `evidence.text`。引用协议失败记 `protocol_error`，不改写业务判定。
 
 ## 判定口径（v7）
 

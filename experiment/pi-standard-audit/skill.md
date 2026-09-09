@@ -48,7 +48,9 @@ description: 检测报告标准值审查（standard-value audit）。给定被�
 - **禁止**用行业常识、工程经验填补标准值。证据不足时如实判 `unevaluable`（检索不到标准用 `standard_not_found`，缺适用性参数用 `applicability_undetermined`）。
 - 允许通过标准证据补充标准侧的限值、公式、适用规则和允许偏差；不得凭行业常识、型号经验或猜测，补充报告中未提供的产品事实、试验事实或样品事实。
 - 报告未给出样品/试验事实时判 `unevaluable` + `applicability_undetermined`。标准侧适用规则应 `read_chunk` 后继续判定，不得仅因“还要读标准规则”而 `unevaluable`。
-- **证据必须可定位**：每个判定都要给出标准号、表号/条款、页码或检索命中片段，能落到具体文本。
+- 标准条款可以写“满足条件 X 时采用要求 Y”，但 X 必须来自报告输入。例如残余压力不低于施压的 70% 只适用于条款写明的油箱结构；报告未给出油箱型式时不得默认某一分支后判 `match`。
+- `standard_value` 只填写最终判定实际使用的标准要求，不要把无关型号参数、上下文数字或解释性数字混入该字段。
+- **证据必须可定位**：`match`/`mismatch` 前必须对证据 chunk 执行 `read_chunk`。每个判定给出标准号、表号/条款、已读 `chunk_id`；不要写 `evidence.text`（正文由 Host 从已读片段回填）。
 - 判定不一致时，报告里写"≤0.370"而标准规定"≤0.410"，应判 `mismatch` + `numeric_looser` 并指出标准限值（0.410）。单位不一致也要换算后比对。
 
 ### 统一判定口径（防止同类声称值出现相反结论）
@@ -73,10 +75,10 @@ description: 检测报告标准值审查（standard-value audit）。给定被�
   "standard_value": "标准要求的限值原文，如 0.410 kW（找不到则 null）",
   "reported_value": "报告声称值原文",
   "evidence": [
-    {"source": "标准号/表号/条款", "location": "表 6 额定容量 400 kVA 行", "text": "关键原文摘录", "chunk_id": "检索命中片段id"}
+    {"chunk_id": "检索命中片段id", "source": "标准号", "location": "表 6 额定容量 400 kVA 行"}
   ],
   "reasoning": "一两句推理过程"
 }
 ```
 
-`evidence` 至少包含一项可定位的文本来源；判 `match`/`mismatch` 时证据必须来自工具返回的真实标准文本。
+`evidence` 至少包含一项已 `read_chunk` 的 `chunk_id`；不要写 `evidence.text`。判 `match`/`mismatch` 时证据必须来自本会话实际读过的标准片段。

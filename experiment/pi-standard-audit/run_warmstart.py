@@ -238,6 +238,8 @@ def run_case(
         "raw_verdict": stats.get("raw_verdict"),
         "closure": stats.get("closure"),
         "closure_mode": stats.get("closure_mode"),
+        "closure_reason": stats.get("closure_reason"),
+        "protocol_error": bool(stats.get("protocol_error")),
         "first_round_hit_used": first_round_hit_used,
         "first_round_evidence_rank": min(used_ranks) if used_ranks else None,
         "read_before_search": stats.get("read_before_search"),
@@ -329,9 +331,15 @@ def main() -> None:
             rows.append(row)
             flag = "warm" if row["first_round_only"] else f"search={row['search_calls']}"
             grounded = "corpus+" if row.get("corpus_match") else "corpus-"
+            raw = row.get("raw_verdict")
+            final = row.get("verdict")
+            flipped = f" raw={raw}→{final}" if raw and raw != final else f" raw={raw}"
+            closure = row.get("closure") or "skipped"
+            reason = row.get("closure_reason") or ""
+            closure_bit = f" {closure}" + (f"/{reason}" if reason else "")
             print(
                 f"  [{rank}/{len(labeled)}] {row['case_id']} gold={row['gold']} "
-                f"verdict={row['verdict']} {row['duration_ms']}ms "
+                f"verdict={final}{flipped}{closure_bit} {row['duration_ms']}ms "
                 f"read={row['read_chunks']} {flag} {grounded}"
             )
     rows.sort(key=lambda item: (str(item.get("source") or ""), str(item["case_id"])))
@@ -349,6 +357,27 @@ def main() -> None:
     out_path = Path(args.out)
     out_path.write_text(json.dumps(report_out, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"summary": report_out["summary"], "by_source": report_out["by_source"]}, ensure_ascii=False, indent=2))
+    watch = ("e05_tand_unit_equiv", "hbjc-4-r2", "hbjc-13-r4")
+    print("watch:")
+    by_id = {str(row["case_id"]): row for row in rows}
+    for case_id in watch:
+        row = by_id.get(case_id)
+        if not row:
+            print(f"  {case_id}: missing")
+            continue
+        print(
+            f"  {case_id}: raw={row.get('raw_verdict')} final={row.get('verdict')} "
+            f"closure={row.get('closure')} reason={row.get('closure_reason')} "
+            f"mode={row.get('closure_mode')} corpus={'+' if row.get('corpus_match') else '-'}"
+        )
+    failed = [row for row in rows if row.get("closure") == "failed" or row.get("protocol_error")]
+    if failed:
+        print("protocol/citation failed (verdict unchanged):")
+        for row in failed:
+            print(
+                f"  {row['case_id']}: raw={row.get('raw_verdict')} final={row.get('verdict')} "
+                f"reason={row.get('closure_reason')} protocol_error={row.get('protocol_error')}"
+            )
     print(f"wrote {out_path}")
 
 

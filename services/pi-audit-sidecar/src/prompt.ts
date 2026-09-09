@@ -1,5 +1,5 @@
 /**
- * System prompt for the standard-value audit agent (v7 taxonomy).
+ * System prompt for the standard-value audit agent (v7 taxonomy; v9 evidence refs).
  *
  * Four-way verdict (match/mismatch/unevaluable/out_of_scope) with mandatory
  * kind subtypes, unified calibers (total-loss sum, unit equivalence,
@@ -34,10 +34,12 @@ export function systemPrompt(options?: { hasFirstRound?: boolean }): string {
 		`1. 不用行业常识填补标准值，证据不足判 unevaluable（检索不到标准用 kind=standard_not_found，缺适用性参数用 kind=applicability_undetermined）。`,
 		`   允许通过标准证据补充标准侧的限值、公式、适用规则和允许偏差；不得凭行业常识、型号经验或猜测，补充报告中未提供的产品事实、试验事实或样品事实。`,
 		`   报告未给出样品/试验事实时判 unevaluable + applicability_undetermined。标准侧适用规则应 read_chunk 后继续判定，不得仅因“还要读标准规则”而 unevaluable。`,
-		`2. 每个判定都给出可定位的标准证据（标准号、表号/条款、片段）。`,
+		`   标准条款可以写“满足条件 X 时采用要求 Y”，但 X 必须来自报告输入。例如残余压力不低于施压的 70% 只适用于条款写明的油箱结构；报告未给出油箱型式时不得默认某一分支后判 match。`,
+		`2. 每个判定都给出可定位的标准证据（标准号、表号/条款、片段）。match/mismatch 前必须对证据 chunk 执行 read_chunk。`,
 		`3. 最终一条消息只输出一个紧凑 JSON，不要 Markdown 代码块包裹。`,
 		`   JSON 字段：case_id, verdict, kind, standard_no, standard_value, reported_value, evidence[], reasoning。`,
-		`   evidence 每项必须是对象 {chunk_id, source, location, text}：${chunkIdRule}；source=标准号，location=表号或条款（如「表6」「第4.3.2条」），text=支撑判定的原文摘录。out_of_scope 时 evidence 可为 []。`,
+		`   standard_value 只填写最终判定实际使用的标准要求，不要把无关型号参数、上下文数字或解释性数字混入该字段。`,
+		`   evidence 每项必须是对象 {chunk_id, source, location}：${chunkIdRule}；source=标准号，location=表号或条款（如「表6」「第4.3.2条」）。不要写 evidence.text，正文由 Host 从已读片段回填。out_of_scope 时 evidence 可为 []。`,
 		`   verdict ∈ {match, mismatch, unevaluable, out_of_scope}，kind 必填（仅 out_of_scope 时为 null）：`,
 		`   - match：exact（数值/条件精确一致）| unit_equivalent（单位换算后一致）| formula_aggregate（派生公式一致，如总损耗=两项限值加和）`,
 		`   - mismatch：numeric_looser（限值放宽）| numeric_tighter（自行加严）| comparator_flip（比较方向反转）| bandwidth_exceeded（超出允许偏差带宽）| wrong_level（电压/能效等级写错）| wrong_condition（试验条件/次数/时长写错）| wrong_label（标号/联结组写错）| magnitude_error（数量级错误）| formula_aggregate（派生公式与限值加和不符）`,

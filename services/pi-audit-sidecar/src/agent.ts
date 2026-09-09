@@ -2,8 +2,9 @@
  * Pi agent session execution for one audit case (port of experiment runner.ts v7).
  *
  * Per case: budget reset → createAgentSession → subscribe (trace + read gate
- * counters) → prompt → standard_not_found read-evidence gate (one re-prompt) →
- * parse verdict → return result + stats + trace.
+ * counters) → prompt → read=0 / citation protocol gates (one re-prompt each) →
+ * Host fills evidence.text from readBodies → return result + stats + trace.
+ * Host never rewrites the agent verdict.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -19,7 +20,7 @@ import { createEvidenceProgress, normalizeChunkId } from "./progress.ts";
 import { systemPrompt } from "./prompt.ts";
 import { parseVerdictDetailed } from "./parse.ts";
 import { formatFirstRoundCards } from "./preview.ts";
-import { applyEvidenceClosure } from "./closure.ts";
+import { applyEvidenceClosure, closeEvidence } from "./closure.ts";
 
 // 工具调用硬预算：每个 case 一个全新 loader（extensionFactories 闭包随之独立），
 // 预算计数是 case 内局部变量，天然无跨 session 泄漏；并发 case 互不干扰。
@@ -59,6 +60,8 @@ export type AgentCaseOutcome = {
 		raw_kind: unknown;
 		closure: "passed" | "failed" | "skipped";
 		closure_mode: string | null;
+		closure_reason: string | null;
+		protocol_error: boolean;
 	};
 	trace_file: string | null;
 	final_text_preview: string;
@@ -162,6 +165,11 @@ function toolResultText(result: unknown): string {
 			return "";
 		})
 		.join("\n");
+}
+
+function isMatchMismatch(result: Record<string, unknown> | null | undefined): boolean {
+	const verdict = String(result?.verdict || "");
+	return verdict === "match" || verdict === "mismatch";
 }
 
 function evidenceChunkIds(result: Record<string, unknown> | null): string[] {
@@ -421,6 +429,19 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 	}
 
 	let parsed = parseVerdictDetailed(finalText);
+	const firstRawVerdict = parsed.value?.verdict;
+	const firstRawKind = parsed.value?.kind;
+
+	async function repromptOnce(message: string, label: string): Promise<void> {
+		gateReprompt = true;
+		try {
+			await withTimeout(session.prompt(message), 120000, `${label} timeout`);
+			await new Promise<void>((r) => setTimeout(r, 500));
+		} catch (err) {
+			promptError = promptError ?? (err instanceof Error ? err.message : String(err));
+		}
+		parsed = parseVerdictDetailed(finalText);
+	}
 
 	// host 端门禁：standard_not_found 但从未 read_chunk → 追加一次重判提示。
 	if (
@@ -429,31 +450,48 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 		parsed.value?.kind === "standard_not_found" &&
 		readCount === 0
 	) {
-		gateReprompt = true;
-		try {
-			await withTimeout(
-				session.prompt(
-					hasFirstRound
-						? `你给出了 unevaluable + standard_not_found，但本会话从未用 read_chunk 读取任何片段的完整原文。` +
-							`请先对第一轮最相关候选执行 read_chunk；若读完仍不够，再 search_standards 并对后继命中 read_chunk 后重新输出最终 JSON 判定。` +
-							`定位预览里没有不等于条款不存在。若 read 后仍无法定位条款，可维持 unevaluable，但 reasoning 须列出已读片段与已尝试的检索式。`
-						: `你给出了 unevaluable + standard_not_found，但本会话从未用 read_chunk 读取任何命中片段的完整原文。` +
-							`search_standards 只返回定位预览，预览里没有不等于条款不存在。` +
-							`请对最相关的命中执行 read_chunk 核实原文后重新输出最终 JSON 判定；若 read 后仍无法定位条款，可维持 unevaluable，但 reasoning 须列出已读片段与已尝试的检索式。`,
-				),
-				120000,
-				"gate re-prompt timeout",
-			);
-			await new Promise<void>((r) => setTimeout(r, 500));
-		} catch (err) {
-			promptError = promptError ?? (err instanceof Error ? err.message : String(err));
-		}
-		parsed = parseVerdictDetailed(finalText);
+		await repromptOnce(
+			hasFirstRound
+				? `你给出了 unevaluable + standard_not_found，但本会话从未用 read_chunk 读取任何片段的完整原文。` +
+					`请先对第一轮最相关候选执行 read_chunk；若读完仍不够，再 search_standards 并对后继命中 read_chunk 后重新输出最终 JSON 判定。` +
+					`定位预览里没有不等于条款不存在。若 read 后仍无法定位条款，可维持 unevaluable，但 reasoning 须列出已读片段与已尝试的检索式。`
+				: `你给出了 unevaluable + standard_not_found，但本会话从未用 read_chunk 读取任何命中片段的完整原文。` +
+					`search_standards 只返回定位预览，预览里没有不等于条款不存在。` +
+					`请对最相关的命中执行 read_chunk 核实原文后重新输出最终 JSON 判定；若 read 后仍无法定位条款，可维持 unevaluable，但 reasoning 须列出已读片段与已尝试的检索式。`,
+			"gate re-prompt",
+		);
+	}
+
+	// match/mismatch 必须至少 read 过一次；允许读完后重新判定。
+	if (!promptError && isMatchMismatch(parsed.value) && readCount === 0) {
+		await repromptOnce(
+			`你给出了 match/mismatch，但本会话从未用 read_chunk 读取任何标准原文。` +
+				`请先 read_chunk 核实标准原文后再判定。`,
+			"read gate re-prompt",
+		);
+	}
+
+	// 引用协议：只要求列出已读 chunk_id。失败不改写业务判定。
+	let protocolError = false;
+	const firstProvenance = closeEvidence({
+		verdict: parsed.value?.verdict,
+		evidence: Array.isArray(parsed.value?.evidence)
+			? (parsed.value.evidence as Array<Record<string, unknown>>)
+			: [],
+		readBodies,
+	});
+	if (!promptError && firstProvenance.applied && !firstProvenance.passed) {
+		await repromptOnce(
+			`你给出了 match/mismatch，但证据引用未通过来源核对（${firstProvenance.reason}）。` +
+				`请仅补充本会话已经 read_chunk 过的 chunk_id（source/location 可保留），不要写 evidence.text，不要改变判定。`,
+			"citation protocol re-prompt",
+		);
 	}
 	session.dispose();
 
 	const closed = applyEvidenceClosure(parsed.value, readBodies);
 	parsed = { ...parsed, value: closed.result };
+	protocolError = Boolean(closed.closure.applied && !closed.closure.passed);
 
 	// Persist per-case trace JSONL (auto-pruned by server housekeeping).
 	let traceFile: string | null = null;
@@ -487,10 +525,12 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 			search_blocked: snap.search_blocked,
 			first_round_hit_used: firstRoundHitUsed,
 			read_before_search: firstToolName == null ? null : firstToolName === "read_chunk",
-			raw_verdict: closed.raw_verdict,
-			raw_kind: closed.raw_kind,
+			raw_verdict: firstRawVerdict,
+			raw_kind: firstRawKind,
 			closure: !closed.closure.applied ? "skipped" : closed.closure.passed ? "passed" : "failed",
 			closure_mode: closed.closure.mode,
+			closure_reason: closed.closure.reason || null,
+			protocol_error: protocolError,
 		},
 		trace_file: traceFile,
 		final_text_preview: finalText.slice(0, 4000),
