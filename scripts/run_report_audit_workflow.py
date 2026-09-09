@@ -1068,7 +1068,11 @@ def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
 
 
 def _retrieved_pool_for_agent(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Hand the first-recall hits to the agent so it reads them instead of searching again."""
+    """Hand first-recall locator cards to the agent (no full text, no cell values).
+
+    The agent reads these first and may still call search_standards if they
+    are not enough.
+    """
     pool: list[dict[str, Any]] = []
     for candidate in candidates:
         chunk_id = str(candidate.get("chunk_id") or candidate.get("id") or "").strip()
@@ -1080,6 +1084,8 @@ def _retrieved_pool_for_agent(candidates: list[dict[str, Any]]) -> list[dict[str
             if isinstance(candidate.get("table_row_binding"), dict)
             else {}
         )
+        columns = metadata.get("table_columns")
+        headers = binding.get("headers") if isinstance(binding.get("headers"), list) else None
         pool.append(
             {
                 "chunk_id": chunk_id,
@@ -1087,7 +1093,11 @@ def _retrieved_pool_for_agent(candidates: list[dict[str, Any]]) -> list[dict[str
                 "content_type": candidate.get("content_type"),
                 "standard_no": metadata.get("standard_no"),
                 "table_no": metadata.get("table_no"),
+                "table_title": metadata.get("table_title"),
+                "table_columns": columns if isinstance(columns, list) else None,
                 "section": metadata.get("section"),
+                "section_title": metadata.get("section_title"),
+                "headers": headers,
                 "bind_state": binding.get("state"),
             }
         )
@@ -2570,6 +2580,8 @@ def _audit_one_case(
     }
 
     def fetch_agent_evidence() -> dict[str, Any] | None:
+        # Caliber could not close. Hand first-round locator cards; the agent
+        # reads them first and may still search_standards if they are not enough.
         if not agent_sidecar_url:
             return None
         payload = {

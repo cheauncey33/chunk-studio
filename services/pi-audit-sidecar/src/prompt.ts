@@ -6,25 +6,25 @@
  * tighter-than-standard), and the standard_not_found read-evidence gate.
  * Keep in sync with experiment/pi-standard-audit/skill.md.
  */
-export function systemPrompt(options?: { searchEnabled?: boolean }): string {
-	const searchEnabled = options?.searchEnabled !== false;
-	const taskLine = searchEnabled
-		? `你需要检索标准知识库并判定声称值是否与标准一致。`
-		: `工作流已经检索过标准库。你只需阅读已召回片段，取出适用限值；不要再检索。`;
-	const chunkIdRule = searchEnabled
-		? `chunk_id 只能来自 search_standards 命中或 read_chunk 读过的片段，禁止编造`
-		: `chunk_id 只能来自任务里已给出的召回列表或你用 read_chunk 读过的片段，禁止编造`;
-	const notFoundGate = searchEnabled
-		? `   standard_not_found 准入门槛：判它之前必须 ①用至少 2 种不同表述检索（按标准号/项目名/参数名），②对最相关命中执行 read_chunk 读完整原文——search 只返回截断预览，预览里没有不等于条款不存在；reasoning 须列出已尝试的检索式与已读片段。`
-		: `   standard_not_found 准入门槛：判它之前必须对最相关的已召回 chunk_id 执行 read_chunk 读完整原文；读完仍定位不到条款才可判。禁止再搜索。reasoning 须列出已读片段。`;
-	const toolLines = searchEnabled
+export function systemPrompt(options?: { hasFirstRound?: boolean }): string {
+	const hasFirstRound = options?.hasFirstRound === true;
+	const taskLine = hasFirstRound
+		? `工作流已经检索过标准库并给出第一轮候选。你需要先阅读这些片段；读完仍不够再 search_standards 补召回，然后判定声称值是否与标准一致。`
+		: `你需要检索标准知识库并判定声称值是否与标准一致。`;
+	const chunkIdRule = hasFirstRound
+		? `chunk_id 只能来自任务里第一轮候选、search_standards 命中或 read_chunk 读过的片段，禁止编造`
+		: `chunk_id 只能来自 search_standards 命中或 read_chunk 读过的片段，禁止编造`;
+	const notFoundGate = hasFirstRound
+		? `   standard_not_found 准入门槛：判它之前必须 ①对第一轮最相关候选执行 read_chunk，②若读完仍取不到适用限值，再用至少 1 种不同表述 search_standards 并对后继命中 read_chunk——定位预览里没有不等于条款不存在；reasoning 须列出已读片段与已尝试的检索式。`
+		: `   standard_not_found 准入门槛：判它之前必须 ①用至少 2 种不同表述检索（按标准号/项目名/参数名），②对最相关命中执行 read_chunk 读完整原文——search 只返回定位预览，预览里没有不等于条款不存在；reasoning 须列出已尝试的检索式与已读片段。`;
+	const toolLines = hasFirstRound
 		? [
 				`工具可用：search_standards / read_chunk / read_report。`,
-				`search_standards 按你写的 query 原样检索；检索 2–3 次后应 read_chunk 并判定，禁止为同一条款反复搜索。`,
+				`先 read_chunk 第一轮候选。读完能取限值就判定；不够再 search_standards（有限次），对后继命中继续 read。search 只返回定位预览，不含表格数值。`,
 			]
 		: [
-				`工具可用：read_chunk / read_report。search_standards 已关闭。`,
-				`只用 read_chunk 读任务里给出的 chunk_id。读完仍取不到可比较的标准值，就 unevaluable。`,
+				`工具可用：search_standards / read_chunk / read_report。`,
+				`search_standards 按你写的 query 原样检索；检索 2–3 次后应 read_chunk 并判定，禁止为同一条款反复搜索。search 只返回定位预览，不含表格数值。`,
 			];
 	return [
 		`你是检测报告标准值审查员。你将收到一个审查任务：给定产品型号参数、试验项目、报告声称值，`,

@@ -507,8 +507,17 @@ def test_retrieved_pool_for_agent_keeps_chunk_ids_without_full_text() -> None:
                 "chunk_id": "chk-1",
                 "candidate_key": "c01",
                 "content_type": "table",
-                "business_metadata": {"standard_no": "GB/T 1094.1-2013", "table_no": "1"},
-                "table_row_binding": {"state": "matched"},
+                "business_metadata": {
+                    "standard_no": "GB/T 1094.1-2013",
+                    "table_no": "1",
+                    "table_title": "性能参数",
+                    "table_columns": ["额定容量", "空载损耗"],
+                },
+                "table_row_binding": {
+                    "state": "matched",
+                    "headers": ["额定容量", "空载损耗"],
+                    "column_values": {"额定容量": "400", "空载损耗": "0.370"},
+                },
                 "text": "<table>很大</table>",
             },
             {
@@ -526,10 +535,17 @@ def test_retrieved_pool_for_agent_keeps_chunk_ids_without_full_text() -> None:
             "content_type": "table",
             "standard_no": "GB/T 1094.1-2013",
             "table_no": "1",
+            "table_title": "性能参数",
+            "table_columns": ["额定容量", "空载损耗"],
             "section": None,
+            "section_title": None,
+            "headers": ["额定容量", "空载损耗"],
             "bind_state": "matched",
         }
     ]
+    assert "text" not in pool[0]
+    assert "column_values" not in pool[0]
+    assert "<table>" not in str(pool)
 
 
 def test_judge_validation_maps_legacy_status_and_builds_locators() -> None:

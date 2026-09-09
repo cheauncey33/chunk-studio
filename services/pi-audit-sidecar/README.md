@@ -28,6 +28,9 @@ npm start                     # 监听 http://127.0.0.1:8787
   "test_item": {"item_no": "5", "project_name": "空载损耗和空载电流测量", "phase": "initial"},
   "reported_requirement": {"text": "空载损耗P0(kW):≤0.370", "unit": "kW"},
   "file_scope": ["<assistant 绑定知识库文件 id>"],
+  "retrieved_candidates": [
+    {"chunk_id": "…", "content_type": "table", "standard_no": "Q/GDW 12126.4-2024", "table_no": "6", "bind_state": "matched"}
+  ],
   "tool_budget": 8
 }
 ```
@@ -60,6 +63,9 @@ npm start                     # 监听 http://127.0.0.1:8787
 与 `experiment/pi-standard-audit/skill.md` 保持同步：四向 verdict + 强制 kind、
 总损耗加和口径、单位等价、加严=mismatch、standard_not_found 需先 read_chunk
 （host 端硬门禁：未读原文时自动追加一次重判提示）。
+
+生产路径：程序先多路召回并由 caliber 决定是否进 Agent。进 Agent 时带上第一轮定位卡；
+Agent 先 `read_chunk`，不够才 `search_standards`。search 只返回定位预览，不含表格数值。
 
 ## 可靠性
 

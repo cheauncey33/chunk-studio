@@ -12,6 +12,8 @@
 import { Type, type TSchema, type Static } from "typebox";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 
+import { formatSearchHits, toLocatorHit } from "../../services/pi-audit-sidecar/src/preview.ts";
+
 function apiBase(): string {
 	return (process.env.CHUNK_STUDIO_API_BASE ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 }
@@ -29,29 +31,14 @@ async function apiFetch(
 	return res.json();
 }
 
-function readableHits(payload: any): string {
-	const hits = payload?.hits ?? [];
-	if (hits.length === 0) return "（无命中）";
-	return hits
-		.map((h: any, i: number) => {
-			const meta = h.business_metadata ?? {};
-			const head =
-				`[${i + 1}] chunk_id=${h.chunk_id} file=${h.file_name}(${h.file_id}) page=${h.page} score=${h.score?.toFixed?.(3) ?? h.score}\n` +
-				`    metadata: ${JSON.stringify(meta)}`;
-			// 有行绑定时优先展示匹配行的列值——模型直接可读，无需读 HTML 表格。
-			if (h.row_binding && h.row_binding.state === "matched" && h.row_binding.column_values) {
-				const cv = h.row_binding.column_values;
-				const cells = Object.entries(cv)
-					.map(([k, v]) => `${k}=${v}`)
-					.join(" | ");
-				return head + `\n    ▶ 匹配行(按样机参数绑定): ${cells}`;
-			}
-			if (h.row_binding) {
-				return head + `\n    ▶ 行绑定状态: ${h.row_binding.state}（未唯一匹配，详见原文）`;
-			}
-			return head + `\n    text: ${String(h.text ?? "").slice(0, 800)}`;
-		})
-		.join("\n");
+function readableHits(
+	payload: any,
+	options?: { query?: string; rowFilter?: { capacity_kva?: number; system_nominal_voltage_kv?: number } },
+): string {
+	return formatSearchHits(payload?.hits ?? [], {
+		query: options?.query,
+		rowFilter: options?.rowFilter,
+	});
 }
 
 export function createAuditTools() {
@@ -76,12 +63,12 @@ export function createAuditTools() {
 	name: "search_standards",
 	label: "检索标准知识库",
 	description:
-		"在标准知识库中按你给出的检索式原样做混合检索（后端不会再自动改写）。建议包含型号、额定容量、电压、试验项目、参数名；返回最相关的标准片段（表格/条款），含文件、页、业务元数据（标准号、表号）。命中不好时换一种表述再调用本工具。传入 row_filter（样机容量/电压）时，表格命中会直接给出匹配行的具体数值（如 400 kVA 行的空载损耗/空载电流/短路阻抗），无需再逐个读表格原文。",
-	promptSnippet: "按原检索式检索标准知识库；命中不好时换表述再搜，可按样机参数直接返回表格匹配行",
+		"在标准知识库中按你给出的检索式原样做混合检索（后端不会再自动改写）。返回定位预览：表格给表题/列名/行绑定状态，条款给 query 命中窗口。不含表格单元格数值，不能凭预览判定。涉及限值/数值/条款必须再 read_chunk。命中不好时换一种表述再调用本工具。",
+	promptSnippet: "按原检索式检索标准知识库；返回定位预览，数值必须 read_chunk",
 	promptGuidelines: [
 		"使用 search_standards 时 query 会原样作为检索式，后端不再自动改写。写成完整自然语言，包含型号参数（如 S20-M.RL-400/10-NX2 400 kVA 10/0.4 kV）、试验项目名和要核对的参数名（如 空载损耗P0）。",
 		"第一次命中不够时，用另一种表述再调 search_standards（例如按标准号/表号/参数名拆开），不要指望一次调用内部帮你扩写。",
-		"审查表格限值（损耗/电流/阻抗等）时务必传 row_filter（capacity_kva、system_nominal_voltage_kv，从产品型号参数解析为数字），命中表格会直接给出匹配行的全部列值，避免再读表格原文。",
+		"审查表格限值时传 row_filter（capacity_kva、system_nominal_voltage_kv），预览只告诉你行绑定是否 unique，不会给出空载损耗等单元格数值。",
 		"file_ids 可选：当已确定适用标准文档时，可把检索限定在该文件内提高精度。",
 	],
 	parameters: Type.Object({
@@ -127,8 +114,11 @@ export function createAuditTools() {
 				}),
 			},
 		);
-		const text = `检索式: ${params.query}\n命中 ${(payload as any)?.hits?.length ?? 0} 条：\n` + readableHits(payload);
-		return { content: [{ type: "text", text }], details: { hits: (payload as any)?.hits ?? [] } };
+		const hits = (payload as any)?.hits ?? [];
+		const text =
+			`检索式: ${params.query}\n命中 ${hits.length} 条（定位预览，不含表格数值）：\n` +
+			readableHits(payload, { query: params.query, rowFilter: params.row_filter });
+		return { content: [{ type: "text", text }], details: { hits: hits.map(toLocatorHit) } };
 	},
 });
 
@@ -136,7 +126,7 @@ export function createAuditTools() {
 	name: "read_chunk",
 	label: "读取标准片段全文",
 	description:
-		"按 chunk_id 读取一个标准知识库片段的完整原文，含表格数据和业务元数据（标准号、表号、标题）。search_standards 只返回截断的预览（最多 800 字符），涉及限值/数值/条款的判定，必须在拿到命中后用 read_chunk 读取对应片段的完整内容，确认表格数值或条款原文后再下结论，不得仅凭预览片段判 insufficient_context。",
+		"按 chunk_id 读取一个标准知识库片段的完整原文，含表格数据和业务元数据（标准号、表号、标题）。search_standards 只返回定位预览（不含表格数值），涉及限值/数值/条款的判定，必须在拿到命中后用 read_chunk 读取对应片段的完整内容，确认表格数值或条款原文后再下结论，不得仅凭预览片段判 insufficient_context。",
 	promptSnippet: "读取检索命中的标准片段完整原文（含表格数值）",
 	promptGuidelines: [
 		"使用 read_chunk 时 chunk_id 应来自 search_standards 命中的 chunk_id 字段，不要凭空构造。",

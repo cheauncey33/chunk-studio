@@ -20,8 +20,8 @@ description: 检测报告标准值审查（standard-value audit）。给定被�
 
 ## 可使用工具
 
-- **search_standards(query, file_ids?, top_k?)**：混合检索标准知识库。query 写成完整自然语言检索式（含型号、容量、电压、试验项、参数名）。file_ids 可用来把检索限定在某一标准文档内。
-- **read_chunk(chunk_id)**：读取某个检索命中的标准片段全文（含表格）。
+- **search_standards(query, file_ids?, top_k?)**：混合检索标准知识库。返回定位预览（表题/列名/行绑定状态，或条款命中窗口），不含表格数值。query 写成完整自然语言检索式。file_ids 可用来把检索限定在某一标准文档内。
+- **read_chunk(chunk_id)**：读取某个检索命中的标准片段全文（含表格数值）。判定必须依据本工具，不能凭 search 预览。
 - **read_report(report_name)**：读取检测报告原文分段（需要核对待审查对象时用）。
 
 ## 审查步骤（自行判断，无需按部就班）

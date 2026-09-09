@@ -194,7 +194,7 @@ function systemPrompt(): string {
 		`   - match：exact（数值/条件精确一致）| unit_equivalent（单位换算后一致）| formula_aggregate（派生公式一致，如总损耗=两项限值加和）`,
 		`   - mismatch：numeric_looser（限值放宽）| numeric_tighter（自行加严）| comparator_flip（比较方向反转）| bandwidth_exceeded（超出允许偏差带宽）| wrong_level（电压/能效等级写错）| wrong_condition（试验条件/次数/时长写错）| wrong_label（标号/联结组写错）| magnitude_error（数量级错误）| formula_aggregate（派生公式与限值加和不符）`,
 		`   - unevaluable：standard_not_found（检索不到适用标准/条款）| applicability_undetermined（缺决定适用性的参数/上下文）`,
-		`   standard_not_found 准入门槛：判它之前必须 ①用至少 2 种不同表述检索（按标准号/项目名/参数名），②对最相关命中执行 read_chunk 读完整原文——search 只返回截断预览，预览里没有不等于条款不存在；reasoning 须列出已尝试的检索式与已读片段。`,
+		`   standard_not_found 准入门槛：判它之前必须 ①用至少 2 种不同表述检索（按标准号/项目名/参数名），②对最相关命中执行 read_chunk 读完整原文——search 只返回定位预览，预览里没有不等于条款不存在；reasoning 须列出已尝试的检索式与已读片段。`,
 		`   - out_of_scope：kind=null（声称值不构成限值声称——无数值/条件可比，无需检索即可判）`,
 		`   kind 优先级：若同一问题同时符合多个 mismatch kind，选最能刻画错误机制的——comparator_flip / wrong_level / wrong_condition / wrong_label / magnitude_error / bandwidth_exceeded 优先于 numeric_looser / numeric_tighter（后者仅在问题只是单纯数值宽严时使用）。`,
 		``,
@@ -364,7 +364,7 @@ async function main(): Promise<void> {
 			try {
 				await session.prompt(
 					`你给出了 unevaluable + standard_not_found，但本会话从未用 read_chunk 读取任何命中片段的完整原文。` +
-						`search_standards 只返回截断预览，预览里没有不等于条款不存在。` +
+						`search_standards 只返回定位预览，预览里没有不等于条款不存在。` +
 						`请对最相关的命中执行 read_chunk 核实原文后重新输出最终 JSON 判定；若 read 后仍无法定位条款，可维持 unevaluable，但 reasoning 须列出已读片段与已尝试的检索式。`,
 				);
 				await new Promise<void>((r) => setTimeout(r, 500));
