@@ -1370,6 +1370,7 @@ def test_retrieve_hybrid_candidates_maps_hits_and_passes_scope(monkeypatch) -> N
         similarity_threshold=0.3,
         aggregate_continuation_tables=False,
         expand_references=True,
+        case_id="c09",
     )
 
     assert captured["query"] == "空载损耗限值"
@@ -1385,6 +1386,7 @@ def test_retrieve_hybrid_candidates_maps_hits_and_passes_scope(monkeypatch) -> N
     assert captured["kwargs"]["similarity_threshold"] == 0.3
     assert captured["kwargs"]["aggregate_continuation_tables"] is False
     assert captured["kwargs"]["expand_references"] is True
+    assert captured["kwargs"]["usage_context"].case_id == "c09"
     assert [item["chunk_id"] for item in candidates] == ["t1", "s1"]
     assert candidates[0]["content_type"] == "table"
     assert candidates[0]["route_scores"] == {"hybrid": 0.91}

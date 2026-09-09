@@ -7,6 +7,7 @@ import re
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from decimal import Decimal
 from html import unescape
 from html.parser import HTMLParser
@@ -15,6 +16,15 @@ from typing import Any
 
 from . import embeddings, lexical, llm, observability, retrieval_experiments
 from .evidence_locator import chunk_text_sha256
+from .llm_usage import (
+    STATUS_FAILED,
+    STATUS_SUCCESS,
+    STAGE_QUERY_REWRITE,
+    STAGE_RERANK,
+    UsageContext,
+    dashscope_total_tokens,
+    record_non_generative_usage,
+)
 from .storage import vector_store
 
 
@@ -177,11 +187,17 @@ def plan_query_rewrites(
     query: str,
     *,
     model: str = QUERY_REWRITE_MODEL,
+    usage_context: UsageContext | None = None,
 ) -> dict[str, str]:
     """Add validated rewrite routes while keeping the original query intact."""
     planner_query = _normalize_query_for_rewrite(query)
     if not planner_query:
         raise ValueError("query must not be blank")
+    rewrite_context = (
+        replace(usage_context, stage=STAGE_QUERY_REWRITE)
+        if usage_context is not None
+        else None
+    )
     parsed = llm.chat_json(
         messages=[
             {
@@ -201,6 +217,7 @@ def plan_query_rewrites(
         ],
         model=model,
         temperature=0,
+        usage_context=rewrite_context,
     )
     rewrites = {
         route: _validate_rewrite(planner_query, parsed.get(route), route=route)
@@ -211,12 +228,30 @@ def plan_query_rewrites(
     return rewrites
 
 
+def _meter_rerank(
+    response: Any,
+    *,
+    usage_context: UsageContext | None,
+    model: str,
+    status: str,
+) -> None:
+    record_non_generative_usage(
+        context=usage_context,
+        total_tokens=dashscope_total_tokens(response),
+        stage=STAGE_RERANK,
+        provider="dashscope",
+        model=model,
+        status=status,
+    )
+
+
 def rerank_documents(
     query: str,
     documents: list[str],
     top_n: int,
     *,
     model: str = RERANK_MODEL,
+    usage_context: UsageContext | None = None,
 ) -> list[tuple[int, float]]:
     api_key = os.environ.get("DASHSCOPE_API_KEY")
     if not api_key:
@@ -227,15 +262,25 @@ def rerank_documents(
     from dashscope import TextReRank
 
     expected = min(top_n, len(documents))
-    response = TextReRank.call(
-        api_key=api_key,
-        model=model,
-        query=query,
-        documents=documents,
-        top_n=expected,
-        instruct=RERANK_INSTRUCTION,
-    )
+    response = None
+    try:
+        response = TextReRank.call(
+            api_key=api_key,
+            model=model,
+            query=query,
+            documents=documents,
+            top_n=expected,
+            instruct=RERANK_INSTRUCTION,
+        )
+    except Exception:
+        _meter_rerank(
+            None, usage_context=usage_context, model=model, status=STATUS_FAILED
+        )
+        raise
     if response.status_code != HTTPStatus.OK:
+        _meter_rerank(
+            response, usage_context=usage_context, model=model, status=STATUS_FAILED
+        )
         raise RuntimeError(
             f"rerank failed: status={response.status_code} "
             f"code={response.code} message={response.message}"
@@ -250,10 +295,18 @@ def rerank_documents(
                 raise RuntimeError("rerank returned an invalid document index")
             seen.add(index)
             ranked.append((index, float(item["relevance_score"])))
-    except (KeyError, TypeError, ValueError) as exc:
+        if len(ranked) != expected:
+            raise RuntimeError("rerank returned an unexpected result count")
+    except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+        _meter_rerank(
+            response, usage_context=usage_context, model=model, status=STATUS_FAILED
+        )
+        if isinstance(exc, RuntimeError) and "rerank returned" in str(exc):
+            raise
         raise RuntimeError("rerank returned an invalid result payload") from exc
-    if len(ranked) != expected:
-        raise RuntimeError("rerank returned an unexpected result count")
+    _meter_rerank(
+        response, usage_context=usage_context, model=model, status=STATUS_SUCCESS
+    )
     return ranked
 
 
@@ -285,6 +338,7 @@ def hybrid_search(
     lexical_enabled: bool | None = None,
     file_ids: list[str] | None = None,
     workspace_id: str | None = None,
+    usage_context: UsageContext | None = None,
 ) -> dict[str, Any]:
     total_started = time.perf_counter()
     timings_ms: dict[str, float] = {}
@@ -342,10 +396,24 @@ def hybrid_search(
     if not 1 <= lexical_pool_size <= 100:
         raise ValueError("lexical_candidates_per_type must be between 1 and 100")
 
-    planner = planner or plan_query_rewrites
-    batch_embedder = batch_embedder or embeddings.embed_queries_with_dashscope
+    if planner is None:
+        def planner(query_text: str) -> dict[str, str]:
+            return plan_query_rewrites(query_text, usage_context=usage_context)
+    if batch_embedder is None:
+        def batch_embedder(queries: list[str], **kwargs: Any) -> list[list[float]]:
+            return embeddings.embed_queries_with_dashscope(
+                queries,
+                usage_context=usage_context,
+                **kwargs,
+            )
     vector_searcher = vector_searcher or vector_store.get_vector_store().search_by_vector
-    reranker = reranker or rerank_documents
+    if reranker is None:
+        def reranker(
+            query_text: str, documents: list[str], top_n: int
+        ) -> list[tuple[int, float]]:
+            return rerank_documents(
+                query_text, documents, top_n, usage_context=usage_context
+            )
     lexical_searcher = lexical_searcher or lexical.search
     if lexical_enabled is None:
         lexical_enabled = lexical.production_enabled()
@@ -629,6 +697,7 @@ def retrieve_candidate_pool(
     lexical_enabled: bool | None = None,
     file_ids: list[str] | None = None,
     workspace_id: str | None = None,
+    usage_context: UsageContext | None = None,
 ) -> dict[str, Any]:
     """Return the bounded hybrid candidate pool before external reranking."""
     result = hybrid_search(
@@ -652,6 +721,7 @@ def retrieve_candidate_pool(
         lexical_enabled=lexical_enabled,
         file_ids=file_ids,
         workspace_id=workspace_id,
+        usage_context=usage_context,
     )
     for hit in result["hits"]:
         hit["rerank_score"] = None

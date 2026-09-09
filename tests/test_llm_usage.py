@@ -1,23 +1,25 @@
 from __future__ import annotations
 
 from pathlib import Path
+from decimal import Decimal
 import json
 import sys
+import types
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from decimal import Decimal
-
-from app import db, jobs, llm, llm_usage, observability
+from app import db, embeddings, jobs, llm, llm_usage, observability, retrieval
 from app.llm_pricing import ModelPrice, compute_cost_microunits
 from app.llm_usage import UsageContext
+from app.models import VectorSearchRequest
 from app.routers import internal as internal_router
+from app.routers import search as search_router
 from app.storage.repositories import postgres_schema_sql
 from app.storage.usage_repository import (
     SqliteUsageRepository,
@@ -698,3 +700,194 @@ def test_ingest_rejects_missing_sidecar_token(monkeypatch, tmp_path: Path) -> No
     with pytest.raises(HTTPException) as exc:
         internal_router.ingest_llm_usage(body, authorization=None)
     assert exc.value.status_code == 401
+
+
+def test_non_generative_usage_puts_tokens_in_input() -> None:
+    usage = llm_usage.normalize_non_generative_usage(42)
+    assert usage.usage_source == "provider"
+    assert usage.input_tokens == 42
+    assert usage.output_tokens == 0
+    assert usage.total_tokens == 42
+    assert llm_usage.normalize_non_generative_usage(None).usage_source == "unknown"
+
+
+def _install_fake_dashscope(monkeypatch, **attrs: object) -> None:
+    module = types.ModuleType("dashscope")
+    for name, value in attrs.items():
+        setattr(module, name, value)
+    monkeypatch.setitem(sys.modules, "dashscope", module)
+
+
+def test_query_embedding_records_provider_total_tokens(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "k")
+    vector = [0.1] * embeddings.DEFAULT_DIMENSION
+
+    class FakeEmbedding:
+        @staticmethod
+        def call(**_kwargs):
+            return SimpleNamespace(
+                status_code=200,
+                code=None,
+                message="",
+                output={"embeddings": [{"text_index": 0, "embedding": vector}]},
+                usage={"total_tokens": 42},
+            )
+
+    _install_fake_dashscope(monkeypatch, TextEmbedding=FakeEmbedding)
+    embeddings.embed_queries_with_dashscope(["空载损耗"], usage_context=_context())
+    rows = get_usage_repository().list_usage_events(
+        workspace_id=db.config.DEFAULT_WORKSPACE_ID, job_id="job-1"
+    )
+    assert len(rows) == 1
+    assert rows[0]["stage"] == "retrieval_embedding"
+    assert rows[0]["provider"] == "dashscope"
+    assert rows[0]["model"] == embeddings.DEFAULT_MODEL
+    assert rows[0]["input_tokens"] == 42
+    assert rows[0]["output_tokens"] == 0
+    assert rows[0]["total_tokens"] == 42
+    assert rows[0]["usage_source"] == "provider"
+
+
+def test_rerank_records_provider_total_tokens_even_on_parse_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "k")
+
+    class FakeReRank:
+        @staticmethod
+        def call(**_kwargs):
+            return SimpleNamespace(
+                status_code=200,
+                code=None,
+                message="",
+                output={"results": [{"index": 0, "relevance_score": 0.9}]},
+                usage={"total_tokens": 88},
+            )
+
+    _install_fake_dashscope(monkeypatch, TextReRank=FakeReRank)
+    ranked = retrieval.rerank_documents(
+        "query", ["document"], 1, usage_context=_context()
+    )
+    assert ranked == [(0, 0.9)]
+    rows = get_usage_repository().list_usage_events(
+        workspace_id=db.config.DEFAULT_WORKSPACE_ID, job_id="job-1"
+    )
+    assert rows[0]["stage"] == "rerank"
+    assert rows[0]["total_tokens"] == 88
+    assert rows[0]["input_tokens"] == 88
+    assert rows[0]["output_tokens"] == 0
+    assert rows[0]["status"] == "success"
+
+    class BrokenReRank:
+        @staticmethod
+        def call(**_kwargs):
+            return SimpleNamespace(
+                status_code=200,
+                output={"results": "not-a-list"},
+                usage={"total_tokens": 50},
+            )
+
+    _install_fake_dashscope(monkeypatch, TextReRank=BrokenReRank)
+    with pytest.raises(RuntimeError, match="invalid result payload"):
+        retrieval.rerank_documents("query", ["document"], 1, usage_context=_context())
+    rows = get_usage_repository().list_usage_events(
+        workspace_id=db.config.DEFAULT_WORKSPACE_ID, job_id="job-1"
+    )
+    assert len(rows) == 2
+    failed = [row for row in rows if row["status"] == "failed"]
+    assert len(failed) == 1
+    assert failed[0]["total_tokens"] == 50
+    assert failed[0]["usage_source"] == "provider"
+
+
+def test_missing_dashscope_key_does_not_invent_retrieval_usage(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="DASHSCOPE_API_KEY"):
+        embeddings.embed_queries_with_dashscope(["q"], usage_context=_context())
+    with pytest.raises(RuntimeError, match="DASHSCOPE_API_KEY"):
+        retrieval.rerank_documents("q", ["d"], 1, usage_context=_context())
+    rows = get_usage_repository().list_usage_events(
+        workspace_id=db.config.DEFAULT_WORKSPACE_ID, job_id="job-1"
+    )
+    assert rows == []
+
+
+def test_search_api_forwards_job_identity_outside_the_query(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    _insert_job("job-search")
+    captured: dict[str, object] = {}
+
+    def fake_hybrid_search(query: str, **kwargs):
+        captured["query"] = query
+        captured["usage_context"] = kwargs.get("usage_context")
+        return {
+            "query": query,
+            "model": "model",
+            "dimension": 1,
+            "total_candidates": 0,
+            "candidate_count": 0,
+            "retrieval_mode": "dual_rerank",
+            "query_routes": {"production": query},
+            "rerank_model": None,
+            "degraded": [],
+            "hits": [],
+        }
+
+    monkeypatch.setattr(search_router.retrieval, "hybrid_search", fake_hybrid_search)
+    monkeypatch.setattr(search_router.lexical, "production_enabled", lambda: True)
+    search_router.search_chunks(
+        VectorSearchRequest(
+            query="空载损耗P0",
+            query_routes={"production": "空载损耗P0"},
+            job_id="job-search",
+            run_id="run-9",
+            case_id="c01",
+            job_attempt=2,
+        ),
+        BackgroundTasks(),
+    )
+    ctx = captured["usage_context"]
+    assert captured["query"] == "空载损耗P0"
+    assert ctx is not None
+    assert ctx.job_id == "job-search"
+    assert ctx.run_id == "run-9"
+    assert ctx.case_id == "c01"
+    assert ctx.job_attempt == 2
+    assert ctx.workspace_id == db.config.DEFAULT_WORKSPACE_ID
+
+
+def test_search_api_ignores_unknown_job_identity(monkeypatch, tmp_path: Path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_hybrid_search(query: str, **kwargs):
+        captured["usage_context"] = kwargs.get("usage_context")
+        return {
+            "query": query,
+            "model": "model",
+            "dimension": 1,
+            "total_candidates": 0,
+            "candidate_count": 0,
+            "retrieval_mode": "dual_rerank",
+            "query_routes": {"production": query},
+            "rerank_model": None,
+            "degraded": [],
+            "hits": [],
+        }
+
+    monkeypatch.setattr(search_router.retrieval, "hybrid_search", fake_hybrid_search)
+    monkeypatch.setattr(search_router.lexical, "production_enabled", lambda: True)
+    search_router.search_chunks(
+        VectorSearchRequest(query="空载损耗P0", job_id="missing-job", case_id="c01"),
+        BackgroundTasks(),
+    )
+    assert captured["usage_context"] is None

@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
-from .. import lexical, retrieval
+from .. import lexical, llm_usage, retrieval
 from ..audit_semantics import bind_table_row
 from ..models import VectorSearchRequest, VectorSearchResponse
 
@@ -40,6 +40,12 @@ def search_chunks(body: VectorSearchRequest, background_tasks: BackgroundTasks):
             top_k=body.top_k,
             file_ids=body.file_ids or None,
             query_routes=body.query_routes or None,
+            usage_context=llm_usage.usage_context_from_job(
+                job_id=body.job_id,
+                run_id=body.run_id,
+                case_id=body.case_id,
+                job_attempt=body.job_attempt,
+            ),
         )
         if body.row_filter:
             result["hits"] = _annotate_row_filters(result.get("hits") or [], body.row_filter)

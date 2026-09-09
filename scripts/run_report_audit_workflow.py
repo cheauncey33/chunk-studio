@@ -2120,6 +2120,7 @@ def _retrieve_hybrid_candidates(
     similarity_threshold: float,
     aggregate_continuation_tables: bool,
     expand_references: bool,
+    case_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Run hybrid_search with planner routes when provided."""
     from app import retrieval
@@ -2139,6 +2140,7 @@ def _retrieve_hybrid_candidates(
         aggregate_continuation_tables=aggregate_continuation_tables,
         expand_references=expand_references,
         file_ids=file_ids,
+        usage_context=_usage_context("other", case_id=case_id),
     )
     candidates: list[dict[str, Any]] = []
     for hit in result.get("hits") or []:
@@ -2534,6 +2536,7 @@ def _audit_one_case(
             similarity_threshold=similarity_threshold,
             aggregate_continuation_tables=aggregate_continuation_tables,
             expand_references=expand_references,
+            case_id=str(unit.get("case_id") or ""),
         )
     retrieval_debug["applicability_exact"] = {
         "searched": False,

@@ -9,7 +9,9 @@
  *   - read_report     — read a parsed inspection report's sections
  *
  * Base URL comes from CHUNK_STUDIO_API_BASE (default http://127.0.0.1:8000).
- * Tools are built per case via createAuditTools(fileScope, progress).
+ * Tools are built per case via createAuditTools(fileScope, progress, identity).
+ * Search identity (job_id / run_id / case_id / job_attempt) is observability
+ * only: it is posted to /api/search, never added to the query or prompt.
  * Search returns type-aware locators (table schema / query snippets), never
  * matched cell values. First-round workflow hits stay in the prompt; the agent
  * may still search if those hits are not enough.
@@ -19,6 +21,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 
 import { formatSearchHits, toLocatorHit } from "./preview.ts";
 import type { EvidenceProgress } from "./progress.ts";
+import type { ExecutionIdentity } from "./usage.ts";
 
 function apiBase(): string {
 	return (process.env.CHUNK_STUDIO_API_BASE ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
@@ -51,6 +54,36 @@ function readableHits(
 	});
 }
 
+/** Observability fields for /api/search. Never mixed into the retrieval query. */
+export function searchStandardsRequestBody(args: {
+	query: string;
+	top_k?: number;
+	file_ids?: string[] | null;
+	row_filter?: Record<string, unknown>;
+	scope: string[];
+	identity?: ExecutionIdentity | null;
+}): Record<string, unknown> {
+	const identity = args.identity;
+	const fileIds = args.file_ids ?? (args.scope.length ? args.scope : undefined);
+	const body: Record<string, unknown> = {
+		query: args.query,
+		top_k: Math.min(args.top_k ?? 8, 20),
+		query_routes: { production: args.query },
+	};
+	if (fileIds !== undefined) body.file_ids = fileIds;
+	if (args.row_filter) body.row_filter = args.row_filter;
+	const jobId = String(identity?.job_id || "").trim();
+	const runId = String(identity?.run_id || "").trim();
+	const caseId = String(identity?.case_id || "").trim();
+	if (jobId) body.job_id = jobId;
+	if (runId) body.run_id = runId;
+	if (caseId) body.case_id = caseId;
+	if (typeof identity?.job_attempt === "number" && Number.isFinite(identity.job_attempt)) {
+		body.job_attempt = Math.floor(identity.job_attempt);
+	}
+	return body;
+}
+
 /**
  * Build audit tools bound to one case's file scope. Each case gets its own
  * tool instances so per-case state (default file_ids) stays isolated under
@@ -59,6 +92,7 @@ function readableHits(
 export function createAuditTools(
 	fileScope: string[] | undefined | null,
 	progress?: EvidenceProgress,
+	identity?: ExecutionIdentity | null,
 ) {
 	const scope = normalizeScope(fileScope);
 	const maxCalls = Math.max(1, Number(process.env.PI_MAX_TOOL_CALLS ?? "12"));
@@ -131,16 +165,16 @@ export function createAuditTools(
 				{
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						query: params.query,
-						top_k: Math.min(params.top_k ?? 8, 20),
-						// 显式 file_ids 优先；否则默认限定在本 case 的助手知识库范围。
-						file_ids: params.file_ids ?? (scope.length ? scope : undefined),
-						row_filter: rowFilter,
-						// 注入 production 路，跳过 hybrid_search 内部 LLM 改写；
-						// 换表述由 agent 再次调用本工具完成。
-						query_routes: { production: params.query },
-					}),
+					body: JSON.stringify(
+						searchStandardsRequestBody({
+							query: params.query,
+							top_k: params.top_k,
+							file_ids: params.file_ids,
+							row_filter: rowFilter,
+							scope,
+							identity,
+						}),
+					),
 				},
 			);
 			const hits = (payload as any)?.hits ?? [];

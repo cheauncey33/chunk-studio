@@ -19,7 +19,7 @@ reasoning into completion/output tokens.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import logging
 import uuid
 from typing import Any
@@ -42,6 +42,7 @@ STAGE_TEST_ITEMS = "test_items"
 STAGE_MODEL_DECODE = "model_decode"
 STAGE_AUDIT_AGENT = "audit_agent"
 STAGE_QUERY_REWRITE = "query_rewrite"
+STAGE_RETRIEVAL_EMBEDDING = "retrieval_embedding"
 STAGE_RERANK = "rerank"
 STAGE_OTHER = "other"
 
@@ -52,6 +53,7 @@ KNOWN_STAGES = frozenset(
         STAGE_MODEL_DECODE,
         STAGE_AUDIT_AGENT,
         STAGE_QUERY_REWRITE,
+        STAGE_RETRIEVAL_EMBEDDING,
         STAGE_RERANK,
         STAGE_OTHER,
     }
@@ -411,6 +413,113 @@ def record_usage_event(event: UsageEvent) -> bool:
             )
         except Exception:
             pass
+        return False
+
+
+def dashscope_total_tokens(response: Any) -> int | None:
+    """Read DashScope ``usage.total_tokens`` from a dict or SDK object."""
+    if response is None:
+        return None
+    usage = getattr(response, "usage", None)
+    if usage is None and isinstance(response, dict):
+        usage = response.get("usage")
+    if isinstance(usage, dict):
+        return _int_or_none(usage.get("total_tokens"))
+    if usage is None:
+        return None
+    total = getattr(usage, "total_tokens", None)
+    if total is None and hasattr(usage, "get"):
+        try:
+            total = usage.get("total_tokens")
+        except Exception:
+            total = None
+    return _int_or_none(total)
+
+
+def normalize_non_generative_usage(
+    total_tokens: int | None,
+    *,
+    raw: dict[str, Any] | None = None,
+) -> NormalizedUsage:
+    """Embedding / rerank counters: billable tokens sit in input, output is 0."""
+    parsed = _int_or_none(total_tokens)
+    if parsed is None:
+        return unknown_usage()
+    return NormalizedUsage(
+        input_tokens=parsed,
+        output_tokens=0,
+        reasoning_tokens=0,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+        total_tokens=parsed,
+        usage_source=USAGE_SOURCE_PROVIDER,
+        raw=dict(raw) if raw else {"total_tokens": parsed},
+    )
+
+
+def usage_context_from_job(
+    *,
+    job_id: str | None,
+    run_id: str | None = None,
+    case_id: str | None = None,
+    job_attempt: int | None = None,
+) -> UsageContext | None:
+    """Resolve ledger identity from ``job_id``. Sidecar workspace is not trusted."""
+    jid = str(job_id or "").strip()
+    if not jid:
+        return None
+    try:
+        workspace = get_usage_repository().lookup_job_workspace(jid)
+    except Exception:
+        logger.exception("usage context job lookup failed job_id=%s", jid)
+        return None
+    if not workspace:
+        return None
+    return UsageContext(
+        workspace_id=str(workspace),
+        job_id=jid,
+        run_id=str(run_id or "").strip(),
+        case_id=str(case_id or "").strip(),
+        job_attempt=job_attempt,
+        stage=STAGE_OTHER,
+    )
+
+
+def record_non_generative_usage(
+    *,
+    context: UsageContext | None,
+    total_tokens: int | None,
+    stage: str,
+    provider: str,
+    model: str,
+    status: str = STATUS_SUCCESS,
+    raw: dict[str, Any] | None = None,
+) -> bool:
+    """Best-effort ledger write for embedding/rerank. Never raises."""
+    if context is None:
+        return False
+    try:
+        scoped = replace(
+            context,
+            stage=normalize_stage(stage),
+            provider=str(provider or context.provider or ""),
+            model=str(model or context.model or ""),
+        )
+        return record_normalized_usage(
+            context=scoped,
+            request_id=new_request_id(),
+            usage=normalize_non_generative_usage(total_tokens, raw=raw),
+            status=status,
+            provider=scoped.provider,
+            model=scoped.model,
+        )
+    except Exception:
+        logger.exception(
+            "non-generative usage record failed job_id=%s case_id=%s stage=%s",
+            getattr(context, "job_id", ""),
+            getattr(context, "case_id", ""),
+            stage,
+        )
         return False
 
 

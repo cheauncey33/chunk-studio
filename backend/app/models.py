@@ -121,9 +121,15 @@ class VectorSearchRequest(BaseModel):
     # hunting through raw HTML tables.
     row_filter: dict[str, Any] | None = None
     # When set (e.g. agent search_standards), skip LLM query rewrite and use
-    # these routes as-is. Must include production. Knowledge-base UI search
-    # leaves this unset so plan_query_rewrites still runs.
+    # these routes as-is. Knowledge-base UI search leaves this unset so
+    # plan_query_rewrites still runs.
     query_routes: dict[str, str] | None = None
+    # Observability / metering only. Never used as a retrieval query.
+    # Workspace is resolved from job_id in the backend, not from the caller.
+    job_id: str | None = None
+    run_id: str | None = None
+    case_id: str | None = None
+    job_attempt: int | None = None
 
 
 class VectorSearchHit(BaseModel):

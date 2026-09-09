@@ -160,8 +160,35 @@ def embed_query_with_dashscope(
     return vector
 
 
+def _meter_query_embedding(
+    response: Any,
+    *,
+    usage_context: Any,
+    model: str,
+    status: str,
+) -> None:
+    from .llm_usage import (
+        STAGE_RETRIEVAL_EMBEDDING,
+        dashscope_total_tokens,
+        record_non_generative_usage,
+    )
+
+    record_non_generative_usage(
+        context=usage_context,
+        total_tokens=dashscope_total_tokens(response),
+        stage=STAGE_RETRIEVAL_EMBEDDING,
+        provider="dashscope",
+        model=model,
+        status=status,
+    )
+
+
 def embed_queries_with_dashscope(
-    queries: list[str], *, model: str = DEFAULT_MODEL, dimension: int = DEFAULT_DIMENSION
+    queries: list[str],
+    *,
+    model: str = DEFAULT_MODEL,
+    dimension: int = DEFAULT_DIMENSION,
+    usage_context: Any = None,
 ) -> list[list[float]]:
     if not os.environ.get("DASHSCOPE_API_KEY"):
         raise RuntimeError("DASHSCOPE_API_KEY is not set")
@@ -170,22 +197,41 @@ def embed_queries_with_dashscope(
 
     from dashscope import TextEmbedding
 
-    response = TextEmbedding.call(
-        model=model,
-        input=queries,
-        dimension=dimension,
-        text_type="query",
-        output_type="dense",
-    )
+    response = None
+    try:
+        response = TextEmbedding.call(
+            model=model,
+            input=queries,
+            dimension=dimension,
+            text_type="query",
+            output_type="dense",
+        )
+    except Exception:
+        _meter_query_embedding(
+            None, usage_context=usage_context, model=model, status="failed"
+        )
+        raise
     if response.status_code != HTTPStatus.OK:
+        _meter_query_embedding(
+            response, usage_context=usage_context, model=model, status="failed"
+        )
         raise RuntimeError(
             f"DashScope query embedding failed: status={response.status_code} "
             f"code={response.code} message={response.message}"
         )
-    items = sorted(response.output["embeddings"], key=lambda item: item["text_index"])
-    vectors = [item["embedding"] for item in items]
-    if len(vectors) != len(queries) or any(len(vector) != dimension for vector in vectors):
-        raise RuntimeError("DashScope returned an unexpected query embedding count or dimension")
+    try:
+        items = sorted(response.output["embeddings"], key=lambda item: item["text_index"])
+        vectors = [item["embedding"] for item in items]
+        if len(vectors) != len(queries) or any(len(vector) != dimension for vector in vectors):
+            raise RuntimeError("DashScope returned an unexpected query embedding count or dimension")
+    except Exception:
+        _meter_query_embedding(
+            response, usage_context=usage_context, model=model, status="failed"
+        )
+        raise
+    _meter_query_embedding(
+        response, usage_context=usage_context, model=model, status="success"
+    )
     return vectors
 
 

@@ -344,7 +344,7 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 		.map((item) => normalizeChunkId(item.chunk_id ?? item.id))
 		.filter(Boolean);
 	const progress = createEvidenceProgress(firstRoundIds);
-	const tools = createAuditTools(input.file_scope, progress);
+	const tools = createAuditTools(input.file_scope, progress, usageIdentity);
 
 	const trace: any[] = [];
 	let finalText = "";
