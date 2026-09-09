@@ -22,6 +22,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { formatSearchHits, toLocatorHit } from "./preview.ts";
 import type { EvidenceProgress } from "./progress.ts";
 import type { ExecutionIdentity } from "./usage.ts";
+import { sidecarAuthHeaders } from "./usage.ts";
 
 function apiBase(): string {
 	return (process.env.CHUNK_STUDIO_API_BASE ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
@@ -32,7 +33,11 @@ async function apiFetch(
 	signal: AbortSignal | undefined,
 	init?: RequestInit,
 ): Promise<unknown> {
-	const res = await fetch(`${apiBase()}${path}`, { ...init, signal });
+	const headers = {
+		...sidecarAuthHeaders(),
+		...(init?.headers as Record<string, string> | undefined),
+	};
+	const res = await fetch(`${apiBase()}${path}`, { ...init, headers, signal });
 	if (!res.ok) {
 		const body = await res.text().catch(() => "");
 		throw new Error(`chunk-studio ${path} -> HTTP ${res.status}: ${body.slice(0, 400)}`);

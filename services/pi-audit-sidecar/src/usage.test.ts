@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
 	requestIdForAssistantMessage,
+	sidecarAuthHeaders,
 	usageFromAssistantMessage,
 } from "./usage.ts";
 
@@ -86,4 +87,15 @@ test("totalTokens falls back to input+output and does not add reasoning", () => 
 	});
 	assert.equal(event?.total_tokens, 140);
 	assert.equal(event?.reasoning_tokens, 20);
+});
+
+test("sidecar auth headers carry the service token", () => {
+	const previous = process.env.AGENT_SIDECAR_TOKEN;
+	process.env.AGENT_SIDECAR_TOKEN = "secret";
+	try {
+		assert.deepEqual(sidecarAuthHeaders(), { Authorization: "Bearer secret" });
+	} finally {
+		if (previous === undefined) delete process.env.AGENT_SIDECAR_TOKEN;
+		else process.env.AGENT_SIDECAR_TOKEN = previous;
+	}
 });

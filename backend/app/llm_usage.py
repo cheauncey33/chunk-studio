@@ -463,8 +463,16 @@ def usage_context_from_job(
     run_id: str | None = None,
     case_id: str | None = None,
     job_attempt: int | None = None,
+    expected_workspace_id: str | None = None,
 ) -> UsageContext | None:
-    """Resolve ledger identity from ``job_id``. Sidecar workspace is not trusted."""
+    """Resolve ledger identity from ``job_id``.
+
+    Sidecar-supplied workspace is never trusted. When
+    ``expected_workspace_id`` is set (ordinary /api/search callers), the job
+    must already belong to that workspace or metering is skipped. A matching
+    sidecar token may omit the expected workspace and use the job's own
+    workspace instead.
+    """
     jid = str(job_id or "").strip()
     if not jid:
         return None
@@ -474,6 +482,9 @@ def usage_context_from_job(
         logger.exception("usage context job lookup failed job_id=%s", jid)
         return None
     if not workspace:
+        return None
+    expected = str(expected_workspace_id or "").strip()
+    if expected and str(workspace) != expected:
         return None
     return UsageContext(
         workspace_id=str(workspace),

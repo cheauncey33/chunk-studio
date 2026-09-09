@@ -141,7 +141,7 @@ function apiBase(): string {
 	return (process.env.CHUNK_STUDIO_API_BASE ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 }
 
-function authHeader(): Record<string, string> {
+export function sidecarAuthHeaders(): Record<string, string> {
 	const token = String(process.env.AGENT_SIDECAR_TOKEN || "").trim();
 	return token ? { Authorization: `Bearer ${token}` } : {};
 }
@@ -153,7 +153,7 @@ export async function postUsageEvent(event: NormalizedTurnUsage): Promise<boolea
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
-				...authHeader(),
+				...sidecarAuthHeaders(),
 			},
 			body: JSON.stringify(event),
 		});

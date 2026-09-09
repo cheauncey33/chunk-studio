@@ -891,3 +891,125 @@ def test_search_api_ignores_unknown_job_identity(monkeypatch, tmp_path: Path) ->
         BackgroundTasks(),
     )
     assert captured["usage_context"] is None
+
+
+def test_search_api_does_not_attribute_foreign_workspace_job(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    now = jobs.now_iso()
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO workspaces(id, name, slug, status, created_at, updated_at)
+               VALUES ('ws-b', 'B', 'ws-b', 'active', ?, ?)""",
+            (now, now),
+        )
+    _insert_job("job-b", workspace_id="ws-b")
+    captured: dict[str, object] = {}
+
+    def fake_hybrid_search(query: str, **kwargs):
+        captured["usage_context"] = kwargs.get("usage_context")
+        return {
+            "query": query,
+            "model": "model",
+            "dimension": 1,
+            "total_candidates": 0,
+            "candidate_count": 0,
+            "retrieval_mode": "dual_rerank",
+            "query_routes": {"production": query},
+            "rerank_model": None,
+            "degraded": [],
+            "hits": [],
+        }
+
+    monkeypatch.setattr(search_router.retrieval, "hybrid_search", fake_hybrid_search)
+    monkeypatch.setattr(search_router.lexical, "production_enabled", lambda: True)
+    search_router.search_chunks(
+        VectorSearchRequest(query="空载损耗P0", job_id="job-b", case_id="c01"),
+        BackgroundTasks(),
+    )
+    assert captured["usage_context"] is None
+
+
+def test_search_api_sidecar_token_meters_job_workspace(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    now = jobs.now_iso()
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO workspaces(id, name, slug, status, created_at, updated_at)
+               VALUES ('ws-b', 'B', 'ws-b', 'active', ?, ?)""",
+            (now, now),
+        )
+    _insert_job("job-b", workspace_id="ws-b")
+    captured: dict[str, object] = {}
+
+    def fake_hybrid_search(query: str, **kwargs):
+        captured["usage_context"] = kwargs.get("usage_context")
+        return {
+            "query": query,
+            "model": "model",
+            "dimension": 1,
+            "total_candidates": 0,
+            "candidate_count": 0,
+            "retrieval_mode": "dual_rerank",
+            "query_routes": {"production": query},
+            "rerank_model": None,
+            "degraded": [],
+            "hits": [],
+        }
+
+    monkeypatch.setattr(search_router.retrieval, "hybrid_search", fake_hybrid_search)
+    monkeypatch.setattr(search_router.lexical, "production_enabled", lambda: True)
+    monkeypatch.setattr(search_router.config, "AGENT_SIDECAR_TOKEN", "secret")
+    search_router.search_chunks(
+        VectorSearchRequest(query="空载损耗P0", job_id="job-b", case_id="c01", job_attempt=1),
+        BackgroundTasks(),
+        authorization="Bearer secret",
+    )
+    ctx = captured["usage_context"]
+    assert ctx is not None
+    assert ctx.job_id == "job-b"
+    assert ctx.workspace_id == "ws-b"
+    assert ctx.case_id == "c01"
+
+
+def test_search_api_forged_sidecar_token_does_not_cross_workspace(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    now = jobs.now_iso()
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO workspaces(id, name, slug, status, created_at, updated_at)
+               VALUES ('ws-b', 'B', 'ws-b', 'active', ?, ?)""",
+            (now, now),
+        )
+    _insert_job("job-b", workspace_id="ws-b")
+    captured: dict[str, object] = {}
+
+    def fake_hybrid_search(query: str, **kwargs):
+        captured["usage_context"] = kwargs.get("usage_context")
+        return {
+            "query": query,
+            "model": "model",
+            "dimension": 1,
+            "total_candidates": 0,
+            "candidate_count": 0,
+            "retrieval_mode": "dual_rerank",
+            "query_routes": {"production": query},
+            "rerank_model": None,
+            "degraded": [],
+            "hits": [],
+        }
+
+    monkeypatch.setattr(search_router.retrieval, "hybrid_search", fake_hybrid_search)
+    monkeypatch.setattr(search_router.lexical, "production_enabled", lambda: True)
+    monkeypatch.setattr(search_router.config, "AGENT_SIDECAR_TOKEN", "secret")
+    search_router.search_chunks(
+        VectorSearchRequest(query="空载损耗P0", job_id="job-b"),
+        BackgroundTasks(),
+        authorization="Bearer forged",
+    )
+    assert captured["usage_context"] is None

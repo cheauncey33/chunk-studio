@@ -3,14 +3,42 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 
-from .. import lexical, llm_usage, retrieval
+from .. import config, current_user, lexical, llm_usage, retrieval
 from ..audit_semantics import bind_table_row
+from ..llm_usage import UsageContext
 from ..models import VectorSearchRequest, VectorSearchResponse
 
 
 router = APIRouter(prefix="/search", tags=["search"])
+
+
+def _sidecar_authorized(authorization: str | None) -> bool:
+    expected = str(config.AGENT_SIDECAR_TOKEN or "").strip()
+    return bool(expected) and str(authorization or "").strip() == f"Bearer {expected}"
+
+
+def _search_usage_context(
+    body: VectorSearchRequest,
+    authorization: str | None,
+) -> UsageContext | None:
+    """Meter search only when job identity cannot jump workspaces.
+
+    Ordinary callers must own the job's workspace. A request with a valid
+    sidecar token may resolve workspace from ``job_id`` because that secret
+    already authorizes service-to-service metering.
+    """
+    expected_workspace_id = None
+    if not _sidecar_authorized(authorization):
+        expected_workspace_id = current_user.get_current_user().workspace_id
+    return llm_usage.usage_context_from_job(
+        job_id=body.job_id,
+        run_id=body.run_id,
+        case_id=body.case_id,
+        job_attempt=body.job_attempt,
+        expected_workspace_id=expected_workspace_id,
+    )
 
 
 def _annotate_row_filters(hits: list[dict[str, Any]], row_filter: dict[str, Any]) -> list[dict[str, Any]]:
@@ -33,19 +61,18 @@ def _annotate_row_filters(hits: list[dict[str, Any]], row_filter: dict[str, Any]
 
 
 @router.post("", response_model=VectorSearchResponse)
-def search_chunks(body: VectorSearchRequest, background_tasks: BackgroundTasks):
+def search_chunks(
+    body: VectorSearchRequest,
+    background_tasks: BackgroundTasks,
+    authorization: str | None = Header(default=None),
+):
     try:
         result = retrieval.hybrid_search(
             body.query,
             top_k=body.top_k,
             file_ids=body.file_ids or None,
             query_routes=body.query_routes or None,
-            usage_context=llm_usage.usage_context_from_job(
-                job_id=body.job_id,
-                run_id=body.run_id,
-                case_id=body.case_id,
-                job_attempt=body.job_attempt,
-            ),
+            usage_context=_search_usage_context(body, authorization),
         )
         if body.row_filter:
             result["hits"] = _annotate_row_filters(result.get("hits") or [], body.row_filter)
