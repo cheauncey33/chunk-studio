@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Eye, FileUp, History, Loader2, Play, RefreshCw, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Eye, FileUp, History, Loader2, Moon, Play, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, type AuditJobProgress, type AuditReportListItem, type CSFile, type Job } from '@/api'
 import { AuditResultViewer } from '@/components/audit-result-viewer'
-import { Badge } from '@/components/ui/input'
+import { Explain } from '@/components/explain'
+import { Badge, Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAssistants, useKnowledgeBases } from '@/hooks/use-knowledge-request'
@@ -21,7 +22,17 @@ import {
   formatAuditTime,
   statusVariant,
 } from '@/lib/audit-status'
+import { helpText } from '@/lib/help-text'
+import {
+  NIGHT_BATCH_MAX_REPORTS,
+  datetimeLocalToAwareIso,
+  defaultTonightDatetimeLocal,
+  friendlyBatchError,
+  isAwareIsoInPast,
+  localTimezoneLabel,
+} from '@/lib/night-batch'
 import { cn } from '@/lib/utils'
+import { NightBatchPanel } from './night-batch-panel'
 
 const DEFAULT_KB_ID = 'kb_uncategorized'
 /** Kept for later: auto route-and-run via api.routeAndRunAssistant. */
@@ -199,6 +210,8 @@ export default function WorkbenchPage() {
   const [runningFileId, setRunningFileId] = useState('')
   const [auditProgress, setAuditProgress] = useState<AuditJobProgress | null>(null)
   const [batchProgress, setBatchProgress] = useState<{ index: number; total: number } | null>(null)
+  const [scheduledAtLocal, setScheduledAtLocal] = useState(() => defaultTonightDatetimeLocal())
+  const [scheduling, setScheduling] = useState(false)
 
   useEffect(() => {
     setSelectedReportIds(prev => prev.filter(id => reportFiles.some(file => file.id === id)))
@@ -246,7 +259,46 @@ export default function WorkbenchPage() {
     () => reportFiles.filter(file => selectedReportIds.includes(file.id)),
     [reportFiles, selectedReportIds],
   )
-  const busy = phase === 'uploading' || phase === 'parsing' || phase === 'running'
+  const rightPanel = searchParams.get('panel') === 'batches' && !reportName ? 'batches' : 'history'
+  const selectedBatchId = rightPanel === 'batches' ? (searchParams.get('batch') || null) : null
+  const busy = phase === 'uploading' || phase === 'parsing' || phase === 'running' || scheduling
+
+  const filesQuery = useQuery({
+    queryKey: ['files'],
+    queryFn: () => api.listFiles(),
+    enabled: rightPanel === 'batches',
+    staleTime: 60_000,
+  })
+  const fileNameById = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const file of filesQuery.data || []) map.set(file.id, file.name)
+    for (const file of sessionReports) map.set(file.id, file.name)
+    return map
+  }, [filesQuery.data, sessionReports])
+  const assistantNames = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const item of selectableAssistants) {
+      map.set(item.id, item.knowledge_bases[0]?.name || item.name)
+    }
+    return map
+  }, [selectableAssistants])
+
+  const openHistoryPanel = () => {
+    setReportName('')
+    setResultCases([])
+    setPhase(prev => (prev === 'done' || prev === 'failed' ? 'idle' : prev))
+    setSearchParams({})
+  }
+
+  const openBatchPanel = (batchId?: string | null) => {
+    setReportName('')
+    setResultCases([])
+    setPhase(prev => (prev === 'done' || prev === 'failed' ? 'idle' : prev))
+    const next = new URLSearchParams()
+    next.set('panel', 'batches')
+    if (batchId) next.set('batch', batchId)
+    setSearchParams(next)
+  }
 
   const toggleReportSelected = (fileId: string) => {
     setSelectedReportIds(prev => (
@@ -394,6 +446,62 @@ export default function WorkbenchPage() {
     }
   }
 
+  const scheduleNightBatch = async () => {
+    if (!selectableAssistants.length) {
+      toast.error('还没有可用的审查助手（请先创建知识库并准备语料）')
+      return
+    }
+    if (!assistantId) {
+      toast.error('请选择审查助手')
+      return
+    }
+    if (!selectedReports.length) {
+      toast.error('请先勾选至少一份待审查报告')
+      return
+    }
+    if (selectedReports.length > NIGHT_BATCH_MAX_REPORTS) {
+      toast.error(`一次最多预约 ${NIGHT_BATCH_MAX_REPORTS} 份报告`)
+      return
+    }
+    const notReady = selectedReports.filter(
+      file => !file.parse_ready && file.parse_status !== 'done',
+    )
+    if (notReady.length) {
+      toast.error(`还有报告未解析完成：${notReady.map(file => file.name).join('、')}`)
+      return
+    }
+    let scheduledAt: string
+    try {
+      scheduledAt = datetimeLocalToAwareIso(scheduledAtLocal)
+    } catch (err) {
+      toast.error((err as Error).message)
+      return
+    }
+    if (isAwareIsoInPast(scheduledAt)) {
+      toast.error('开始时间已过，请选择今晚或之后的时间')
+      return
+    }
+
+    setScheduling(true)
+    setError('')
+    try {
+      const created = await api.createAuditBatch({
+        assistant_id: assistantId,
+        report_file_ids: selectedReports.map(file => file.id),
+        scheduled_at: scheduledAt,
+      })
+      await queryClient.invalidateQueries({ queryKey: ['audit-batches'] })
+      openBatchPanel(created.id)
+      toast.success(
+        `已预约 ${created.total} 份报告，将于 ${formatAuditTime(created.scheduled_at)} 开始`,
+      )
+    } catch (err) {
+      toast.error(friendlyBatchError(err, fileNameById))
+    } finally {
+      setScheduling(false)
+    }
+  }
+
   const counts = useMemo(() => {
     const tally: Record<string, number> = {}
     for (const item of resultCases) {
@@ -437,7 +545,7 @@ export default function WorkbenchPage() {
         <div>
           <h1 className="text-[18px] font-semibold tracking-tight">审查</h1>
           <p className="mt-1.5 text-[15px] leading-relaxed text-text-secondary">
-            可一次上传并勾选多份报告，手动选择审查助手后串行审查。右侧历史可回看不符项、PDF 与工作流。
+            可一次上传并勾选多份报告，立即串行审查，或预约夜间批次。右侧可回看历史审查与批次进度。
           </p>
         </div>
 
@@ -587,6 +695,43 @@ export default function WorkbenchPage() {
                   )}
                 </Button>
 
+                <div className="space-y-2 rounded-lg border border-border-button bg-bg-canvas px-3 py-2.5">
+                  <div>
+                    <Explain text={helpText.workbench.nightBatch} title="预约夜间审查">
+                      <span className="text-[15px] font-medium">预约夜间审查</span>
+                    </Explain>
+                  </div>
+                  <div>
+                    <Explain text={helpText.workbench.nightStart} title="开始时间">
+                      <label className="text-[13px] text-text-secondary" htmlFor="night-batch-start">
+                        开始时间（{localTimezoneLabel()}）
+                      </label>
+                    </Explain>
+                  </div>
+                  <Input
+                    id="night-batch-start"
+                    type="datetime-local"
+                    value={scheduledAtLocal}
+                    disabled={busy}
+                    onChange={e => setScheduledAtLocal(e.target.value)}
+                  />
+                  <p className="text-[12px] leading-relaxed text-text-secondary">
+                    按你电脑时区发送，例如 23:00 会带上 {localTimezoneLabel()}，不依赖服务器时区。
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full text-[15px]"
+                    disabled={busy || !selectedReports.length || !assistantId || selectableAssistants.length === 0}
+                    onClick={() => void scheduleNightBatch()}
+                  >
+                    {scheduling ? <Loader2 className="animate-spin" /> : <Moon />}
+                    {selectedReports.length > 1
+                      ? `预约夜间审查（${selectedReports.length} 份）`
+                      : '预约夜间审查'}
+                  </Button>
+                </div>
+
                 {(busy || statusText || auditProgress) && (
                   <div className="space-y-2 rounded-lg border border-border-button bg-bg-canvas px-3 py-2.5">
                     <p className="flex items-center gap-2 text-[14px] text-text-secondary">
@@ -647,22 +792,59 @@ export default function WorkbenchPage() {
 
           <Card className="flex min-h-[28rem] flex-col border-border-button bg-bg-base shadow-sm lg:min-h-0">
             <CardHeader className="flex-row items-start justify-between space-y-0">
-              <div>
-                <CardTitle className="flex items-center gap-2 text-[17px]">
-                  {reportName ? (
-                    '2. 审查结果'
-                  ) : (
-                    <>
-                      <History className="size-4 text-accent-primary" />
-                      历史审查
-                    </>
-                  )}
-                </CardTitle>
-                <CardDescription className="text-[15px]">
-                  {reportName
-                    ? `共 ${resultCases.length} 项判定`
-                    : '相同文件名合并；展开可按时间查看各版本。'}
-                </CardDescription>
+              <div className="min-w-0">
+                {reportName ? (
+                  <>
+                    <CardTitle className="flex items-center gap-2 text-[17px]">
+                      2. 审查结果
+                    </CardTitle>
+                    <CardDescription className="text-[15px]">
+                      共 {resultCases.length} 项判定
+                    </CardDescription>
+                  </>
+                ) : (
+                  <>
+                    <div className="inline-flex rounded-full bg-[#f3f4f6] p-1 dark:bg-bg-card">
+                      <button
+                        type="button"
+                        className={cn(
+                          'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] font-semibold',
+                          rightPanel === 'history'
+                            ? 'bg-[#111827] text-white dark:bg-white dark:text-[#111827]'
+                            : 'text-[#4b5563] hover:text-[#111827] dark:text-text-secondary',
+                        )}
+                        onClick={openHistoryPanel}
+                      >
+                        <History className="size-3.5" />
+                        历史审查
+                      </button>
+                      <button
+                        type="button"
+                        className={cn(
+                          'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] font-semibold',
+                          rightPanel === 'batches'
+                            ? 'bg-[#111827] text-white dark:bg-white dark:text-[#111827]'
+                            : 'text-[#4b5563] hover:text-[#111827] dark:text-text-secondary',
+                        )}
+                        onClick={() => openBatchPanel(selectedBatchId)}
+                      >
+                        <Moon className="size-3.5" />
+                        夜间批次
+                      </button>
+                    </div>
+                    {rightPanel === 'batches' ? (
+                      <div className="mt-2 text-[15px] text-text-secondary">
+                        <Explain text={helpText.workbench.nightList} title="夜间批次">
+                          <span>进度、失败报告、Token 与成本按批次汇总。</span>
+                        </Explain>
+                      </div>
+                    ) : (
+                      <CardDescription className="mt-2 text-[15px]">
+                        相同文件名合并；展开可按时间查看各版本。
+                      </CardDescription>
+                    )}
+                  </>
+                )}
               </div>
               <div className="flex gap-2">
                 {reportName ? (
@@ -671,12 +853,7 @@ export default function WorkbenchPage() {
                       type="button"
                       size="sm"
                       variant="ghost"
-                      onClick={() => {
-                        setReportName('')
-                        setResultCases([])
-                        setPhase('idle')
-                        setSearchParams({})
-                      }}
+                      onClick={openHistoryPanel}
                     >
                       历史
                     </Button>
@@ -703,8 +880,17 @@ export default function WorkbenchPage() {
                     type="button"
                     size="sm"
                     variant="ghost"
-                    disabled={historyQuery.isFetching}
-                    onClick={() => void historyQuery.refetch()}
+                    disabled={rightPanel === 'batches' ? false : historyQuery.isFetching}
+                    onClick={() => {
+                      if (rightPanel === 'batches') {
+                        void queryClient.invalidateQueries({ queryKey: ['audit-batches'] })
+                        if (selectedBatchId) {
+                          void queryClient.invalidateQueries({ queryKey: ['audit-batch', selectedBatchId] })
+                        }
+                        return
+                      }
+                      void historyQuery.refetch()
+                    }}
                   >
                     <RefreshCw className={cn('size-3.5', historyQuery.isFetching && 'animate-spin')} />
                   </Button>
@@ -712,7 +898,15 @@ export default function WorkbenchPage() {
               </div>
             </CardHeader>
             <CardContent className="flex min-h-0 flex-1 flex-col">
-              {!reportName && (
+              {!reportName && rightPanel === 'batches' && (
+                <NightBatchPanel
+                  selectedBatchId={selectedBatchId}
+                  onSelectBatch={id => openBatchPanel(id)}
+                  fileNameById={fileNameById}
+                  assistantNames={assistantNames}
+                />
+              )}
+              {!reportName && rightPanel === 'history' && (
                 <div className="min-h-0 flex-1 space-y-2.5 overflow-auto">
                   {phase === 'failed' && error ? (
                     <p className="rounded-lg border border-state-error/30 bg-[#fff1f0] px-3 py-2 text-[14px] text-state-error">

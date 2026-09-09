@@ -138,6 +138,98 @@ export interface Job {
   finished_at: string | null
 }
 
+export type AuditBatchStatus =
+  | 'scheduled'
+  | 'running'
+  | 'completed'
+  | 'partial_failed'
+  | 'failed'
+  | string
+
+export interface UsageSummaryCompact {
+  request_count: number
+  total_tokens: number
+  known_cost_microunits: number
+  cost_microunits: number | null
+  cost_complete: boolean
+  currency: string
+  pricing_missing?: boolean
+  pricing_missing_event_count?: number
+  usage_unknown_event_count?: number
+}
+
+export interface AuditBatchListItem {
+  id: string
+  status: AuditBatchStatus
+  scheduled_at: string
+  created_at: string
+  mode: string
+  total: number
+  completed: number
+  failed: number
+  total_tokens: number
+  known_cost_microunits: number
+  cost_microunits: number | null
+  cost_complete: boolean
+}
+
+export interface AuditBatchItem {
+  id: string
+  report_file_id: string
+  audit_job_id: string
+  ordinal: number
+  status: string
+  attempts: number
+  resumed: boolean
+  resumed_case_count: number
+  run_id: string
+  batch_id: string
+  batch_item_id: string
+}
+
+export interface AuditBatchProgress {
+  finished: number
+  total: number
+  percent: number
+}
+
+export interface AuditBatchDetail {
+  id: string
+  workspace_id: string
+  assistant_id: string
+  naming_rule_file_id: string | null
+  mode: string
+  status: AuditBatchStatus
+  scheduled_at: string
+  max_concurrency: number
+  created_by: string
+  created_at: string
+  updated_at: string
+  started_at: string | null
+  finished_at: string | null
+  total: number
+  scheduled: number
+  queued: number
+  running: number
+  completed: number
+  failed: number
+  progress: AuditBatchProgress
+  usage: UsageSummaryCompact
+  items: AuditBatchItem[]
+}
+
+export interface AuditBatchCreateResponse {
+  id: string
+  mode: string
+  status: AuditBatchStatus
+  scheduled_at: string
+  max_concurrency: number
+  assistant_id: string
+  naming_rule_file_id: string | null
+  total: number
+  jobs: Job[]
+}
+
 export interface DocumentParse {
   id: string
   file_id: string
@@ -1059,6 +1151,22 @@ export const api = {
     const query = qs.toString()
     return fetch(`${API}/jobs${query ? `?${query}` : ''}`).then(j<Job[]>)
   },
+  createAuditBatch: (body: {
+    assistant_id: string
+    report_file_ids: string[]
+    scheduled_at: string
+    naming_rule_file_id?: string | null
+    max_concurrency?: number
+  }) =>
+    fetch(`${API}/audit-batches`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j<AuditBatchCreateResponse>),
+  listAuditBatches: (limit = 50) =>
+    fetch(`${API}/audit-batches?limit=${limit}`).then(j<AuditBatchListItem[]>),
+  getAuditBatch: (batchId: string) =>
+    fetch(`${API}/audit-batches/${encodeURIComponent(batchId)}`).then(j<AuditBatchDetail>),
 
   listFields: () => fetch(`${API}/fields`).then(j<FieldConfig[]>),
   upsertField: (f: FieldConfig) =>
