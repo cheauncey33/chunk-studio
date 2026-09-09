@@ -159,10 +159,10 @@ def test_workflow_trace_includes_agent_node_and_skips_planner() -> None:
     assert agent_node["configuration"]["judge_mode"] == "agent"
 
 
-def test_workflow_trace_keeps_retrieval_when_agent_is_evidence_fallback() -> None:
+def test_workflow_trace_keeps_retrieval_when_agent_is_production_judge() -> None:
     payload = {
-        "judge_mode": "retrieve_caliber_agent",
-        "judge_provider": "caliber+pi-agent",
+        "judge_mode": "retrieve_agent",
+        "judge_provider": "pi-agent",
         "workflow_definition": {
             "provider_config": {"provider": "deepseek"},
             "global_trace": {

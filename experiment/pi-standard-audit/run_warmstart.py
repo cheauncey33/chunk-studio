@@ -284,6 +284,12 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "zero_read_cases": sum(1 for r in rows if int(r.get("read_chunks") or 0) == 0),
         "search_zero_count": sum(1 for r in rows if r.get("search_zero")),
         "coverage_gaps": sum(1 for r in rows if r.get("corpus_answerable") is False),
+        "protocol_error_count": sum(1 for r in rows if r.get("protocol_error")),
+        "raw_final_flip_count": sum(
+            1
+            for r in rows
+            if r.get("raw_verdict") and r.get("verdict") and r.get("raw_verdict") != r.get("verdict")
+        ),
     }
 
 
@@ -357,6 +363,12 @@ def main() -> None:
     out_path = Path(args.out)
     out_path.write_text(json.dumps(report_out, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"summary": report_out["summary"], "by_source": report_out["by_source"]}, ensure_ascii=False, indent=2))
+    summary = report_out["summary"]
+    print(
+        f"invariants: raw_final_flip_count={summary.get('raw_final_flip_count')} "
+        f"protocol_error_count={summary.get('protocol_error_count')} "
+        f"zero_read={summary.get('zero_read_cases')}"
+    )
     watch = ("e05_tand_unit_equiv", "hbjc-4-r2", "hbjc-13-r4")
     print("watch:")
     by_id = {str(row["case_id"]): row for row in rows}

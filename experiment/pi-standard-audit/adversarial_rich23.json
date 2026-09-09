@@ -682,9 +682,10 @@
       "edit_kind": "unit_equivalence",
       "corpus_answerable": false,
       "corpus_gold": "unevaluable",
+      "failure_type": "corpus_coverage_gap",
       "judgment": {
         "status": "supported",
-        "reason": "1% 与 0.010 等价；应仍支持。当前知识库未收录 GB/T 7595 / GB 2536 等油质限值标准，corpus_gold=unevaluable。"
+        "reason": "1% 与 0.010 等价；应仍支持。当前知识库未收录 GB/T 7595 / GB 2536 等油质限值标准，corpus_gold=unevaluable。failure_type=corpus_coverage_gap：补库后再回归，不要调 Agent。"
       }
     },
     {

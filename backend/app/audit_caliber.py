@@ -1,14 +1,8 @@
-"""Executable form of the standard-value audit caliber.
+"""Deterministic numeric helpers for standard-value audit.
 
-``evaluation/caliber/caliber_v1.json`` is the single authority for adjudication
-(spec: ``evaluation/caliber/standard_value_audit_caliber_v1.md``).  This module
-executes those rules so that gold derivation and production judging share one
-implementation instead of two prose copies that drift apart.
-
-The entry point is :func:`derive`, which turns a reported requirement plus a
-structured standard fact into ``{verdict, kind, flags, scoreable, derivation}``.
-A verdict without ``derivation.rules`` is invalid by contract, so every exit
-path records the rule identifiers it applied.
+This module is not a second production judge. Agent verdicts are authoritative
+for match/mismatch. Use ``derive`` for unit conversion, comparators, gold
+derivation, and offline regression — never to overwrite an agent verdict.
 """
 from __future__ import annotations
 

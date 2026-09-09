@@ -1169,7 +1169,7 @@ def test_run_audit_judge_stays_open_when_no_table_claim(monkeypatch) -> None:
     assert judgment["authority_closed"] is False
 
 
-def test_run_audit_judge_closes_from_agent_standard_fact(monkeypatch) -> None:
+def test_run_audit_judge_keeps_agent_verdict_without_caliber_rejudge(monkeypatch) -> None:
     def fake_call_model(prompt: str, payload: dict, *, model: str):
         raise AssertionError("agent evidence is not an LLM judge call")
 
@@ -1179,9 +1179,12 @@ def test_run_audit_judge_closes_from_agent_standard_fact(monkeypatch) -> None:
         return {
             "ok": True,
             "result": {
+                "verdict": "match",
+                "kind": "exact",
                 "standard_value": "75 kV",
                 "standard_no": "GB/T 1094.3-2017",
-                "evidence": [{"candidate_key": "c01", "content_type": "table", "text": "雷电冲击 75 kV"}],
+                "reasoning": "表2 冲击电压 75 kV",
+                "evidence": [{"chunk_id": "c01", "source": "GB/T 1094.3-2017", "location": "表2"}],
             },
         }
 
@@ -1200,8 +1203,9 @@ def test_run_audit_judge_closes_from_agent_standard_fact(monkeypatch) -> None:
 
     assert judgment["status"] == "supported"
     assert judgment["verdict"] == "match"
-    assert trace["judge_source"] == "programmatic_caliber"
-    assert trace["table_claim_path"]["caliber"]["source"] == "agent_retrieved"
+    assert judgment["kind"] == "exact"
+    assert trace["judge_source"] == "agent"
+    assert trace["table_claim_path"]["caliber"]["deferred_to_agent"] is True
     assert "agent_audit" in trace
 
 

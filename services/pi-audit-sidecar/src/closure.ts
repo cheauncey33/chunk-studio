@@ -49,6 +49,33 @@ export function closeEvidence(input: {
 	return { applied: true, passed: true, mode: "read", reason: "cited_chunks_read" };
 }
 
+/**
+ * Protocol repair: if match/mismatch cited nothing but exactly one chunk was
+ * read, that is the only legal citation. Does not change the verdict.
+ */
+export function repairMissingCitation<T extends Record<string, unknown>>(
+	result: T | null,
+	readBodies?: Map<string, string> | Record<string, string>,
+): { result: T | null; repaired: boolean } {
+	if (!result) return { result, repaired: false };
+	const verdict = String(result.verdict || "");
+	if (verdict !== "match" && verdict !== "mismatch") {
+		return { result, repaired: false };
+	}
+	const bodies = asBodyMap(readBodies);
+	const evidence = Array.isArray(result.evidence)
+		? (result.evidence as Array<Record<string, unknown>>)
+		: [];
+	if (evidence.map(citedChunkId).filter(Boolean).length > 0) {
+		return { result, repaired: false };
+	}
+	if (bodies.size !== 1) return { result, repaired: false };
+	const chunkId = [...bodies.keys()][0];
+	const next = evidence.length > 0 ? evidence.map((item) => ({ ...item })) : [{}];
+	next[0] = { ...next[0], chunk_id: chunkId };
+	return { result: { ...result, evidence: next }, repaired: true };
+}
+
 /** Replace agent-written evidence.text with the bodies actually returned by read_chunk. */
 export function attachAuthoritativeEvidence<T extends Record<string, unknown>>(
 	result: T | null,
@@ -86,16 +113,18 @@ export function applyEvidenceClosure<T extends Record<string, unknown>>(
 			raw_kind: null,
 		};
 	}
-	const evidence = Array.isArray(result.evidence)
-		? (result.evidence as Array<Record<string, unknown>>)
+	const repaired = repairMissingCitation(result, readBodies);
+	const sealed = repaired.result ?? result;
+	const evidence = Array.isArray(sealed.evidence)
+		? (sealed.evidence as Array<Record<string, unknown>>)
 		: [];
 	const closure = closeEvidence({
-		verdict: result.verdict,
+		verdict: sealed.verdict,
 		evidence,
 		readBodies,
 	});
 	return {
-		result: attachAuthoritativeEvidence(result, readBodies),
+		result: attachAuthoritativeEvidence(sealed, readBodies),
 		closure,
 		raw_verdict: result.verdict,
 		raw_kind: result.kind,

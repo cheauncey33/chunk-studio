@@ -481,11 +481,30 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 		readBodies,
 	});
 	if (!promptError && firstProvenance.applied && !firstProvenance.passed) {
+		const readIds = [...readBodies.keys()];
+		const idBlock =
+			readIds.length > 0
+				? `本会话已经 read_chunk 的 chunk_id：\n${readIds.map((id) => `- ${id}`).join("\n")}\n`
+				: "";
 		await repromptOnce(
 			`你给出了 match/mismatch，但证据引用未通过来源核对（${firstProvenance.reason}）。` +
-				`请仅补充本会话已经 read_chunk 过的 chunk_id（source/location 可保留），不要写 evidence.text，不要改变判定。`,
+				idBlock +
+				`不要重新判断。请原样保留刚才的 verdict 和 kind，只返回实际读过的 evidence chunk_id（source/location 可保留）。不要写 evidence.text。`,
 			"citation protocol re-prompt",
 		);
+		if (parsed.value && isMatchMismatch({ verdict: firstRawVerdict })) {
+			parsed.value.verdict = firstRawVerdict;
+			if (firstRawKind !== undefined) parsed.value.kind = firstRawKind;
+		} else if (!parsed.value && isMatchMismatch({ verdict: firstRawVerdict })) {
+			parsed = {
+				...parsed,
+				value: {
+					verdict: firstRawVerdict,
+					kind: firstRawKind,
+					evidence: [],
+				},
+			};
+		}
 	}
 	session.dispose();
 

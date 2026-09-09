@@ -191,9 +191,9 @@ RUN_IN_PROCESS_WORKER = os.environ.get(
     "0" if _postgres_profile else "1",
 ).strip().casefold() in {"1", "true", "yes", "on"}
 
-# Single pipeline: retrieve → caliber → Pi agent evidence if the cell did not close.
-# The env name is kept so older deployments still parse; it no longer switches
-# away from retrieval.
+# Single pipeline: retrieve → first-round locator pool → Pi agent.
+# Caliber is a deterministic utility (units, comparators, out-of-scope prefilter),
+# not a second judge. The env name is kept so older deployments still parse.
 AUDIT_JUDGE_MODE = os.environ.get(
     "CHUNK_STUDIO_AUDIT_JUDGE_MODE",
     os.environ.get("AUDIT_JUDGE_MODE", "workflow"),

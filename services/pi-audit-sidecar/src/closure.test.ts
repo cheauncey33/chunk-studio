@@ -106,6 +106,38 @@ test("failed provenance does not rewrite match/mismatch to unevaluable", () => {
 	assert.equal(applied.closure.reason, "cited_chunks_not_read");
 });
 
+test("sole read chunk fills a missing citation without changing the verdict", () => {
+	const applied = applyEvidenceClosure(
+		{
+			verdict: "mismatch",
+			kind: "wrong_condition",
+			evidence: [],
+		},
+		{ sc: "试验次数 3 次" },
+	);
+	assert.equal(applied.result?.verdict, "mismatch");
+	assert.equal(applied.result?.kind, "wrong_condition");
+	assert.equal(applied.closure.passed, true);
+	assert.equal(
+		(applied.result?.evidence as Array<Record<string, unknown>>)[0].chunk_id,
+		"sc",
+	);
+});
+
+test("multiple unread options are not auto-picked as citations", () => {
+	const applied = applyEvidenceClosure(
+		{
+			verdict: "mismatch",
+			kind: "wrong_condition",
+			evidence: [],
+		},
+		{ a: "one", b: "two" },
+	);
+	assert.equal(applied.result?.verdict, "mismatch");
+	assert.equal(applied.closure.passed, false);
+	assert.equal(applied.closure.reason, "no_cited_chunk");
+});
+
 test("unevaluable is not rewritten by the provenance guard", () => {
 	const applied = applyEvidenceClosure({
 		verdict: "unevaluable",
