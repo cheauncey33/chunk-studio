@@ -213,7 +213,7 @@ def test_audit_worker_pool_runs_jobs_concurrently(monkeypatch) -> None:
     assert max_running == 3
 
 
-def test_run_assistant_audit_forwards_judge_concurrency(monkeypatch, tmp_path: Path) -> None:
+def test_run_assistant_audit_forwards_judge_concurrency_cap(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(audit_run.config, "DATA_DIR", tmp_path)
     script = tmp_path / "workflow.py"
     script.write_text("# placeholder\n", encoding="utf-8")
@@ -239,10 +239,11 @@ def test_run_assistant_audit_forwards_judge_concurrency(monkeypatch, tmp_path: P
         job_id="job_case_cap",
         run_id="job_case_cap",
         report_name="end_to_end_audit_oil_transformer_audit_job_case_cap.json",
-        judge_concurrency=5,
+        judge_concurrency_cap=5,
     )
-    assert "--judge-concurrency" in captured[0]
-    assert captured[0][captured[0].index("--judge-concurrency") + 1] == "5"
+    assert "--judge-concurrency-cap" in captured[0]
+    assert captured[0][captured[0].index("--judge-concurrency-cap") + 1] == "5"
+    assert "--judge-concurrency" not in captured[0]
 
     captured.clear()
     audit_run.run_assistant_audit(
@@ -253,6 +254,7 @@ def test_run_assistant_audit_forwards_judge_concurrency(monkeypatch, tmp_path: P
         report_name="end_to_end_audit_oil_transformer_audit_job_interactive.json",
     )
     assert "--judge-concurrency" not in captured[0]
+    assert "--judge-concurrency-cap" not in captured[0]
 
 
 def test_batch_audit_job_passes_case_concurrency_cap(monkeypatch) -> None:
@@ -283,7 +285,8 @@ def test_batch_audit_job_passes_case_concurrency_cap(monkeypatch) -> None:
         },
     }
     asyncio.run(jobs._run_audit_job(batch_job))
-    assert captured["judge_concurrency"] == 5
+    assert captured["judge_concurrency_cap"] == 5
+    assert captured.get("judge_concurrency") is None
 
     captured.clear()
     interactive = {
@@ -299,7 +302,8 @@ def test_batch_audit_job_passes_case_concurrency_cap(monkeypatch) -> None:
         },
     }
     asyncio.run(jobs._run_audit_job(interactive))
-    assert captured["judge_concurrency"] is None
+    assert captured["judge_concurrency_cap"] is None
+    assert captured.get("judge_concurrency") is None
 
 
 def test_postgres_audit_claim_uses_advisory_lock_and_scan_limit(monkeypatch) -> None:
@@ -367,5 +371,99 @@ def test_postgres_audit_claim_uses_advisory_lock_and_scan_limit(monkeypatch) -> 
     assert claimed[0]["status"] == "running"
     assert "pg_advisory_xact_lock" in connection.sql[0]
     assert "FOR UPDATE SKIP LOCKED" in connection.sql[1]
-    assert connection.params[1][-1] == audit_claim.AUDIT_CLAIM_SCAN_LIMIT
+    assert "OFFSET" in connection.sql[1]
+    assert connection.params[1][-2] == audit_claim.AUDIT_CLAIM_SCAN_LIMIT
+    assert connection.params[1][-1] == 0
     assert "locked_until" in connection.sql[2]
+
+
+def test_postgres_audit_claim_pages_past_a_full_batch(monkeypatch) -> None:
+    monkeypatch.setattr(audit_claim, "AUDIT_CLAIM_SCAN_LIMIT", 2)
+    monkeypatch.setattr(config, "AUDIT_BATCH_GLOBAL_SLOTS", 3)
+
+    def queued(job_id: str, batch_id: str) -> dict[str, object]:
+        return {
+            "id": job_id,
+            "type": "audit",
+            "status": "queued",
+            "result": {"batch_id": batch_id},
+            "attempts": 0,
+            "max_attempts": 2,
+        }
+
+    pages = {
+        0: [queued("a-2", "batch-a"), queued("a-3", "batch-a")],
+        2: [queued("b-1", "batch-b")],
+    }
+
+    class Result:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def fetchall(self):
+            return self.rows
+
+        def fetchone(self):
+            return self.rows[0] if self.rows else None
+
+    class Connection:
+        def __init__(self):
+            self.sql: list[str] = []
+            self.params: list[object] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement, params=None):
+            self.sql.append(statement)
+            self.params.append(params)
+            if "pg_advisory_xact_lock" in statement:
+                return Result([])
+            if "SELECT * FROM jobs" in statement:
+                offset = int(params[-1])
+                return Result(list(pages.get(offset) or []))
+            if "FROM audit_batches" in statement:
+                batch_id = params[0]
+                return Result([{"max_concurrency": 1 if batch_id == "batch-a" else 2}])
+            if "COUNT(*)" in statement and "i.batch_id" in statement:
+                batch_id = params[0]
+                return Result([{"n": 1 if batch_id == "batch-a" else 0}])
+            if "COUNT(*)" in statement:
+                return Result([{"n": 1}])
+            job_id = params[-1]
+            return Result(
+                [
+                    {
+                        "id": job_id,
+                        "type": "audit",
+                        "status": "running",
+                        "result": {"batch_id": "batch-b"},
+                        "attempts": 1,
+                        "max_attempts": 2,
+                    }
+                ]
+            )
+
+    connection = Connection()
+    monkeypatch.setattr(
+        PostgresJobRepository,
+        "_connect",
+        lambda _self: connection,
+    )
+    claimed = PostgresJobRepository("postgresql://test").claim_pending(
+        "worker-1", job_types={"audit"}
+    )
+    assert [job["id"] for job in claimed] == ["b-1"]
+    job_selects = [params for sql, params in zip(connection.sql, connection.params) if "SELECT * FROM jobs" in sql]
+    assert job_selects[0][-1] == 0
+    assert job_selects[1][-1] == 2
+
+
+def test_night_batch_global_slots_reserve_an_interactive_worker() -> None:
+    assert config.normalize_night_batch_global_slots(4, 3) == 3
+    assert config.normalize_night_batch_global_slots(2, 3) == 1
+    assert config.normalize_night_batch_global_slots(1, 3) == 1
+    assert config.normalize_night_batch_global_slots(8, 10) == 7

@@ -1337,7 +1337,7 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
         if stored_name
         else audit_run.audit_run_identity(assistant_id=assistant_id, run_id=run_id)
     )
-    judge_concurrency = (
+    judge_concurrency_cap = (
         int(config.AUDIT_BATCH_CASE_CONCURRENCY)
         if audit_claim.is_batch_audit_job(job)
         else None
@@ -1369,7 +1369,7 @@ async def _run_audit_job(job: dict[str, Any]) -> None:
             run_id=identity["run_id"],
             report_name=identity["report_name"],
             job_attempt=int(job.get("attempts") or 1),
-            judge_concurrency=judge_concurrency,
+            judge_concurrency_cap=judge_concurrency_cap,
         )
     except JobFailure as exc:
         _fail_job(job, str(exc), retryable=exc.retryable, error_code=exc.code)

@@ -2336,6 +2336,21 @@ def _resolve_judge_concurrency(
     return min(value, MAX_JUDGE_CONCURRENCY)
 
 
+def _apply_judge_concurrency_cap(value: int, cap: int | None) -> int:
+    """Never raise the resolved case concurrency; only clamp it down."""
+    if cap is None:
+        return int(value)
+    try:
+        limit = int(cap)
+    except (TypeError, ValueError) as exc:
+        raise NonRetryableJobError(
+            f"judge_concurrency_cap must be an integer, got {cap!r}"
+        ) from exc
+    if limit < 1:
+        raise NonRetryableJobError("judge_concurrency_cap must be >= 1")
+    return min(int(value), limit)
+
+
 def _sample_profile_with_recovery(
     sample_profile: dict[str, Any],
     recovered_parameters: list[dict[str, Any]],
@@ -3155,6 +3170,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--judge-concurrency-cap",
+        type=int,
+        default=None,
+        help=(
+            "upper bound on resolved case concurrency. Never raises a lower "
+            "CLI / env / model_config value."
+        ),
+    )
+    parser.add_argument(
         "--judge-mode",
         choices=("workflow", "agent"),
         default=str(os.environ.get("AUDIT_JUDGE_MODE") or "workflow").strip().lower(),
@@ -3195,9 +3219,12 @@ def main() -> None:
     )
     configured_model = str(profile["model_config"].get("model") or "deepseek-v4-flash")
     judge_model = args.judge_model or configured_model
-    judge_concurrency = _resolve_judge_concurrency(
-        args.judge_concurrency,
-        profile.get("model_config") if isinstance(profile.get("model_config"), dict) else {},
+    judge_concurrency = _apply_judge_concurrency_cap(
+        _resolve_judge_concurrency(
+            args.judge_concurrency,
+            profile.get("model_config") if isinstance(profile.get("model_config"), dict) else {},
+        ),
+        args.judge_concurrency_cap,
     )
     print(
         f"pipeline=retrieve+agent sidecar={args.agent_sidecar_url} "

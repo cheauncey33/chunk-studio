@@ -768,39 +768,54 @@ class PostgresJobRepository:
             if audit_aware
             else bounded_limit
         )
-        params.append(scan_limit)
         with self._connect() as conn:
             if audit_aware:
                 conn.execute(
                     "SELECT pg_advisory_xact_lock(%s)",
                     (audit_claim.AUDIT_CLAIM_ADVISORY_LOCK_KEY,),
                 )
-            rows = conn.execute(
-                """SELECT * FROM jobs
-                   WHERE """ + " AND ".join(clauses) + """
-                   ORDER BY priority DESC, created_at
-                   LIMIT %s FOR UPDATE SKIP LOCKED""",
-                params,
-            ).fetchall()
             claimed: list[dict[str, Any]] = []
-            for row in rows:
-                job = self._job(row)
-                if audit_aware and not self._postgres_batch_claim_ok(conn, job):
-                    continue
-                updated = conn.execute(
-                    """UPDATE jobs
-                       SET status='running', attempts=attempts+1,
-                           started_at=COALESCE(started_at, now()),
-                           locked_by=%s,
-                           locked_until=now() + (%s * interval '1 second')
-                       WHERE id=%s AND (status='queued' OR (status='running' AND locked_until < now()))
-                       RETURNING *""",
-                    (worker_id, max(1, int(lease_seconds)), row["id"]),
-                ).fetchone()
-                if updated:
-                    claimed.append(self._job(updated))
-                    if len(claimed) >= bounded_limit:
-                        break
+            offset = 0
+            while len(claimed) < bounded_limit:
+                page_params = list(params)
+                if audit_aware:
+                    page_params.extend([scan_limit, offset])
+                    limit_sql = " LIMIT %s OFFSET %s FOR UPDATE SKIP LOCKED"
+                else:
+                    page_params.append(bounded_limit)
+                    limit_sql = " LIMIT %s FOR UPDATE SKIP LOCKED"
+                rows = conn.execute(
+                    """SELECT * FROM jobs
+                       WHERE """ + " AND ".join(clauses) + """
+                       ORDER BY priority DESC, created_at"""
+                    + limit_sql,
+                    page_params,
+                ).fetchall()
+                if not rows:
+                    break
+                for row in rows:
+                    job = self._job(row)
+                    if audit_aware and not self._postgres_batch_claim_ok(conn, job):
+                        continue
+                    updated = conn.execute(
+                        """UPDATE jobs
+                           SET status='running', attempts=attempts+1,
+                               started_at=COALESCE(started_at, now()),
+                               locked_by=%s,
+                               locked_until=now() + (%s * interval '1 second')
+                           WHERE id=%s AND (status='queued' OR (status='running' AND locked_until < now()))
+                           RETURNING *""",
+                        (worker_id, max(1, int(lease_seconds)), row["id"]),
+                    ).fetchone()
+                    if updated:
+                        claimed.append(self._job(updated))
+                        if len(claimed) >= bounded_limit:
+                            break
+                if not audit_aware or len(claimed) >= bounded_limit:
+                    break
+                if len(rows) < scan_limit:
+                    break
+                offset += scan_limit
         return claimed
 
     @staticmethod

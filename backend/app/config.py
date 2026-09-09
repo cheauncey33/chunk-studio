@@ -214,19 +214,34 @@ AUDIT_JOB_TIMEOUT_SECONDS = _positive_int_env(
     "CHUNK_STUDIO_AUDIT_JOB_TIMEOUT_SECONDS",
     4 * 60 * 60,
 )
-# Concurrent audit jobs in one worker process. One slot stays available for
-# interactive audits because Night Batch is capped separately below.
+# Concurrent audit jobs in one worker process.
 AUDIT_WORKER_CONCURRENCY = min(
     16,
     _positive_int_env("CHUNK_STUDIO_AUDIT_WORKER_CONCURRENCY", 4),
 )
-# System-wide cap on running Night Batch report jobs (all batches, all workers).
-AUDIT_BATCH_GLOBAL_SLOTS = min(
-    32,
-    _positive_int_env("CHUNK_STUDIO_AUDIT_BATCH_GLOBAL_SLOTS", 3),
+
+
+def normalize_night_batch_global_slots(
+    worker_concurrency: int,
+    configured_slots: int,
+) -> int:
+    """Keep at least one audit worker free for interactive jobs.
+
+    With a single worker there is no spare slot, so the batch cap stays 1.
+    """
+    workers = max(1, int(worker_concurrency))
+    slots = max(1, int(configured_slots))
+    return min(slots, max(1, workers - 1))
+
+
+# System-wide cap on running Night Batch report jobs. Never occupies every
+# in-process audit worker, so interactive audits can still claim a slot.
+AUDIT_BATCH_GLOBAL_SLOTS = normalize_night_batch_global_slots(
+    AUDIT_WORKER_CONCURRENCY,
+    min(32, _positive_int_env("CHUNK_STUDIO_AUDIT_BATCH_GLOBAL_SLOTS", 3)),
 )
-# Case-level ThreadPool cap for Night Batch reports. Interactive audits keep
-# model_config / AUDIT_JUDGE_CONCURRENCY (typically 8).
+# Upper bound on Night Batch case threads. Does not raise a lower
+# model_config / AUDIT_JUDGE_CONCURRENCY value.
 AUDIT_BATCH_CASE_CONCURRENCY = min(
     16,
     _positive_int_env("CHUNK_STUDIO_AUDIT_BATCH_CASE_CONCURRENCY", 5),

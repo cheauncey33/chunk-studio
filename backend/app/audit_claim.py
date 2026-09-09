@@ -10,8 +10,8 @@ from typing import Any
 from . import config
 
 
-# Peek extra queued rows so a batch-at-capacity job does not hide an interactive
-# job behind LIMIT 1.
+# Page size for Postgres audit claim scans. Full batches are skipped and the
+# next page is read until an eligible job is found or the queue is exhausted.
 AUDIT_CLAIM_SCAN_LIMIT = 32
 # Session-scoped Postgres lock so two workers cannot both observe running=2
 # and claim the last global/batch slot.

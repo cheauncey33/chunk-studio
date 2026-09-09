@@ -1630,6 +1630,15 @@ def test_resolve_judge_concurrency_priority_and_bounds(monkeypatch) -> None:
         workflow._resolve_judge_concurrency(0, {})
 
 
+def test_apply_judge_concurrency_cap_never_raises_a_lower_value() -> None:
+    assert workflow._apply_judge_concurrency_cap(8, 5) == 5
+    assert workflow._apply_judge_concurrency_cap(3, 5) == 3
+    assert workflow._apply_judge_concurrency_cap(1, 5) == 1
+    assert workflow._apply_judge_concurrency_cap(8, None) == 8
+    with pytest.raises(workflow.NonRetryableJobError, match="judge_concurrency_cap"):
+        workflow._apply_judge_concurrency_cap(8, 0)
+
+
 def test_agent_verdict_maps_to_production_status() -> None:
     assert workflow.AGENT_VERDICT_TO_STATUS == {
         "match": "supported",
