@@ -23,6 +23,7 @@ description: 检测报告标准值审查（standard-value audit）。给定被�
 - **search_standards(query, file_ids?, top_k?)**：混合检索标准知识库。返回定位预览（表题/列名/行绑定状态，或条款命中窗口），不含表格数值。query 写成完整自然语言检索式。file_ids 可用来把检索限定在某一标准文档内。
 - **read_chunk(chunk_id)**：读取某个检索命中的标准片段全文（含表格数值）。判定必须依据本工具，不能凭 search 预览。
 - **read_report(report_name)**：读取检测报告原文分段（需要核对待审查对象时用）。
+- **search_report_context(terms, max_results?)**：在当前正在审查的检测报告正文里按字面词检索，返回命中窗口。用于补样本/试验事实（油箱结构、绝缘油类型、短路阻抗、绕组型式等）。不能用来检索标准限值。
 
 ## 审查步骤（自行判断，无需按部就班）
 
@@ -47,7 +48,7 @@ description: 检测报告标准值审查（standard-value audit）。给定被�
 - **kind 优先级**：同一问题同时符合多个 mismatch kind 时，选最能刻画错误机制的——`comparator_flip` / `wrong_level` / `wrong_condition` / `wrong_label` / `magnitude_error` / `bandwidth_exceeded` 优先于 `numeric_looser` / `numeric_tighter`（后者仅在问题只是单纯数值宽严时使用）。
 - **禁止**用行业常识、工程经验填补标准值。证据不足时如实判 `unevaluable`（检索不到标准用 `standard_not_found`，缺适用性参数用 `applicability_undetermined`）。
 - 允许通过标准证据补充标准侧的限值、公式、适用规则和允许偏差；不得凭行业常识、型号经验或猜测，补充报告中未提供的产品事实、试验事实或样品事实。
-- 报告未给出样品/试验事实时判 `unevaluable` + `applicability_undetermined`。标准侧适用规则应 `read_chunk` 后继续判定，不得仅因“还要读标准规则”而 `unevaluable`。
+- 报告未给出样品/试验事实时，先 `search_report_context` 按字面检索当前检测报告正文；窗口里没有的才判 `unevaluable` + `applicability_undetermined`。标准侧适用规则应 `read_chunk` 后继续判定，不得仅因“还要读标准规则”而 `unevaluable`。
 - 标准条款可以写“满足条件 X 时采用要求 Y”，但 X 必须来自报告输入。例如残余压力不低于施压的 70% 只适用于条款写明的油箱结构；报告未给出油箱型式时不得默认某一分支后判 `match`。
 - `standard_value` 只填写最终判定实际使用的标准要求，不要把无关型号参数、上下文数字或解释性数字混入该字段。
 - **证据必须可定位**：`match`/`mismatch` 前必须对证据 chunk 执行 `read_chunk`。每个判定给出标准号、表号/条款、已读 `chunk_id`；不要写 `evidence.text`（正文由 Host 从已读片段回填）。

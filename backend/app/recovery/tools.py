@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from app import current_user, db, llm, retrieval
 from app.agent_runtime.models import ToolDefinition
+from app.report_context import search_report_markdown
 from app.storage.repositories import get_content_repository, get_content_write_repository
 
 
@@ -202,33 +203,11 @@ class RecoveryToolEnvironment:
 
 
 def _search_report_context(env: RecoveryToolEnvironment, arguments: dict[str, Any]) -> dict[str, Any]:
-    terms = _require_list(arguments, "terms", limit=8)
-    max_results = max(1, min(int(arguments.get("max_results") or 8), 20))
-    text = env.report_markdown
-    matches = []
-    lower = text.lower()
-    for term in terms:
-        start = 0
-        term_lower = term.lower()
-        while len(matches) < max_results:
-            index = lower.find(term_lower, start)
-            if index < 0:
-                break
-            left = max(0, index - 350)
-            right = min(len(text), index + len(term) + 350)
-            matches.append({
-                "term": term,
-                "char_start": index,
-                "snippet": text[left:right],
-            })
-            start = index + len(term)
-        if len(matches) >= max_results:
-            break
-    return {
-        "summary": f"found {len(matches)} report matches",
-        "terms": terms,
-        "matches": matches,
-    }
+    return search_report_markdown(
+        env.report_markdown,
+        arguments.get("terms"),
+        max_results=int(arguments.get("max_results") or 8),
+    )
 
 
 def _extract_report_parameters(env: RecoveryToolEnvironment, arguments: dict[str, Any]) -> dict[str, Any]:

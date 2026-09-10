@@ -7,9 +7,10 @@
  *     the agent owns query diversity by calling search again)
  *   - read_chunk      — read one retrieved standard chunk in full (incl. tables)
  *   - read_report     — read a parsed inspection report's sections
+ *   - search_report_context — literal search in the current report markdown
  *
  * Base URL comes from CHUNK_STUDIO_API_BASE (default http://127.0.0.1:8000).
- * Tools are built per case via createAuditTools(fileScope, progress, identity).
+ * Tools are built per case via createAuditTools(fileScope, progress, identity, reportFileId).
  * Search identity (job_id / run_id / case_id / job_attempt) is observability
  * only: it is posted to /api/search, never added to the query or prompt.
  * Search returns type-aware locators (table schema / query snippets), never
@@ -89,6 +90,22 @@ export function searchStandardsRequestBody(args: {
 	return body;
 }
 
+export function searchReportContextRequestBody(args: {
+	terms: string[];
+	max_results?: number;
+	reportFileId: string;
+	identity?: ExecutionIdentity | null;
+}): Record<string, unknown> {
+	const body: Record<string, unknown> = {
+		terms: args.terms,
+		max_results: Math.min(args.max_results ?? 8, 20),
+		report_file_id: args.reportFileId,
+	};
+	const jobId = String(args.identity?.job_id || "").trim();
+	if (jobId) body.job_id = jobId;
+	return body;
+}
+
 /**
  * Build audit tools bound to one case's file scope. Each case gets its own
  * tool instances so per-case state (default file_ids) stays isolated under
@@ -98,6 +115,7 @@ export function createAuditTools(
 	fileScope: string[] | undefined | null,
 	progress?: EvidenceProgress,
 	identity?: ExecutionIdentity | null,
+	reportFileId?: string | null,
 ) {
 	const scope = normalizeScope(fileScope);
 	const maxCalls = Math.max(1, Number(process.env.PI_MAX_TOOL_CALLS ?? "12"));
@@ -117,6 +135,8 @@ export function createAuditTools(
 		remaining -= 1;
 		return null;
 	}
+
+	const boundReportId = String(reportFileId || "").trim();
 
 	const searchStandards = defineTool({
 		name: "search_standards",
@@ -317,5 +337,71 @@ export function createAuditTools(
 		},
 	});
 
-	return [searchStandards, readChunk, readReport];
+	const searchReportContext = defineTool({
+		name: "search_report_context",
+		label: "检索当前检测报告",
+		description:
+			"在当前正在审查的检测报告正文里按字面词检索，返回命中窗口。用于补样本/试验事实（油箱结构、绝缘油类型、短路阻抗、绕组型式等），不能用来检索标准限值。sample_context 缺适用性参数时，判 applicability_undetermined 之前应先调用本工具。",
+		promptSnippet: "在当前检测报告正文里按字面词检索样品/试验事实",
+		promptGuidelines: [
+			"使用 search_report_context 时 terms 写成报告里可能出现的原文，如 油箱、波纹、绝缘油、短路阻抗、绕组，不要用标准条款号当检索词。",
+			"只能把命中窗口里写明的事实当作报告侧证据；窗口没有的不得用常识补。",
+			"标准限值仍须 search_standards + read_chunk，不要用本工具搜标准。",
+		],
+		parameters: Type.Object({
+			terms: Type.Array(Type.String({ minLength: 1 }), {
+				minItems: 1,
+				maxItems: 8,
+				description: "报告正文里的字面检索词，1–8 个",
+			}),
+			max_results: Type.Optional(Type.Integer({ description: "返回窗口数，默认 8，最大 20" })),
+		}),
+		async execute(_id, params, signal, _onUpdate, _ctx) {
+			const blocked = takeBudget();
+			if (blocked) return blocked;
+			if (!boundReportId) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: "当前 case 未绑定检测报告，无法检索报告正文。",
+						},
+					],
+					details: { matches: [], unbound: true },
+				};
+			}
+			const payload = (await apiFetch("/api/search/report-context", signal, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(
+					searchReportContextRequestBody({
+						terms: params.terms,
+						max_results: params.max_results,
+						reportFileId: boundReportId,
+						identity,
+					}),
+				),
+			})) as { summary?: string; terms?: string[]; matches?: Array<Record<string, unknown>> };
+			const matches = Array.isArray(payload?.matches) ? payload.matches : [];
+			const lines = [
+				payload?.summary || `found ${matches.length} report matches`,
+				`terms: ${(payload?.terms || params.terms).join("、")}`,
+			];
+			if (!matches.length) {
+				lines.push("报告正文未命中这些词。");
+			} else {
+				matches.forEach((item, index) => {
+					lines.push(
+						`[${index + 1}] term=${String(item.term || "")} @${item.char_start ?? "?"}\n${String(item.snippet || "")}`,
+					);
+				});
+			}
+			return {
+				content: [{ type: "text" as const, text: lines.join("\n") }],
+				details: { matches },
+			};
+		},
+	});
+
+	return [searchStandards, readChunk, readReport, searchReportContext];
 }

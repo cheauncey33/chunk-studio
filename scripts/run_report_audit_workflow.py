@@ -269,6 +269,35 @@ def _usage_context(stage: str, case_id: str | None = None) -> UsageContext:
     )
 
 
+def _agent_sidecar_payload(
+    *,
+    case_id: str,
+    sample_context: dict[str, Any],
+    test_item: dict[str, Any],
+    reported_requirement: dict[str, Any],
+    evidence_file_ids: list[str],
+    report_file_id: str = "",
+    production_query: str | None = None,
+    retrieved_candidates: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Case payload for the Pi sidecar. report_file_id binds search_report_context."""
+    payload: dict[str, Any] = {
+        **_sidecar_execution_fields(case_id),
+        "sample_context": sample_context,
+        "test_item": test_item,
+        "reported_requirement": reported_requirement,
+        "file_scope": list(evidence_file_ids or []),
+    }
+    report_id = str(report_file_id or "").strip()
+    if report_id:
+        payload["report_file_id"] = report_id
+    if production_query is not None:
+        payload["production_query"] = production_query
+    if retrieved_candidates is not None:
+        payload["retrieved_candidates"] = retrieved_candidates
+    return payload
+
+
 def _sidecar_execution_fields(case_id: str) -> dict[str, Any]:
     """Observability identity only. Never interpolated into the agent prompt."""
     payload: dict[str, Any] = {"case_id": case_id}
@@ -434,6 +463,24 @@ def write_checkpoint_atomic(path: Path, payload: dict[str, Any]) -> None:
     tmp = destination.with_suffix(destination.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, destination)
+
+
+def _select_units_by_case_ids(
+    units: list[dict[str, Any]],
+    case_ids: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Keep workflow units whose case_id is listed; empty selection means all."""
+    wanted = [str(value).strip() for value in (case_ids or []) if str(value).strip()]
+    if not wanted:
+        return units
+    wanted_set = set(wanted)
+    selected = [
+        unit for unit in units if str(unit.get("case_id") or "") in wanted_set
+    ]
+    missing = wanted_set - {str(unit.get("case_id") or "") for unit in selected}
+    if missing:
+        raise ValueError(f"unknown --case-id values: {', '.join(sorted(missing))}")
+    return selected
 
 
 def checkpoint_resume_state(
@@ -2414,6 +2461,7 @@ def _audit_one_case(
     agent_token: str = "",
     agent_retries: int = 2,
     report_markdown: str = "",
+    report_file_id: str = "",
     recovery_mode: str = "off",
     recovery_semaphore: threading.Semaphore | None = None,
 ) -> dict[str, Any]:
@@ -2622,15 +2670,16 @@ def _audit_one_case(
         # still search_standards if they are not enough.
         if not agent_sidecar_url:
             return None
-        payload = {
-            **_sidecar_execution_fields(unit["case_id"]),
-            "sample_context": runtime_case["sample_context"],
-            "test_item": runtime_case["test_item"],
-            "reported_requirement": runtime_case["reported_requirement"],
-            "file_scope": list(evidence_file_ids or []),
-            "production_query": queries["production"],
-            "retrieved_candidates": _retrieved_pool_for_agent(candidates),
-        }
+        payload = _agent_sidecar_payload(
+            case_id=unit["case_id"],
+            sample_context=runtime_case["sample_context"],
+            test_item=runtime_case["test_item"],
+            reported_requirement=runtime_case["reported_requirement"],
+            evidence_file_ids=evidence_file_ids,
+            report_file_id=report_file_id,
+            production_query=queries["production"],
+            retrieved_candidates=_retrieved_pool_for_agent(candidates),
+        )
         last_error: str | None = None
         for attempt in range(max(1, agent_retries + 1)):
             try:
@@ -3017,6 +3066,7 @@ def _audit_one_case_agent(
     agent_model: str = "",
     retries: int = 2,
     report_markdown: str = "",
+    report_file_id: str = "",
 ) -> dict[str, Any]:
     """Judge one audit unit through the Pi agent sidecar (workflow-judge replacement).
 
@@ -3024,15 +3074,16 @@ def _audit_one_case_agent(
     after the final attempt the case degrades to insufficient_context with the
     error recorded, so one bad case never aborts the whole report run.
     """
-    del report_markdown  # the agent re-derives context via its own RAG tools
+    del report_markdown  # the agent searches the bound report via search_report_context
     runtime_case, profile_copy = _agent_runtime_case(unit, sample_profile)
-    payload = {
-        **_sidecar_execution_fields(unit["case_id"]),
-        "sample_context": runtime_case["sample_context"],
-        "test_item": runtime_case["test_item"],
-        "reported_requirement": runtime_case["reported_requirement"],
-        "file_scope": list(evidence_file_ids or []),
-    }
+    payload = _agent_sidecar_payload(
+        case_id=unit["case_id"],
+        sample_context=runtime_case["sample_context"],
+        test_item=runtime_case["test_item"],
+        reported_requirement=runtime_case["reported_requirement"],
+        evidence_file_ids=evidence_file_ids,
+        report_file_id=report_file_id,
+    )
     agent_response: dict[str, Any] | None = None
     agent_error: str | None = None
     for attempt in range(max(1, retries + 1)):
@@ -3198,6 +3249,13 @@ def main() -> None:
         default=int(os.environ.get("AGENT_CASE_RETRIES") or 2),
         help="retries per case on transient sidecar failures.",
     )
+    parser.add_argument(
+        "--case-id",
+        action="append",
+        dest="case_ids",
+        default=[],
+        help="audit only these case_id values (repeatable). default: every extracted unit.",
+    )
     args = parser.parse_args()
 
     if _content_repository() is None:
@@ -3324,6 +3382,10 @@ def main() -> None:
     write_checkpoint_atomic(checkpoint_path, checkpoint)
 
     units = _build_full_audit_units(extracted)
+    try:
+        units = _select_units_by_case_ids(units, args.case_ids)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     repository = _content_repository()
     bound_knowledge_bases = (
         repository.assistant_bound_knowledge_bases(args.assistant_id)
@@ -3411,6 +3473,7 @@ def main() -> None:
                 agent_token=str(os.environ.get("AGENT_SIDECAR_TOKEN") or ""),
                 agent_retries=args.agent_retries,
                 report_markdown=markdown,
+                report_file_id=str(args.report_file_id or ""),
                 recovery_mode=args.recovery_mode,
                 recovery_semaphore=recovery_semaphore,
             )

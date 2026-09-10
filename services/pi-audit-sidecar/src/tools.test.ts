@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { searchStandardsRequestBody } from "./tools.ts";
+import { systemPrompt } from "./prompt.ts";
+import { searchReportContextRequestBody, searchStandardsRequestBody } from "./tools.ts";
 
 const identity = {
 	job_id: "job-1",
@@ -26,6 +27,28 @@ test("search_standards sends execution identity outside the retrieval query", ()
 	assert.equal(body.case_id, "c01");
 	assert.equal(body.job_attempt, 2);
 	assert.equal(JSON.stringify(body.query_routes).includes("job-1"), false);
+});
+
+test("system prompt lists search_report_context for missing sample facts", () => {
+	const prompt = systemPrompt({ hasFirstRound: true });
+	assert.match(prompt, /search_report_context/);
+	assert.match(prompt, /applicability_undetermined/);
+});
+
+test("search_report_context binds the current report outside the tool parameters", () => {
+	const body = searchReportContextRequestBody({
+		terms: ["波纹", "短路阻抗"],
+		max_results: 8,
+		reportFileId: "report-file",
+		identity,
+	});
+	assert.deepEqual(body.terms, ["波纹", "短路阻抗"]);
+	assert.equal(body.report_file_id, "report-file");
+	assert.equal(body.job_id, "job-1");
+	const source = readFileSync(fileURLToPath(new URL("./tools.ts", import.meta.url)), "utf8");
+	const paramBlock = source.split('name: "search_report_context"')[1].split("async execute")[0];
+	assert.equal(paramBlock.includes("report_file_id"), false);
+	assert.equal(paramBlock.includes("job_id"), false);
 });
 
 test("search_standards tool parameters do not expose job identity to the prompt", () => {

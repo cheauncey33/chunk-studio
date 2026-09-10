@@ -41,6 +41,8 @@ export type AgentCaseInput = {
 	reported_requirement?: Record<string, unknown> | null;
 	/** Default file_ids for search_standards (assistant-bound KB scope); [] = unrestricted. */
 	file_scope?: string[] | null;
+	/** Current inspection report; binds search_report_context. Not shown in the prompt. */
+	report_file_id?: string | null;
 	/** First-recall locator cards. Agent reads these first; may still search if they are not enough. */
 	retrieved_candidates?: Array<Record<string, unknown>> | null;
 	/** Production query used for the Python first-round hybrid search. */
@@ -55,6 +57,7 @@ export type AgentCaseOutcome = {
 		tool_calls: number;
 		search_calls: number;
 		read_chunks: number;
+		report_search_calls: number;
 		turns: number;
 		gate_reprompt: boolean;
 		duration_ms: number;
@@ -344,13 +347,19 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 		.map((item) => normalizeChunkId(item.chunk_id ?? item.id))
 		.filter(Boolean);
 	const progress = createEvidenceProgress(firstRoundIds);
-	const tools = createAuditTools(input.file_scope, progress, usageIdentity);
+	const tools = createAuditTools(
+		input.file_scope,
+		progress,
+		usageIdentity,
+		input.report_file_id,
+	);
 
 	const trace: any[] = [];
 	let finalText = "";
 	let readCount = 0;
 	let toolCalls = 0;
 	let searchCalls = 0;
+	let reportSearchCalls = 0;
 	let turns = 0;
 	let gateReprompt = false;
 	let firstToolName: string | null = null;
@@ -403,6 +412,7 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 				if (chunkId) pendingReads.set(callId, chunkId);
 			}
 			if (event.toolName === "search_standards") searchCalls += 1;
+			if (event.toolName === "search_report_context") reportSearchCalls += 1;
 		}
 		if (event.type === "tool_execution_end" && event.toolName === "read_chunk") {
 			const callId = String(event.toolCallId || event.callId || "");
@@ -555,6 +565,7 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 			tool_calls: toolCalls,
 			search_calls: searchCalls,
 			read_chunks: readCount,
+			report_search_calls: reportSearchCalls,
 			turns: turns,
 			gate_reprompt: gateReprompt,
 			duration_ms: Date.now() - started,

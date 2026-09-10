@@ -153,6 +153,21 @@ def test_checkpoint_resume_fresh_run_executes_every_case() -> None:
     assert state["resumed_case_count"] == 0
 
 
+def test_select_units_by_case_ids_keeps_order_and_rejects_unknown() -> None:
+    units = [{"case_id": "c1"}, {"case_id": "c2"}, {"case_id": "c3"}]
+    assert workflow._select_units_by_case_ids(units, None) == units
+    assert [item["case_id"] for item in workflow._select_units_by_case_ids(units, ["c3", "c1"])] == [
+        "c1",
+        "c3",
+    ]
+    try:
+        workflow._select_units_by_case_ids(units, ["c9"])
+    except ValueError as exc:
+        assert "c9" in str(exc)
+    else:
+        raise AssertionError("expected unknown --case-id to fail")
+
+
 def test_write_checkpoint_atomic_leaves_a_complete_json_file(tmp_path: Path) -> None:
     path = tmp_path / "run.checkpoint.json"
     workflow.write_checkpoint_atomic(
@@ -1660,10 +1675,27 @@ def _agent_unit() -> dict:
     }
 
 
+def test_agent_sidecar_payload_binds_current_report() -> None:
+    payload = workflow._agent_sidecar_payload(
+        case_id="item_1",
+        sample_context={"model": "S20"},
+        test_item={"item_no": "5"},
+        reported_requirement={"text": "空载损耗P0(kW):≤0.370"},
+        evidence_file_ids=["std-1"],
+        report_file_id="report-file",
+        production_query="空载损耗",
+        retrieved_candidates=[{"chunk_id": "c1"}],
+    )
+    assert payload["report_file_id"] == "report-file"
+    assert payload["file_scope"] == ["std-1"]
+    assert payload["retrieved_candidates"][0]["chunk_id"] == "c1"
+
+
 def test_audit_one_case_agent_writes_compatible_judgment(monkeypatch) -> None:
     def fake_call(_url, payload, token="", timeout_seconds=480.0):
         assert payload["case_id"] == "item_1"
         assert payload["file_scope"] == ["std-1"]
+        assert payload["report_file_id"] == "report-file"
         del token, timeout_seconds
         return {
             "ok": True,
@@ -1697,6 +1729,7 @@ def test_audit_one_case_agent_writes_compatible_judgment(monkeypatch) -> None:
         evidence_file_ids=["std-1"],
         sidecar_url="http://127.0.0.1:8787",
         retries=0,
+        report_file_id="report-file",
     )
     assert entry["judgment"]["status"] == "supported"
     assert entry["judgment"]["kind"] == "exact"
