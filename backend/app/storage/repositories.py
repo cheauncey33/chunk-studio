@@ -2913,6 +2913,13 @@ def postgres_content_schema_sql() -> list[str]:
         "CREATE INDEX IF NOT EXISTS ix_kb_files_scope_file ON knowledge_base_files(workspace_id, file_id, knowledge_base_id)",
         "CREATE INDEX IF NOT EXISTS ix_assistants_scope_status ON audit_assistants(workspace_id, status, updated_at DESC)",
         "CREATE INDEX IF NOT EXISTS ix_assistant_versions_assistant ON assistant_versions(assistant_id, version DESC)",
+        """UPDATE assistant_versions
+           SET retrieval_config = (retrieval_config - 'final_table' - 'final_section' - 'final_per_type')
+                                  || '{"top_k": 10, "delivery_policy": "top_k"}'::jsonb
+           WHERE retrieval_config->>'final_table' = '8'
+             AND retrieval_config->>'final_section' IN ('4', '6')
+             AND COALESCE(retrieval_config->>'top_k', '10') = '10'
+             AND NOT (retrieval_config ? 'delivery_policy')""",
         "CREATE INDEX IF NOT EXISTS ix_assistant_kbs_scope ON assistant_knowledge_bases(workspace_id, knowledge_base_id, enabled, priority)",
         "CREATE INDEX IF NOT EXISTS ix_reviews_scope_report ON audit_case_reviews(workspace_id, report_name, updated_at DESC)",
     ]

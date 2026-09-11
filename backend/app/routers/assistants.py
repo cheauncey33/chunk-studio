@@ -137,8 +137,6 @@ def _version_out(row: Any) -> dict[str, Any]:
     )
     retrieval_config.setdefault("aggregate_continuation_tables", False)
     retrieval_config.setdefault("expand_references", False)
-    retrieval_config.setdefault("final_table", 8)
-    retrieval_config.setdefault("final_section", 6)
     retrieval_config["query_planner_routes"] = resolve_query_planner_routes(
         retrieval_config.get("query_planner_routes"),
     )

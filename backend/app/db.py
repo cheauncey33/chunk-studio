@@ -425,7 +425,7 @@ def init_db() -> None:
     _backfill_auto_metadata()
     _seed_knowledge_base_and_assistant()
     _backfill_oil_parameter_schema_fields()
-    _backfill_judge_delivery_quotas()
+    _migrate_default_delivery_to_top_k()
     _backfill_applied_init_profiles()
     _migrate_assistant_kb_one_to_one()
     _migrate_assistant_single_version()
@@ -765,8 +765,8 @@ def _migrate_assistant_parameter_schema() -> None:
         )
 
 
-def _backfill_judge_delivery_quotas() -> None:
-    """Ensure asymmetric final_table / final_section defaults (8 + 6)."""
+def _migrate_default_delivery_to_top_k() -> None:
+    """Replace the former 8-table + 6-section default with unified Top-10."""
     assert _conn is not None
     rows = _conn.execute(
         "SELECT id, retrieval_config FROM assistant_versions"
@@ -775,23 +775,18 @@ def _backfill_judge_delivery_quotas() -> None:
         config = _loads_json(row["retrieval_config"], {})
         if not isinstance(config, dict):
             continue
-        updated = dict(config)
-        changed = False
-        if "final_table" not in updated:
-            updated["final_table"] = 8
-            changed = True
-        if "final_section" not in updated:
-            updated["final_section"] = 6
-            changed = True
-        # Migrate previous production default 8+4 -> 8+6.
-        elif (
-            int(updated.get("final_table", 0)) == 8
-            and int(updated.get("final_section", 0)) == 4
+        if not (
+            int(config.get("final_table", 0)) == 8
+            and int(config.get("final_section", 0)) in {4, 6}
+            and int(config.get("top_k", 10)) == 10
         ):
-            updated["final_section"] = 6
-            changed = True
-        if not changed:
             continue
+        updated = dict(config)
+        updated.pop("final_table", None)
+        updated.pop("final_section", None)
+        updated.pop("final_per_type", None)
+        updated["top_k"] = 10
+        updated["delivery_policy"] = "top_k"
         _conn.execute(
             "UPDATE assistant_versions SET retrieval_config=? WHERE id=?",
             (json.dumps(updated, ensure_ascii=False), row["id"]),
@@ -1546,10 +1541,8 @@ def _default_retrieval_config() -> dict[str, Any]:
         "top_k": 10,
         "route_top_k": 30,
         "candidate_count_per_type": 20,
-        # Judge delivery after rerank: 8 tables + 6 sections.
-        "final_table": 8,
-        "final_section": 6,
-        "final_per_type": 15,
+        # Judge delivery after rerank: unified global Top-10.
+        "delivery_policy": "top_k",
         "special_route_reserve": 3,
         "dense_threshold": 0.0,
         "rerank_threshold": 0.2,

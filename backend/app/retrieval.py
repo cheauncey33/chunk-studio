@@ -97,6 +97,20 @@ def normalize_retrieval_config(value: Mapping[str, Any] | None) -> dict[str, Any
     mapping for old saved versions, then expose only the effective settings.
     """
     config = dict(value or {}) if isinstance(value, Mapping) else {}
+    try:
+        former_default_delivery = (
+            int(config.get("top_k", 10)) == 10
+            and int(config.get("final_table", 0)) == 8
+            and int(config.get("final_section", 0)) in {4, 6}
+            and "delivery_policy" not in config
+        )
+    except (TypeError, ValueError):
+        former_default_delivery = False
+    if former_default_delivery:
+        config.pop("final_table", None)
+        config.pop("final_section", None)
+        config.pop("final_per_type", None)
+        config["delivery_policy"] = "top_k"
     legacy_threshold = config.get("similarity_threshold")
     config.pop("similarity_threshold", None)
     config.pop("vector_weight", None)

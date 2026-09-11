@@ -138,17 +138,23 @@ def run_recovery_agent(
     merged = None
     if recovery_pools:
         config = retrieval.normalize_retrieval_config(environment.retrieval_config)
+        final_table = config.get("final_table")
+        final_section = config.get("final_section")
+        typed_delivery_n = (
+            int(final_table) + int(final_section)
+            if final_table is not None and final_section is not None
+            else 0
+        )
         merged = retrieval.merge_and_rerank_candidate_pools(
             environment.original_query,
             [initial_pool, *recovery_pools],
             top_k=max(
                 int(config.get("top_k") or 10),
-                int(config.get("final_table") or 8)
-                + int(config.get("final_section") or 6),
+                typed_delivery_n,
             ),
             rrf_k=int(config.get("rrf_k") or retrieval.RRF_K),
-            final_table=int(config.get("final_table") or 8),
-            final_section=int(config.get("final_section") or 6),
+            final_table=int(final_table) if final_table is not None else None,
+            final_section=int(final_section) if final_section is not None else None,
             rerank_threshold=float(
                 config.get("rerank_threshold")
                 if config.get("rerank_threshold") is not None

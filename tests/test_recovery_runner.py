@@ -57,6 +57,9 @@ def test_runner_uses_recovery_pools_and_one_unified_rerank(monkeypatch) -> None:
     assert result["usage"]["recovery_pool_count"] == 1
     assert len(captured["pools"]) == 2
     assert captured["query"] == "绝缘电阻标准要求"
+    assert captured["kwargs"]["top_k"] == 10
+    assert captured["kwargs"]["final_table"] is None
+    assert captured["kwargs"]["final_section"] is None
 
 
 def test_runner_does_not_rerank_when_agent_adds_no_pool(monkeypatch) -> None:

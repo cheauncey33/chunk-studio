@@ -122,6 +122,21 @@ def test_normalize_retrieval_config_removes_unused_legacy_settings() -> None:
     assert "keyword_weight" not in normalized
 
 
+def test_normalize_retrieval_config_migrates_old_default_to_global_top10() -> None:
+    normalized = retrieval.normalize_retrieval_config({
+        "top_k": 10,
+        "final_table": 8,
+        "final_section": 6,
+        "final_per_type": 15,
+    })
+
+    assert normalized["top_k"] == 10
+    assert normalized["delivery_policy"] == "top_k"
+    assert "final_table" not in normalized
+    assert "final_section" not in normalized
+    assert "final_per_type" not in normalized
+
+
 def test_hybrid_search_uses_typed_rrf_candidates_then_reranker() -> None:
     query = "原始查询 10 kV"
     planned = {"semantic": "语义查询 10 kV", "keyword": "关键词 10 kV"}
