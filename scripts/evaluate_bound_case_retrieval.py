@@ -62,6 +62,9 @@ def retrieve_query(
     *,
     candidates_per_type: int | None = None,
     lexical_candidates_per_type: int | None = None,
+    final_table: int | None = None,
+    final_section: int | None = None,
+    special_route_reserve: int | None = None,
     query_routes: dict[str, str] | None = None,
     degraded_override: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -74,6 +77,12 @@ def retrieve_query(
         search_kwargs["candidates_per_type"] = candidates_per_type
     if lexical_candidates_per_type is not None:
         search_kwargs["lexical_candidates_per_type"] = lexical_candidates_per_type
+    if final_table is not None:
+        search_kwargs["final_table"] = final_table
+    if final_section is not None:
+        search_kwargs["final_section"] = final_section
+    if special_route_reserve is not None:
+        search_kwargs["special_route_reserve"] = special_route_reserve
     if query_routes is not None:
         search_kwargs["query_routes"] = query_routes
     result = retrieval.hybrid_search(query, **search_kwargs)
@@ -292,6 +301,9 @@ def build_report(
     status: str,
     candidates_per_type: int,
     lexical_candidates_per_type: int,
+    final_table: int | None,
+    final_section: int | None,
+    special_route_reserve: int,
 ) -> dict[str, Any]:
     successful_runs = list(query_runs.values())
     degraded_query_keys = {
@@ -322,6 +334,9 @@ def build_report(
             "route_top_k": retrieval.ROUTE_TOP_K,
             "candidates_per_type": candidates_per_type,
             "lexical_candidates_per_type": lexical_candidates_per_type,
+            "final_table": final_table,
+            "final_section": final_section,
+            "special_route_reserve": special_route_reserve,
             "query_rewrite_model": retrieval.QUERY_REWRITE_MODEL,
             "rerank_model": next(
                 (run.get("rerank_model") for run in successful_runs if run.get("rerank_model")),
@@ -385,6 +400,9 @@ def main() -> None:
         type=int,
         default=retrieval.LEXICAL_CANDIDATES_PER_TYPE,
     )
+    parser.add_argument("--final-table", type=int)
+    parser.add_argument("--final-section", type=int)
+    parser.add_argument("--special-route-reserve", type=int, default=0)
     args = parser.parse_args()
 
     input_path = args.ground_truth.resolve()
@@ -428,6 +446,9 @@ def main() -> None:
                 query,
                 candidates_per_type=args.candidates_per_type,
                 lexical_candidates_per_type=args.lexical_candidates_per_type,
+                final_table=args.final_table,
+                final_section=args.final_section,
+                special_route_reserve=args.special_route_reserve,
                 query_routes=(fixed or {}).get("query_routes") if fixed else None,
                 degraded_override=(fixed or {}).get("degraded") if fixed else None,
             )
@@ -457,6 +478,9 @@ def main() -> None:
             status="running",
             candidates_per_type=args.candidates_per_type,
             lexical_candidates_per_type=args.lexical_candidates_per_type,
+            final_table=args.final_table,
+            final_section=args.final_section,
+            special_route_reserve=args.special_route_reserve,
         )
         write_json(args.output_json, partial)
         if args.delay > 0:
@@ -480,6 +504,9 @@ def main() -> None:
         status=status,
         candidates_per_type=args.candidates_per_type,
         lexical_candidates_per_type=args.lexical_candidates_per_type,
+        final_table=args.final_table,
+        final_section=args.final_section,
+        special_route_reserve=args.special_route_reserve,
     )
     write_json(args.output_json, report)
     args.output_md.parent.mkdir(parents=True, exist_ok=True)
