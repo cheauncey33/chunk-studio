@@ -57,16 +57,39 @@ def compact_hit(rank: int, hit: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def retrieve_query(query: str) -> dict[str, Any]:
+def retrieve_query(
+    query: str,
+    *,
+    candidates_per_type: int | None = None,
+    lexical_candidates_per_type: int | None = None,
+    query_routes: dict[str, str] | None = None,
+    degraded_override: list[str] | None = None,
+) -> dict[str, Any]:
     started = time.perf_counter()
-    result = retrieval.hybrid_search(query, top_k=MAX_TOP_K, include_diagnostics=True)
+    search_kwargs: dict[str, Any] = {
+        "top_k": MAX_TOP_K,
+        "include_diagnostics": True,
+    }
+    if candidates_per_type is not None:
+        search_kwargs["candidates_per_type"] = candidates_per_type
+    if lexical_candidates_per_type is not None:
+        search_kwargs["lexical_candidates_per_type"] = lexical_candidates_per_type
+    if query_routes is not None:
+        search_kwargs["query_routes"] = query_routes
+    result = retrieval.hybrid_search(query, **search_kwargs)
+    degraded = (
+        list(degraded_override)
+        if degraded_override is not None
+        else result.get("degraded") or []
+    )
     return {
         "query": query,
         "duration_seconds": round(time.perf_counter() - started, 3),
         "candidate_count": result.get("candidate_count"),
+        "timings_ms": result.get("timings_ms") or {},
         "retrieval_mode": result.get("retrieval_mode"),
         "rerank_model": result.get("rerank_model"),
-        "degraded": result.get("degraded") or [],
+        "degraded": degraded,
         "query_routes": result.get("query_routes") or {},
         "diagnostics": result.get("diagnostics") or {},
         "hits": [compact_hit(rank, hit) for rank, hit in enumerate(result["hits"][:MAX_TOP_K], 1)],
@@ -242,11 +265,15 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             f"Retrieval mode: `{report['retrieval_policy']['mode']}`; "
             f"reranker: `{report['retrieval_policy']['rerank_model']}`; "
-            f"maximum K: `{MAX_TOP_K}`.",
+            f"maximum K: `{MAX_TOP_K}`; candidates/type: "
+            f"dense `{report['retrieval_policy']['candidates_per_type']}`, "
+            f"lexical `{report['retrieval_policy']['lexical_candidates_per_type']}`.",
             f"Query rewrite fallback: `{report['execution']['degraded_queries']}/"
             f"{report['progress']['completed_queries']}` unique queries, affecting "
             f"`{report['execution']['degraded_cases']}/{report['progress']['scored_cases']}` cases; "
             f"reasons: `{report['execution']['degraded_reasons']}`. All queries were still reranked.",
+            f"Average rerank candidates: `{report['execution']['average_rerank_candidates']:.1f}`; "
+            f"average rerank stage: `{report['execution']['average_rerank_ms']:.1f} ms`.",
             "",
         ]
     )
@@ -263,6 +290,8 @@ def build_report(
     query_errors: dict[str, dict[str, str]],
     scored: list[dict[str, Any]],
     status: str,
+    candidates_per_type: int,
+    lexical_candidates_per_type: int,
 ) -> dict[str, Any]:
     successful_runs = list(query_runs.values())
     degraded_query_keys = {
@@ -291,7 +320,8 @@ def build_report(
             "mode": "production hybrid_search with query planner and reranker",
             "top_k_values": list(TOP_K_VALUES),
             "route_top_k": retrieval.ROUTE_TOP_K,
-            "candidates_per_type": retrieval.CANDIDATES_PER_TYPE,
+            "candidates_per_type": candidates_per_type,
+            "lexical_candidates_per_type": lexical_candidates_per_type,
             "query_rewrite_model": retrieval.QUERY_REWRITE_MODEL,
             "rerank_model": next(
                 (run.get("rerank_model") for run in successful_runs if run.get("rerank_model")),
@@ -316,6 +346,18 @@ def build_report(
                 if successful_runs
                 else None
             ),
+            "average_rerank_candidates": (
+                sum(int(run.get("candidate_count") or 0) for run in successful_runs)
+                / len(successful_runs)
+                if successful_runs
+                else None
+            ),
+            "average_rerank_ms": (
+                sum(float((run.get("timings_ms") or {}).get("rerank") or 0.0) for run in successful_runs)
+                / len(successful_runs)
+                if successful_runs
+                else None
+            ),
         },
         "summary": aggregate(scored),
         "query_errors": query_errors,
@@ -332,6 +374,17 @@ def main() -> None:
     parser.add_argument("--output-diagnostics-csv", type=Path)
     parser.add_argument("--delay", type=float, default=0.0)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--fixed-routes-report",
+        type=Path,
+        help="Reuse query_routes and degradation status from a prior report for a paired A/B run.",
+    )
+    parser.add_argument("--candidates-per-type", type=int, default=retrieval.CANDIDATES_PER_TYPE)
+    parser.add_argument(
+        "--lexical-candidates-per-type",
+        type=int,
+        default=retrieval.LEXICAL_CANDIDATES_PER_TYPE,
+    )
     args = parser.parse_args()
 
     input_path = args.ground_truth.resolve()
@@ -347,6 +400,11 @@ def main() -> None:
     query_to_cases: dict[str, list[dict[str, Any]]] = {}
     for case in eligible:
         query_to_cases.setdefault(build_production_query(case), []).append(case)
+
+    fixed_runs: dict[str, dict[str, Any]] = {}
+    if args.fixed_routes_report is not None:
+        fixed_report = read_json(args.fixed_routes_report)
+        fixed_runs = fixed_report.get("query_runs") or {}
 
     query_runs: dict[str, dict[str, Any]] = {}
     query_errors: dict[str, dict[str, str]] = {}
@@ -365,7 +423,14 @@ def main() -> None:
             continue
         print(f"retrieving query {index}/{total} {key[:10]}", flush=True)
         try:
-            query_runs[key] = retrieve_query(query)
+            fixed = fixed_runs.get(key)
+            query_runs[key] = retrieve_query(
+                query,
+                candidates_per_type=args.candidates_per_type,
+                lexical_candidates_per_type=args.lexical_candidates_per_type,
+                query_routes=(fixed or {}).get("query_routes") if fixed else None,
+                degraded_override=(fixed or {}).get("degraded") if fixed else None,
+            )
             query_errors.pop(key, None)
         except Exception as exc:
             query_errors[key] = {
@@ -390,6 +455,8 @@ def main() -> None:
             query_errors=query_errors,
             scored=scored,
             status="running",
+            candidates_per_type=args.candidates_per_type,
+            lexical_candidates_per_type=args.lexical_candidates_per_type,
         )
         write_json(args.output_json, partial)
         if args.delay > 0:
@@ -411,6 +478,8 @@ def main() -> None:
         query_errors=query_errors,
         scored=scored,
         status=status,
+        candidates_per_type=args.candidates_per_type,
+        lexical_candidates_per_type=args.lexical_candidates_per_type,
     )
     write_json(args.output_json, report)
     args.output_md.parent.mkdir(parents=True, exist_ok=True)
