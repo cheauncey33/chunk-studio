@@ -51,6 +51,7 @@ class UsageEvent:
     job_id: str | None = None
     run_id: str | None = None
     case_id: str | None = None
+    conversation_id: str | None = None
     job_attempt: int | None = None
     request_attempt: int = 1
     stage: str = "other"
@@ -92,6 +93,8 @@ class UsageRepository(Protocol):
 
     def lookup_job_workspace(self, job_id: str) -> str | None: ...
 
+    def lookup_conversation_workspace(self, conversation_id: str) -> str | None: ...
+
     def get_batch_usage_summary(
         self, *, workspace_id: str, batch_id: str
     ) -> dict[str, Any]: ...
@@ -108,6 +111,7 @@ CREATE TABLE IF NOT EXISTS llm_usage_events (
     job_id                TEXT,
     run_id                TEXT,
     case_id               TEXT,
+    conversation_id       TEXT,
     job_attempt           INTEGER,
     request_attempt       INTEGER NOT NULL DEFAULT 1,
     stage                 TEXT NOT NULL DEFAULT 'other',
@@ -143,6 +147,7 @@ LLM_USAGE_EVENTS_POSTGRES_DDL = [
          job_id TEXT,
          run_id TEXT,
          case_id TEXT,
+         conversation_id TEXT,
          job_attempt INTEGER,
          request_attempt INTEGER NOT NULL DEFAULT 1,
          stage TEXT NOT NULL DEFAULT 'other',
@@ -165,6 +170,8 @@ LLM_USAGE_EVENTS_POSTGRES_DDL = [
     "CREATE INDEX IF NOT EXISTS ix_llm_usage_events_job ON llm_usage_events(workspace_id, job_id, created_at)",
     "CREATE INDEX IF NOT EXISTS ix_llm_usage_events_case ON llm_usage_events(workspace_id, job_id, case_id)",
     "CREATE INDEX IF NOT EXISTS ix_llm_usage_events_attempt ON llm_usage_events(job_id, job_attempt)",
+    "ALTER TABLE llm_usage_events ADD COLUMN IF NOT EXISTS conversation_id TEXT",
+    "CREATE INDEX IF NOT EXISTS ix_llm_usage_events_conversation ON llm_usage_events(workspace_id, conversation_id)",
 ]
 
 
@@ -445,19 +452,29 @@ class SqliteUsageRepository:
         ).fetchone()
         return str(row["workspace_id"]) if row and row["workspace_id"] else None
 
+    def lookup_conversation_workspace(self, conversation_id: str) -> str | None:
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return None
+        row = db.get_conn().execute(
+            "SELECT workspace_id FROM chat_conversations WHERE id=?",
+            (cid,),
+        ).fetchone()
+        return str(row["workspace_id"]) if row and row["workspace_id"] else None
+
     def record_usage(self, event: UsageEvent) -> bool:
         created = event.created_at or _now_iso()
         event_id = event.id or event.request_id
         with db.transaction() as conn:
             cursor = conn.execute(
                 """INSERT INTO llm_usage_events (
-                       id, workspace_id, job_id, run_id, case_id, job_attempt,
-                       request_attempt, stage, provider, model, request_id, status,
+                       id, workspace_id, job_id, run_id, case_id, conversation_id,
+                       job_attempt, request_attempt, stage, provider, model, request_id, status,
                        input_tokens, output_tokens, reasoning_tokens,
                        cache_read_tokens, cache_write_tokens, total_tokens,
                        cost_microunits, pricing_missing, pricing_snapshot,
                        usage_source, created_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(request_id) DO NOTHING""",
                 (
                     event_id,
@@ -465,6 +482,7 @@ class SqliteUsageRepository:
                     str(event.job_id or "").strip() or None,
                     str(event.run_id or "").strip() or None,
                     str(event.case_id or "").strip() or None,
+                    str(event.conversation_id or "").strip() or None,
                     event.job_attempt,
                     max(1, int(event.request_attempt or 1)),
                     str(event.stage or "other"),
@@ -579,6 +597,20 @@ class PostgresUsageRepository:
         workspace = row.get("workspace_id") if isinstance(row, dict) else row[0]
         return str(workspace) if workspace else None
 
+    def lookup_conversation_workspace(self, conversation_id: str) -> str | None:
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT workspace_id FROM chat_conversations WHERE id=%s",
+                (cid,),
+            ).fetchone()
+        if not row:
+            return None
+        workspace = row.get("workspace_id") if isinstance(row, dict) else row[0]
+        return str(workspace) if workspace else None
+
     def record_usage(self, event: UsageEvent) -> bool:
         created = event.created_at or _now_iso()
         event_id = event.id or event.request_id
@@ -586,14 +618,14 @@ class PostgresUsageRepository:
         with self._connect() as conn:
             row = conn.execute(
                 """INSERT INTO llm_usage_events (
-                       id, workspace_id, job_id, run_id, case_id, job_attempt,
+                       id, workspace_id, job_id, run_id, case_id, conversation_id, job_attempt,
                        request_attempt, stage, provider, model, request_id, status,
                        input_tokens, output_tokens, reasoning_tokens,
                        cache_read_tokens, cache_write_tokens, total_tokens,
                        cost_microunits, pricing_missing, pricing_snapshot,
                        usage_source, created_at
                    ) VALUES (
-                       %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                       %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                        %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s
                    )
                    ON CONFLICT (request_id) DO NOTHING
@@ -604,6 +636,7 @@ class PostgresUsageRepository:
                     str(event.job_id or "").strip() or None,
                     str(event.run_id or "").strip() or None,
                     str(event.case_id or "").strip() or None,
+                    str(event.conversation_id or "").strip() or None,
                     event.job_attempt,
                     max(1, int(event.request_attempt or 1)),
                     str(event.stage or "other"),

@@ -385,6 +385,53 @@ def test_sidecar_ingest_is_idempotent_and_ignores_forged_workspace(
     assert rows[0]["usage_source"] == "sdk"
 
 
+def test_chat_sidecar_ingest_uses_conversation_not_job(monkeypatch, tmp_path: Path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    now = jobs.now_iso()
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO chat_conversations
+               (id, assistant_id, workspace_id, user_id, title, created_at, updated_at)
+               VALUES ('chat_ingest', 'assistant_oil_transformer_audit', ?, 'local-user',
+                       't', ?, ?)""",
+            (db.config.DEFAULT_WORKSPACE_ID, now, now),
+        )
+    monkeypatch.setattr(internal_router.config, "AGENT_SIDECAR_TOKEN", "secret")
+    body = internal_router.InternalUsageIngest(
+        request_id="pi:chat-1",
+        conversation_id="chat_ingest",
+        stage="chat_agent",
+        provider="zhipu",
+        model="glm-5.3-flash",
+        usage_source="sdk",
+        workspace_id="forged-workspace",
+        usage={"input": 20, "output": 5, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 25},
+    )
+    first = internal_router.ingest_llm_usage(body, authorization="Bearer secret")
+    assert first == {"ok": True, "recorded": True}
+    missing = internal_router.ingest_llm_usage(
+        internal_router.InternalUsageIngest(
+            request_id="pi:chat-missing",
+            conversation_id="chat_does_not_exist",
+            stage="chat_agent",
+            usage_source="sdk",
+            usage={"input": 1, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 1},
+        ),
+        authorization="Bearer secret",
+    )
+    assert missing["recorded"] is False
+    assert missing["reason"] == "conversation_not_found"
+    rows = get_usage_repository().list_usage_events(
+        workspace_id=db.config.DEFAULT_WORKSPACE_ID,
+    )
+    chat_rows = [row for row in rows if row.get("conversation_id") == "chat_ingest"]
+    assert len(chat_rows) == 1
+    assert chat_rows[0]["job_id"] in (None, "")
+    assert chat_rows[0]["workspace_id"] == db.config.DEFAULT_WORKSPACE_ID
+    assert chat_rows[0]["stage"] == "chat_agent"
+    assert chat_rows[0]["total_tokens"] == 25
+
+
 def test_three_sidecar_turns_are_three_events(monkeypatch, tmp_path: Path) -> None:
     _init_temp_db(monkeypatch, tmp_path)
     _insert_job("job-turns")
@@ -526,6 +573,7 @@ def test_postgres_schema_includes_usage_ledger() -> None:
     assert "CREATE TABLE IF NOT EXISTS llm_usage_events" in schema
     assert "request_id TEXT NOT NULL UNIQUE" in schema
     assert "cost_microunits BIGINT" in schema
+    assert "conversation_id TEXT" in schema
 
 
 def test_sidecar_payload_adds_execution_identity_without_prompt_changes() -> None:

@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
 	requestIdForAssistantMessage,
 	sidecarAuthHeaders,
+	usageEventCanPost,
 	usageFromAssistantMessage,
 } from "./usage.ts";
 
@@ -98,4 +99,31 @@ test("sidecar auth headers carry the service token", () => {
 		if (previous === undefined) delete process.env.AGENT_SIDECAR_TOKEN;
 		else process.env.AGENT_SIDECAR_TOKEN = previous;
 	}
+});
+
+test("chat usage posts with conversation_id and does not require a job", () => {
+	const event = usageFromAssistantMessage(
+		{ conversation_id: "chat_1", stage: "chat_agent" },
+		{
+			id: "msg-chat",
+			role: "assistant",
+			provider: "zhipu",
+			model: "glm-5.3-flash",
+			usage: { input: 20, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 25 },
+		},
+	);
+	assert.ok(event);
+	assert.equal(event?.job_id, "");
+	assert.equal(event?.conversation_id, "chat_1");
+	assert.equal(event?.stage, "chat_agent");
+	assert.equal(event?.total_tokens, 25);
+	assert.equal(usageEventCanPost(event!), true);
+	assert.equal(
+		usageEventCanPost({
+			...event!,
+			job_id: "",
+			conversation_id: "",
+		}),
+		false,
+	);
 });

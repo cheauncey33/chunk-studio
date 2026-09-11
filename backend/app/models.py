@@ -130,6 +130,9 @@ class VectorSearchRequest(BaseModel):
     run_id: str | None = None
     case_id: str | None = None
     job_attempt: int | None = None
+    # Sidecar chat binds the originating workspace. Ordinary callers cannot
+    # hop workspaces with this field; it is used only with a sidecar token.
+    workspace_id: str | None = None
 
 
 class VectorSearchHit(BaseModel):

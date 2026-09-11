@@ -5,7 +5,12 @@ import { fileURLToPath } from "node:url";
 
 import { needsKnowledgeReadGate, looksLikeAbstain } from "./chat.ts";
 import { chatSystemPrompt } from "./chatPrompt.ts";
-import { searchKnowledgeBaseRequestBody } from "./chatTools.ts";
+import {
+	searchKnowledgeBaseRequestBody,
+	rememberSearchChunkIds,
+	denyUnreadChunk,
+	denyChunkFileScope,
+} from "./chatTools.ts";
 
 test("chat search binds production to the current user question", () => {
 	const body = searchKnowledgeBaseRequestBody({
@@ -13,6 +18,7 @@ test("chat search binds production to the current user question", () => {
 		modelQuery: "model rewrite",
 		top_k: 8,
 		scope: ["file-a"],
+		workspaceId: "ws-1",
 	});
 	assert.equal(body.query, "original user question");
 	assert.deepEqual(body.query_routes, {
@@ -20,6 +26,7 @@ test("chat search binds production to the current user question", () => {
 		semantic: "model rewrite",
 	});
 	assert.deepEqual(body.file_ids, ["file-a"]);
+	assert.equal(body.workspace_id, "ws-1");
 	assert.equal("job_id" in body, false);
 	assert.equal("case_id" in body, false);
 });
@@ -90,4 +97,20 @@ test("knowledge read gate asks for a read when search happened without read", ()
 		false,
 	);
 	assert.equal(looksLikeAbstain("当前助手未绑定知识库文件，无法检索文档。"), true);
+});
+
+test("read_chunk allows only search hits in the bound file scope", () => {
+	const allowed = new Set<string>();
+	rememberSearchChunkIds(allowed, [{ chunk_id: "c1" }, { chunk_id: "c2" }, {}]);
+	assert.deepEqual([...allowed].sort(), ["c1", "c2"]);
+	assert.equal(denyUnreadChunk("c1", allowed), null);
+	assert.equal(
+		denyUnreadChunk("other-kb-chunk", allowed),
+		"chunk_id must come from search_knowledge_base in this turn",
+	);
+	assert.equal(denyChunkFileScope("file-a", ["file-a", "file-b"]), null);
+	assert.equal(
+		denyChunkFileScope("file-other", ["file-a"]),
+		"chunk does not belong to the bound knowledge-base files",
+	);
 });

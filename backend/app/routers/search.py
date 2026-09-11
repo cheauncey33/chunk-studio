@@ -125,11 +125,21 @@ def search_chunks(
     authorization: str | None = Header(default=None),
 ):
     try:
+        workspace_id = None
+        if _sidecar_authorized(authorization):
+            requested = str(body.workspace_id or "").strip()
+            if requested:
+                workspace_id = requested
+            elif body.job_id:
+                workspace_id = get_usage_repository().lookup_job_workspace(
+                    str(body.job_id).strip()
+                )
         result = retrieval.hybrid_search(
             body.query,
             top_k=body.top_k,
             file_ids=body.file_ids or None,
             query_routes=body.query_routes or None,
+            workspace_id=workspace_id,
             usage_context=_search_usage_context(body, authorization),
         )
         if body.row_filter:

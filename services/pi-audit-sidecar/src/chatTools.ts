@@ -24,6 +24,7 @@ export function searchKnowledgeBaseRequestBody(args: {
 	modelQuery?: string;
 	top_k?: number;
 	scope: string[];
+	workspaceId?: string;
 }): Record<string, unknown> {
 	const production = String(args.currentQuestion || "").trim();
 	const rewrite = String(args.modelQuery || "").trim();
@@ -37,7 +38,39 @@ export function searchKnowledgeBaseRequestBody(args: {
 		query_routes: queryRoutes,
 	};
 	if (args.scope.length) body.file_ids = args.scope;
+	const workspaceId = String(args.workspaceId || "").trim();
+	if (workspaceId) body.workspace_id = workspaceId;
 	return body;
+}
+
+export function rememberSearchChunkIds(
+	allowed: Set<string>,
+	hits: Array<{ chunk_id?: unknown } | null | undefined>,
+): void {
+	for (const hit of hits) {
+		const id = String(hit?.chunk_id ?? "").trim();
+		if (id) allowed.add(id);
+	}
+}
+
+export function denyUnreadChunk(chunkId: string, allowedChunkIds: Set<string>): string | null {
+	const id = String(chunkId || "").trim();
+	if (!id) return "chunk_id is required";
+	if (!allowedChunkIds.has(id)) {
+		return "chunk_id must come from search_knowledge_base in this turn";
+	}
+	return null;
+}
+
+export function denyChunkFileScope(fileId: unknown, boundFileIds: string[]): string | null {
+	if (!boundFileIds.length) {
+		return "current assistant has no bound knowledge-base files";
+	}
+	const id = String(fileId || "").trim();
+	if (!id || !boundFileIds.includes(id)) {
+		return "chunk does not belong to the bound knowledge-base files";
+	}
+	return null;
 }
 
 function readableHits(
@@ -58,6 +91,7 @@ export function createChatTools(scope: ChatToolScope, progress?: EvidenceProgres
 	const workspaceId = String(scope.workspaceId || "").trim();
 	const currentQuestion = String(scope.currentQuestion || "").trim();
 	const defaultTopK = Math.min(Math.max(scope.topK || 8, 1), 20);
+	const allowedChunkIds = new Set<string>();
 	const maxCalls = Math.max(1, Number(process.env.PI_CHAT_MAX_TOOL_CALLS ?? "8"));
 	let remaining = maxCalls;
 	const budgetExceeded = () => ({
@@ -129,11 +163,13 @@ export function createChatTools(scope: ChatToolScope, progress?: EvidenceProgres
 						modelQuery: params.query,
 						top_k: params.top_k ?? defaultTopK,
 						scope: fileIds,
+						workspaceId,
 					}),
 				),
 			});
 			const hits = (payload as any)?.hits ?? [];
 			const locators = hits.map(toLocatorHit);
+			rememberSearchChunkIds(allowedChunkIds, locators);
 			const searchProgress = progress
 				? progress.recordSearch(
 						production,
@@ -171,20 +207,34 @@ export function createChatTools(scope: ChatToolScope, progress?: EvidenceProgres
 			"按 chunk_id 读取一个知识库片段的完整原文，含表格数据和业务元数据。search_knowledge_base 只返回定位预览；引用文档事实前必须 read_chunk。",
 		promptSnippet: "读取检索命中的知识库片段完整原文",
 		promptGuidelines: [
-			"chunk_id 应来自 search_knowledge_base 命中，不要凭空构造。",
+			"chunk_id 必须来自本轮 search_knowledge_base 命中，不要凭空构造或使用其它助手的片段。",
 			"回答里引用条款、数值、定义之前必须先读原文。",
 		],
 		parameters: Type.Object({
 			chunk_id: Type.String({
-				description: "知识库片段 id（来自 search_knowledge_base 命中）",
+				description: "知识库片段 id（来自本轮 search_knowledge_base 命中）",
 			}),
 		}),
 		async execute(_id, params, signal, _onUpdate, _ctx) {
+			const unknown = denyUnreadChunk(params.chunk_id, allowedChunkIds);
+			if (unknown) {
+				return {
+					content: [{ type: "text" as const, text: unknown }],
+					details: { denied: true, reason: "not_from_search" },
+				};
+			}
 			const blocked = takeBudget();
 			if (blocked) return blocked;
 			const payload = await apiFetch(`/api/chunks/${encodeURIComponent(params.chunk_id)}`, signal);
-			progress?.recordRead(params.chunk_id);
 			const chunk = payload as any;
+			const scoped = denyChunkFileScope(chunk?.file_id, fileIds);
+			if (scoped) {
+				return {
+					content: [{ type: "text" as const, text: scoped }],
+					details: { denied: true, reason: "file_scope" },
+				};
+			}
+			progress?.recordRead(params.chunk_id);
 			const meta = JSON.stringify(chunk.business_metadata ?? chunk.metadata ?? {});
 			const text =
 				`chunk_id=${chunk.id} file_id=${chunk.file_id} page=${chunk.page}\n` +

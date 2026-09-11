@@ -25,6 +25,8 @@ export type ExecutionIdentity = {
 	run_id?: string | null;
 	job_attempt?: number | null;
 	case_id?: string | null;
+	conversation_id?: string | null;
+	stage?: "audit_agent" | "chat_agent";
 };
 
 export type NormalizedTurnUsage = {
@@ -32,8 +34,9 @@ export type NormalizedTurnUsage = {
 	job_id: string;
 	run_id: string;
 	case_id: string;
+	conversation_id: string;
 	job_attempt: number | null;
-	stage: "audit_agent";
+	stage: "audit_agent" | "chat_agent";
 	provider: string;
 	model: string;
 	status: "success" | "failed";
@@ -73,6 +76,7 @@ export function requestIdForAssistantMessage(
 		String(identity.job_id || ""),
 		String(identity.job_attempt ?? ""),
 		String(identity.case_id || ""),
+		String(identity.conversation_id || ""),
 	];
 	if (messageId) {
 		return `pi:${stableRequestHash([...executionSeed, messageId])}`;
@@ -113,16 +117,22 @@ export function usageFromAssistantMessage(
 				? input + output
 				: null;
 	const failed = Boolean(message.errorMessage) || String(message.stopReason || "") === "error";
+	const conversationId = String(identity.conversation_id || "").trim();
+	const jobId = String(identity.job_id || "").trim();
+	const stage =
+		identity.stage ||
+		(conversationId && !jobId ? "chat_agent" : "audit_agent");
 	return {
 		request_id: requestIdForAssistantMessage(identity, message),
-		job_id: String(identity.job_id || ""),
+		job_id: jobId,
 		run_id: String(identity.run_id || ""),
 		case_id: String(identity.case_id || ""),
+		conversation_id: conversationId,
 		job_attempt:
 			typeof identity.job_attempt === "number" && Number.isFinite(identity.job_attempt)
 				? Math.floor(identity.job_attempt)
 				: null,
-		stage: "audit_agent",
+		stage,
 		provider: String(message.provider || process.env.PI_PROVIDER || "zhipu"),
 		model: String(message.model || process.env.PI_MODEL || "glm-5.3-flash"),
 		status: failed ? "failed" : "success",
@@ -146,8 +156,13 @@ export function sidecarAuthHeaders(): Record<string, string> {
 	return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+export function usageEventCanPost(event: NormalizedTurnUsage): boolean {
+	if (!event.request_id) return false;
+	return Boolean(event.job_id || event.conversation_id);
+}
+
 export async function postUsageEvent(event: NormalizedTurnUsage): Promise<boolean> {
-	if (!event.job_id || !event.request_id) return false;
+	if (!usageEventCanPost(event)) return false;
 	try {
 		const res = await fetch(`${apiBase()}/internal/llm-usage`, {
 			method: "POST",

@@ -41,6 +41,7 @@ STAGE_REPORT_PARAMETERS = "report_parameters"
 STAGE_TEST_ITEMS = "test_items"
 STAGE_MODEL_DECODE = "model_decode"
 STAGE_AUDIT_AGENT = "audit_agent"
+STAGE_CHAT_AGENT = "chat_agent"
 STAGE_QUERY_REWRITE = "query_rewrite"
 STAGE_RETRIEVAL_EMBEDDING = "retrieval_embedding"
 STAGE_RERANK = "rerank"
@@ -52,6 +53,7 @@ KNOWN_STAGES = frozenset(
         STAGE_TEST_ITEMS,
         STAGE_MODEL_DECODE,
         STAGE_AUDIT_AGENT,
+        STAGE_CHAT_AGENT,
         STAGE_QUERY_REWRITE,
         STAGE_RETRIEVAL_EMBEDDING,
         STAGE_RERANK,
@@ -72,6 +74,7 @@ class UsageContext:
     job_id: str = ""
     run_id: str = ""
     case_id: str = ""
+    conversation_id: str = ""
     job_attempt: int | None = None
     request_attempt: int = 1
     stage: str = STAGE_OTHER
@@ -370,6 +373,7 @@ def build_usage_event(
         job_id=str(context.job_id or "").strip() or None,
         run_id=str(context.run_id or "").strip() or None,
         case_id=str(context.case_id or "").strip() or None,
+        conversation_id=str(context.conversation_id or "").strip() or None,
         job_attempt=context.job_attempt,
         request_attempt=max(1, int(context.request_attempt or 1)),
         stage=normalize_stage(context.stage),

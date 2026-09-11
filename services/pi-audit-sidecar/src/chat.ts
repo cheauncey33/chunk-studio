@@ -214,7 +214,9 @@ export async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnOutcome
 		job_id: null,
 		run_id: null,
 		job_attempt: null,
-		case_id: String(input.conversation_id || input.assistant_id || "chat").trim(),
+		case_id: null,
+		conversation_id: String(input.conversation_id || "").trim() || null,
+		stage: "chat_agent",
 	};
 	const usagePosts: Promise<unknown>[] = [];
 	const fileIds = Array.isArray(input.file_ids)

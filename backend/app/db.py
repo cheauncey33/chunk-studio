@@ -347,6 +347,7 @@ CREATE TABLE IF NOT EXISTS llm_usage_events (
     job_id                TEXT,
     run_id                TEXT,
     case_id               TEXT,
+    conversation_id       TEXT,
     job_attempt           INTEGER,
     request_attempt       INTEGER NOT NULL DEFAULT 1,
     stage                 TEXT NOT NULL DEFAULT 'other',
@@ -441,6 +442,16 @@ def _migrate_llm_usage_events() -> None:
 
     assert _conn is not None
     _conn.executescript(LLM_USAGE_EVENTS_SQLITE_DDL)
+    cols = {
+        row["name"]
+        for row in _conn.execute("PRAGMA table_info(llm_usage_events)").fetchall()
+    }
+    if "conversation_id" not in cols:
+        _conn.execute("ALTER TABLE llm_usage_events ADD COLUMN conversation_id TEXT")
+    _conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_llm_usage_events_conversation
+           ON llm_usage_events(workspace_id, conversation_id)"""
+    )
 
 
 def _migrate_audit_batches() -> None:

@@ -2678,6 +2678,7 @@ def postgres_schema_sql() -> list[str]:
              job_id TEXT,
              run_id TEXT,
              case_id TEXT,
+             conversation_id TEXT,
              job_attempt INTEGER,
              request_attempt INTEGER NOT NULL DEFAULT 1,
              stage TEXT NOT NULL DEFAULT 'other',
@@ -2700,6 +2701,8 @@ def postgres_schema_sql() -> list[str]:
         "CREATE INDEX IF NOT EXISTS ix_llm_usage_events_job ON llm_usage_events(workspace_id, job_id, created_at)",
         "CREATE INDEX IF NOT EXISTS ix_llm_usage_events_case ON llm_usage_events(workspace_id, job_id, case_id)",
         "CREATE INDEX IF NOT EXISTS ix_llm_usage_events_attempt ON llm_usage_events(job_id, job_attempt)",
+        "ALTER TABLE llm_usage_events ADD COLUMN IF NOT EXISTS conversation_id TEXT",
+        "CREATE INDEX IF NOT EXISTS ix_llm_usage_events_conversation ON llm_usage_events(workspace_id, conversation_id)",
         """CREATE TABLE IF NOT EXISTS audit_batches (
              id TEXT PRIMARY KEY,
              workspace_id TEXT NOT NULL,

@@ -18,6 +18,7 @@ class InternalUsageIngest(BaseModel):
     job_id: str | None = None
     run_id: str | None = None
     case_id: str | None = None
+    conversation_id: str | None = None
     job_attempt: int | None = None
     request_attempt: int | None = 1
     stage: str = llm_usage.STAGE_AUDIT_AGENT
@@ -32,7 +33,7 @@ class InternalUsageIngest(BaseModel):
     cache_read_tokens: int | None = None
     cache_write_tokens: int | None = None
     total_tokens: int | None = None
-    # Sidecar-supplied workspace is ignored; resolved from job_id.
+    # Sidecar-supplied workspace is ignored; resolved from job_id or conversation_id.
     workspace_id: str | None = None
 
 
@@ -114,22 +115,31 @@ def ingest_llm_usage(
     except HTTPException:
         raise
     job_id = str(body.job_id or "").strip()
+    conversation_id = str(body.conversation_id or "").strip()
     try:
         repository = get_usage_repository()
         workspace_id = repository.lookup_job_workspace(job_id) if job_id else None
         if job_id and not workspace_id:
             return {"ok": True, "recorded": False, "reason": "job_not_found"}
+        if not workspace_id and conversation_id:
+            workspace_id = repository.lookup_conversation_workspace(conversation_id)
+            if not workspace_id:
+                return {"ok": True, "recorded": False, "reason": "conversation_not_found"}
         if not workspace_id:
             return {"ok": True, "recorded": False, "reason": "job_id_required"}
         usage = _normalize_ingest(body)
+        default_stage = (
+            llm_usage.STAGE_CHAT_AGENT if conversation_id and not job_id else llm_usage.STAGE_AUDIT_AGENT
+        )
         context = llm_usage.UsageContext(
             workspace_id=workspace_id,
             job_id=job_id,
             run_id=str(body.run_id or "").strip(),
             case_id=str(body.case_id or "").strip(),
+            conversation_id=conversation_id,
             job_attempt=body.job_attempt,
             request_attempt=max(1, int(body.request_attempt or 1)),
-            stage=llm_usage.normalize_stage(body.stage or llm_usage.STAGE_AUDIT_AGENT),
+            stage=llm_usage.normalize_stage(body.stage or default_stage),
             provider=str(body.provider or "").strip(),
             model=str(body.model or "").strip(),
         )
