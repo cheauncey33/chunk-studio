@@ -1,0 +1,194 @@
+{
+  "version": 1,
+  "benchmark": "raw_anchor Top-8 preview-window ablation",
+  "inputs": {
+    "ranking_artifact": "evaluation/experiments/query_harness/initial_v1/raw_anchor.json",
+    "corpus_db": "external local corpus DB",
+    "selected_chunks": 72,
+    "selected_corpus_sha256": "a6a1f03677d7326bf57f281f43c5e75200f403e41fcc1a7f81f3d87ac772bbc5"
+  },
+  "policy": {
+    "baseline": "legacy metadata plus blind text[:800] preview",
+    "head": "type-aware locator cards; section snippets around query hits ±250 chars; table values hidden",
+    "treatment": "type-aware locator cards; section snippets around query hits ±100 chars; table values hidden"
+  },
+  "limitations": [
+    "The renderer runs after retrieval and reranking, so ranking recall cannot change in this ablation.",
+    "Visibility is deterministic literal query-term exposure, not an end-to-end LLM answer-accuracy score.",
+    "The legacy comparison includes the table locator-only policy; the ±250 versus ±100 comparison isolates the branch's radius change."
+  ],
+  "ranking": {
+    "cases": 33,
+    "old_strict_top8_hits": 9,
+    "new_strict_top8_hits": 9,
+    "old_strict_top8_recall": 0.2727,
+    "new_strict_top8_recall": 0.2727,
+    "delta_percentage_points": 0,
+    "reranker_order_changed": false
+  },
+  "preview_visibility": {
+    "all": {
+      "candidates": 264,
+      "source_match_eligible": 222,
+      "old_visible_hits": 205,
+      "old_visible_rate": 0.9234,
+      "new_visible_hits": 173,
+      "new_visible_rate": 0.7793,
+      "delta_percentage_points": -14.4
+    },
+    "section": {
+      "candidates": 190,
+      "source_match_eligible": 149,
+      "old_visible_hits": 136,
+      "old_visible_rate": 0.9128,
+      "new_visible_hits": 149,
+      "new_visible_rate": 1,
+      "delta_percentage_points": 8.7
+    },
+    "table": {
+      "candidates": 74,
+      "source_match_eligible": 73,
+      "old_visible_hits": 69,
+      "old_visible_rate": 0.9452,
+      "new_visible_hits": 24,
+      "new_visible_rate": 0.3288,
+      "delta_percentage_points": -61.6
+    },
+    "long_chunks": {
+      "candidates": 170,
+      "source_match_eligible": 153,
+      "old_visible_hits": 136,
+      "old_visible_rate": 0.8889,
+      "new_visible_hits": 114,
+      "new_visible_rate": 0.7451,
+      "delta_percentage_points": -14.4
+    },
+    "long_sections": {
+      "candidates": 126,
+      "source_match_eligible": 109,
+      "old_visible_hits": 96,
+      "old_visible_rate": 0.8807,
+      "new_visible_hits": 109,
+      "new_visible_rate": 1,
+      "delta_percentage_points": 11.9
+    },
+    "strict_top8_gold_cases": {
+      "all": {
+        "cases": 9,
+        "old_visible": 8,
+        "new_visible": 5,
+        "old_visible_rate": 0.8889,
+        "new_visible_rate": 0.5556,
+        "delta_percentage_points": -33.3
+      },
+      "table_gold": {
+        "cases": 5,
+        "old_visible": 4,
+        "new_visible": 1,
+        "old_visible_rate": 0.8,
+        "new_visible_rate": 0.2,
+        "delta_percentage_points": -60
+      },
+      "long_gold": {
+        "cases": 3,
+        "old_visible": 3,
+        "new_visible": 0,
+        "old_visible_rate": 1,
+        "new_visible_rate": 0,
+        "delta_percentage_points": -100
+      },
+      "long_section_gold": {
+        "cases": 0,
+        "old_visible": 0,
+        "new_visible": 0,
+        "old_visible_rate": null,
+        "new_visible_rate": null,
+        "delta_percentage_points": null
+      }
+    }
+  },
+  "candidate_card_chars": {
+    "all": {
+      "candidates": 264,
+      "old_average": 1096.1,
+      "head_average": 541.8,
+      "new_average": 401.4,
+      "reduction_vs_legacy": 0.6338,
+      "reduction_vs_head": 0.2591
+    },
+    "section": {
+      "candidates": 190,
+      "old_average": 1101.6,
+      "head_average": 646.8,
+      "new_average": 451.7,
+      "reduction_vs_legacy": 0.59,
+      "reduction_vs_head": 0.3017
+    },
+    "table": {
+      "candidates": 74,
+      "old_average": 1081.9,
+      "head_average": 272.4,
+      "new_average": 272.4,
+      "reduction_vs_legacy": 0.7482,
+      "reduction_vs_head": 0
+    },
+    "long_sections": {
+      "candidates": 126,
+      "old_average": 1230.8,
+      "head_average": 794.9,
+      "new_average": 519.2,
+      "reduction_vs_legacy": 0.5782,
+      "reduction_vs_head": 0.3469
+    }
+  },
+  "context_chars_per_case": {
+    "old_average": 8775.5,
+    "head_average": 4348.7,
+    "new_average": 3225.4,
+    "average_reduction_vs_legacy": 0.6325,
+    "average_reduction_vs_head": 0.2583,
+    "old_p95": 9634,
+    "head_p95": 6015,
+    "new_p95": 3946,
+    "p95_reduction_vs_legacy": 0.5904,
+    "p95_reduction_vs_head": 0.344
+  },
+  "case_changes": [
+    {
+      "case_id": "ezc-1-r1",
+      "strict_top8_hit": true,
+      "old_gold_visible": true,
+      "new_gold_visible": false,
+      "has_table_gold": true,
+      "has_long_gold": true,
+      "has_long_section_gold": false,
+      "old_context_chars": 9100,
+      "head_context_chars": 3737,
+      "new_context_chars": 3466
+    },
+    {
+      "case_id": "ezc-12-r4",
+      "strict_top8_hit": true,
+      "old_gold_visible": true,
+      "new_gold_visible": false,
+      "has_table_gold": true,
+      "has_long_gold": true,
+      "has_long_section_gold": false,
+      "old_context_chars": 8337,
+      "head_context_chars": 3325,
+      "new_context_chars": 2427
+    },
+    {
+      "case_id": "xyc-12-r4",
+      "strict_top8_hit": true,
+      "old_gold_visible": true,
+      "new_gold_visible": false,
+      "has_table_gold": true,
+      "has_long_gold": true,
+      "has_long_section_gold": false,
+      "old_context_chars": 8337,
+      "head_context_chars": 3325,
+      "new_context_chars": 2427
+    }
+  ]
+}

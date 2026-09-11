@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node --env-file=.env --import tsx src/server.ts",
     "start:plain": "node --import tsx src/server.ts",
+    "eval:preview": "node --import tsx src/evaluatePreviewWindows.ts",
     "test": "node --import tsx --test src/preview.test.ts src/progress.test.ts src/closure.test.ts src/usage.test.ts src/tools.test.ts"
   },
   "dependencies": {
