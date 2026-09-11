@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { extractSnippets, formatFirstRoundCards } from "./preview.ts";
+import { extractSnippets, formatFirstRoundCards, SNIPPET_RADIUS } from "./preview.ts";
 
 function paddedSection(): string {
 	const pad = "适用条件与试验布置说明。".repeat(80);
@@ -44,6 +44,16 @@ test("first-round section cards emit multiple query-aware snippets", () => {
 	const snippets = extractSnippets(paddedSection(), productionQuery);
 	assert.ok(snippets.length >= 2, `expected multiple snippets, got ${snippets.length}`);
 	assert.ok(new Set(snippets.map((item) => item.term)).size >= 2);
+});
+
+test("section snippets stay within the hit plus a 100-character radius", () => {
+	const left = "左".repeat(180);
+	const right = "右".repeat(180);
+	const [hit] = extractSnippets(`${left}目标词${right}`, "目标词");
+
+	assert.equal(SNIPPET_RADIUS, 100);
+	assert.equal(hit.term, "目标词");
+	assert.equal(hit.snippet, `…${"左".repeat(100)}目标词${"右".repeat(100)}…`);
 });
 
 test("first-round section cards stay locator-only without a query", () => {

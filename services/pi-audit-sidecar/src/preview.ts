@@ -30,7 +30,7 @@ export type RowFilterPreview = {
 	system_nominal_voltage_kv?: number;
 };
 
-const SNIPPET_RADIUS = 250;
+export const SNIPPET_RADIUS = 100;
 const MAX_SNIPPETS = 3;
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -80,7 +80,11 @@ export function queryTerms(query: string): string[] {
 	return found;
 }
 
-export function extractSnippets(text: string, query: string): { term: string; snippet: string }[] {
+export function extractSnippets(
+	text: string,
+	query: string,
+	options?: { radius?: number },
+): { term: string; snippet: string }[] {
 	const body = stripMarkup(text);
 	if (!body) return [];
 	const terms = queryTerms(query);
@@ -100,10 +104,11 @@ export function extractSnippets(text: string, query: string): { term: string; sn
 	if (!matches.length) return [];
 	matches.sort((a, b) => b.length - a.length || a.index - b.index);
 	const windows: { term: string; left: number; right: number }[] = [];
+	const radius = Math.max(0, options?.radius ?? SNIPPET_RADIUS);
 	for (const match of matches) {
 		if (windows.length >= MAX_SNIPPETS) break;
-		const left = Math.max(0, match.index - SNIPPET_RADIUS);
-		const right = Math.min(body.length, match.index + match.length + SNIPPET_RADIUS);
+		const left = Math.max(0, match.index - radius);
+		const right = Math.min(body.length, match.index + match.length + radius);
 		if (windows.some((window) => !(right <= window.left || left >= window.right))) continue;
 		windows.push({ term: match.term, left, right });
 	}
@@ -166,9 +171,9 @@ function formatTablePreview(hit: PreviewHit, rowFilter?: RowFilterPreview): stri
 	return lines.join("\n");
 }
 
-function formatSectionPreview(hit: PreviewHit, query: string): string {
+function formatSectionPreview(hit: PreviewHit, query: string, snippetRadius?: number): string {
 	const lines = [...locatorLines(hit)];
-	const snippets = extractSnippets(asText(hit.text), query);
+	const snippets = extractSnippets(asText(hit.text), query, { radius: snippetRadius });
 	if (!snippets.length) {
 		lines.push("无关键词窗口，正文未展开。要用条款原文请 read_chunk。");
 		return lines.join("\n");
@@ -183,7 +188,7 @@ function formatSectionPreview(hit: PreviewHit, query: string): string {
 export function formatHitPreview(
 	hit: PreviewHit,
 	index: number,
-	options?: { query?: string; rowFilter?: RowFilterPreview },
+	options?: { query?: string; rowFilter?: RowFilterPreview; snippetRadius?: number },
 ): string {
 	const score = hit.score;
 	const scoreText =
@@ -200,7 +205,7 @@ export function formatHitPreview(
 	const body =
 		kind === "table"
 			? formatTablePreview(hit, options?.rowFilter)
-			: formatSectionPreview(hit, options?.query || "");
+			: formatSectionPreview(hit, options?.query || "", options?.snippetRadius);
 	return `${head}\n${body}`;
 }
 
@@ -220,7 +225,7 @@ export function toLocatorHit(hit: PreviewHit): Record<string, unknown> {
 
 export function formatSearchHits(
 	hits: PreviewHit[],
-	options?: { query?: string; rowFilter?: RowFilterPreview },
+	options?: { query?: string; rowFilter?: RowFilterPreview; snippetRadius?: number },
 ): string {
 	if (!hits.length) return "（无命中）";
 	return hits.map((hit, index) => formatHitPreview(hit, index, options)).join("\n\n");

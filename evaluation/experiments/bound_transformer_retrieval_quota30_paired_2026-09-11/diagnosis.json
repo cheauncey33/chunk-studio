@@ -1,0 +1,195 @@
+{
+  "groups": 440,
+  "stage_recall": {
+    "any_source_top30": 0.9590909090909091,
+    "fusion_pool": 0.9590909090909091,
+    "fusion_top8": 0.5545454545454546,
+    "fusion_top30": 0.8704545454545455,
+    "rerank_top8": 0.7363636363636363,
+    "rerank_top30": 0.9227272727272727
+  },
+  "outcomes": {
+    "reranked_9_30": 82,
+    "top8": 324,
+    "reranked_below_30": 16,
+    "not_recalled": 18
+  },
+  "reranker_movement": {
+    "promoted_into_top8": 133,
+    "demoted_out_of_top8": 53,
+    "promoted_into_top30": 32,
+    "demoted_out_of_top30": 9
+  },
+  "route_recall": {
+    "dense:keyword:section": {
+      "hits": 43,
+      "groups": 148,
+      "recall": 0.2905405405405405
+    },
+    "dense:keyword:table": {
+      "hits": 48,
+      "groups": 148,
+      "recall": 0.32432432432432434
+    },
+    "dense:production:section": {
+      "hits": 217,
+      "groups": 440,
+      "recall": 0.49318181818181817
+    },
+    "dense:production:table": {
+      "hits": 165,
+      "groups": 440,
+      "recall": 0.375
+    },
+    "dense:semantic:section": {
+      "hits": 83,
+      "groups": 148,
+      "recall": 0.5608108108108109
+    },
+    "dense:semantic:table": {
+      "hits": 61,
+      "groups": 148,
+      "recall": 0.41216216216216217
+    },
+    "lexical:keyword:section": {
+      "hits": 49,
+      "groups": 148,
+      "recall": 0.3310810810810811
+    },
+    "lexical:keyword:table": {
+      "hits": 54,
+      "groups": 148,
+      "recall": 0.36486486486486486
+    },
+    "lexical:production:section": {
+      "hits": 234,
+      "groups": 440,
+      "recall": 0.5318181818181819
+    },
+    "lexical:production:table": {
+      "hits": 205,
+      "groups": 440,
+      "recall": 0.4659090909090909
+    }
+  },
+  "slices": {
+    "rewrite_status": [
+      {
+        "value": "fallback",
+        "groups": 292,
+        "source_recall": 0.9383561643835616,
+        "fusion_pool_recall": 0.9383561643835616,
+        "fusion_top8": 0.565068493150685,
+        "rerank_top8": 0.684931506849315,
+        "rerank_top30": 0.8938356164383562
+      },
+      {
+        "value": "rewritten",
+        "groups": 148,
+        "source_recall": 1.0,
+        "fusion_pool_recall": 1.0,
+        "fusion_top8": 0.5337837837837838,
+        "rerank_top8": 0.8378378378378378,
+        "rerank_top30": 0.9797297297297297
+      }
+    ],
+    "evidence_type": [
+      {
+        "value": "section",
+        "groups": 217,
+        "source_recall": 0.9769585253456221,
+        "fusion_pool_recall": 0.9769585253456221,
+        "fusion_top8": 0.6543778801843319,
+        "rerank_top8": 0.8847926267281107,
+        "rerank_top30": 0.9769585253456221
+      },
+      {
+        "value": "section+table",
+        "groups": 30,
+        "source_recall": 1.0,
+        "fusion_pool_recall": 1.0,
+        "fusion_top8": 0.6666666666666666,
+        "rerank_top8": 0.9,
+        "rerank_top30": 1.0
+      },
+      {
+        "value": "table",
+        "groups": 193,
+        "source_recall": 0.9326424870466321,
+        "fusion_pool_recall": 0.9326424870466321,
+        "fusion_top8": 0.42487046632124353,
+        "rerank_top8": 0.5440414507772021,
+        "rerank_top30": 0.8497409326424871
+      }
+    ]
+  },
+  "failure_by_query": [
+    {
+      "outcome": "not_recalled",
+      "groups": 4,
+      "query": "短路阻抗和负载损耗测量（例行试验） 负载损耗Pₖ（kW）：≤2.185",
+      "rewrite_status": "fallback",
+      "evidence_type": "table"
+    },
+    {
+      "outcome": "not_recalled",
+      "groups": 4,
+      "query": "短路阻抗和负载损耗测量（重复例行试验） 参考温度（℃）：75",
+      "rewrite_status": "fallback",
+      "evidence_type": "section"
+    },
+    {
+      "outcome": "not_recalled",
+      "groups": 4,
+      "query": "短路阻抗和负载损耗测量（重复例行试验） 负载损耗Pₖ（kW）：≤2.185",
+      "rewrite_status": "fallback",
+      "evidence_type": "table"
+    },
+    {
+      "outcome": "not_recalled",
+      "groups": 1,
+      "query": "短路阻抗和负载损耗测量（例行试验） 总损耗P总（kW）：≤3.985",
+      "rewrite_status": "fallback",
+      "evidence_type": "table"
+    },
+    {
+      "outcome": "not_recalled",
+      "groups": 1,
+      "query": "短路阻抗和负载损耗测量（例行试验） 负载损耗Pₖ（kW）：≤3.615",
+      "rewrite_status": "fallback",
+      "evidence_type": "table"
+    },
+    {
+      "outcome": "not_recalled",
+      "groups": 1,
+      "query": "短路阻抗和负载损耗测量（重复例行试验） 参考温度（ₖ）：75",
+      "rewrite_status": "fallback",
+      "evidence_type": "section"
+    },
+    {
+      "outcome": "not_recalled",
+      "groups": 1,
+      "query": "短路阻抗和负载损耗测量（重复例行试验） 总损耗P总（kW）：≤2.400",
+      "rewrite_status": "fallback",
+      "evidence_type": "table"
+    },
+    {
+      "outcome": "not_recalled",
+      "groups": 1,
+      "query": "短路阻抗和负载损耗测量（重复例行试验） 总损耗P总（kW）：≤3.985",
+      "rewrite_status": "fallback",
+      "evidence_type": "table"
+    },
+    {
+      "outcome": "not_recalled",
+      "groups": 1,
+      "query": "短路阻抗和负载损耗测量（重复例行试验） 负载损耗Pₖ（kW）：≤3.615",
+      "rewrite_status": "fallback",
+      "evidence_type": "table"
+    }
+  ],
+  "dropped_source_rank_range": {
+    "min": null,
+    "max": null
+  }
+}

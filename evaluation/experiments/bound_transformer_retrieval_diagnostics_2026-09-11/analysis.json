@@ -1,0 +1,519 @@
+{
+  "stage_diagnostics_available": true,
+  "case_weighted": {
+    "1": {
+      "hits": 151,
+      "cases": 440,
+      "recall": 0.3431818181818182
+    },
+    "3": {
+      "hits": 210,
+      "cases": 440,
+      "recall": 0.4772727272727273
+    },
+    "5": {
+      "hits": 298,
+      "cases": 440,
+      "recall": 0.6772727272727272
+    },
+    "8": {
+      "hits": 323,
+      "cases": 440,
+      "recall": 0.7340909090909091
+    },
+    "10": {
+      "hits": 343,
+      "cases": 440,
+      "recall": 0.7795454545454545
+    },
+    "15": {
+      "hits": 376,
+      "cases": 440,
+      "recall": 0.8545454545454545
+    },
+    "20": {
+      "hits": 385,
+      "cases": 440,
+      "recall": 0.875
+    },
+    "30": {
+      "hits": 391,
+      "cases": 440,
+      "recall": 0.8886363636363637
+    }
+  },
+  "unique_gold_chunk": {
+    "1": {
+      "unique_gold_chunks": 71,
+      "covered_chunks": 13,
+      "chunk_coverage": 0.18309859154929578,
+      "chunk_macro_case_recall": 0.11726130850489218
+    },
+    "3": {
+      "unique_gold_chunks": 71,
+      "covered_chunks": 26,
+      "chunk_coverage": 0.36619718309859156,
+      "chunk_macro_case_recall": 0.2616894232424916
+    },
+    "5": {
+      "unique_gold_chunks": 71,
+      "covered_chunks": 40,
+      "chunk_coverage": 0.5633802816901409,
+      "chunk_macro_case_recall": 0.4361980123540687
+    },
+    "8": {
+      "unique_gold_chunks": 71,
+      "covered_chunks": 43,
+      "chunk_coverage": 0.6056338028169014,
+      "chunk_macro_case_recall": 0.5182910406250937
+    },
+    "10": {
+      "unique_gold_chunks": 71,
+      "covered_chunks": 45,
+      "chunk_coverage": 0.6338028169014085,
+      "chunk_macro_case_recall": 0.5623419352903126
+    },
+    "15": {
+      "unique_gold_chunks": 71,
+      "covered_chunks": 50,
+      "chunk_coverage": 0.704225352112676,
+      "chunk_macro_case_recall": 0.624723915216873
+    },
+    "20": {
+      "unique_gold_chunks": 71,
+      "covered_chunks": 56,
+      "chunk_coverage": 0.7887323943661971,
+      "chunk_macro_case_recall": 0.6881428906076793
+    },
+    "30": {
+      "unique_gold_chunks": 71,
+      "covered_chunks": 62,
+      "chunk_coverage": 0.8732394366197183,
+      "chunk_macro_case_recall": 0.7678712608290073
+    }
+  },
+  "top8_slices": {
+    "rewrite_mode": [
+      {
+        "rewrite_mode": "fallback",
+        "hits": 208,
+        "cases": 311,
+        "recall": 0.6688102893890675
+      },
+      {
+        "rewrite_mode": "rewritten",
+        "hits": 115,
+        "cases": 129,
+        "recall": 0.8914728682170543
+      }
+    ],
+    "gold_content_type": [
+      {
+        "gold_content_type": "section",
+        "hits": 187,
+        "cases": 217,
+        "recall": 0.8617511520737328
+      },
+      {
+        "gold_content_type": "table",
+        "hits": 109,
+        "cases": 193,
+        "recall": 0.5647668393782384
+      },
+      {
+        "gold_content_type": "section+table",
+        "hits": 27,
+        "cases": 30,
+        "recall": 0.9
+      }
+    ],
+    "expected_status": [
+      {
+        "expected_status": "supported",
+        "hits": 227,
+        "cases": 306,
+        "recall": 0.7418300653594772
+      },
+      {
+        "expected_status": "not_audited",
+        "hits": 48,
+        "cases": 71,
+        "recall": 0.676056338028169
+      },
+      {
+        "expected_status": "mismatch",
+        "hits": 17,
+        "cases": 32,
+        "recall": 0.53125
+      },
+      {
+        "expected_status": "insufficient_context",
+        "hits": 31,
+        "cases": 31,
+        "recall": 1.0
+      }
+    ],
+    "domain": [
+      {
+        "domain": "dielectric",
+        "hits": 152,
+        "cases": 157,
+        "recall": 0.9681528662420382
+      },
+      {
+        "domain": "electrical_parameters",
+        "hits": 53,
+        "cases": 142,
+        "recall": 0.3732394366197183
+      },
+      {
+        "domain": "mechanical",
+        "hits": 118,
+        "cases": 141,
+        "recall": 0.8368794326241135
+      }
+    ],
+    "asset_number": [
+      {
+        "asset_number": "01",
+        "hits": 50,
+        "cases": 67,
+        "recall": 0.746268656716418
+      },
+      {
+        "asset_number": "04",
+        "hits": 50,
+        "cases": 67,
+        "recall": 0.746268656716418
+      },
+      {
+        "asset_number": "06",
+        "hits": 47,
+        "cases": 66,
+        "recall": 0.7121212121212122
+      },
+      {
+        "asset_number": "02",
+        "hits": 47,
+        "cases": 64,
+        "recall": 0.734375
+      },
+      {
+        "asset_number": "03",
+        "hits": 47,
+        "cases": 60,
+        "recall": 0.7833333333333333
+      },
+      {
+        "asset_number": "07",
+        "hits": 41,
+        "cases": 59,
+        "recall": 0.6949152542372882
+      },
+      {
+        "asset_number": "05",
+        "hits": 41,
+        "cases": 57,
+        "recall": 0.7192982456140351
+      }
+    ]
+  },
+  "rank_bands": {
+    "1": 151,
+    "2-3": 59,
+    "4-5": 88,
+    "6-8": 25,
+    "9-15": 53,
+    "16-30": 15,
+    ">30/not returned": 49
+  },
+  "duplicate_slots": {
+    "8": {
+      "average_returned_slots": 8,
+      "average_duplicate_hash_slots": 0.6846153846153846,
+      "queries_with_duplicates": 54,
+      "queries": 130
+    },
+    "30": {
+      "average_returned_slots": 30,
+      "average_duplicate_hash_slots": 2.146153846153846,
+      "queries_with_duplicates": 95,
+      "queries": 130
+    }
+  },
+  "top30_misses": {
+    "cases": 49,
+    "unique_queries": 24,
+    "unique_gold_chunks": 11,
+    "rewrite_mode": [
+      {
+        "rewrite_mode": "fallback",
+        "hits": 0,
+        "cases": 46,
+        "recall": 0.0
+      },
+      {
+        "rewrite_mode": "rewritten",
+        "hits": 0,
+        "cases": 3,
+        "recall": 0.0
+      }
+    ],
+    "gold_content_type_counts": {
+      "table": 39,
+      "section": 10
+    },
+    "expected_status_counts": {
+      "mismatch": 11,
+      "supported": 34,
+      "not_audited": 4
+    },
+    "most_repeated_missed_gold": [
+      [
+        "e3deef2dc2419f9d368b0ae5076c2d105a070a626006c0d71b76ca33ea90c5f1",
+        16
+      ],
+      [
+        "6d16c01580146b5a6b99d36a796f14855dd26bbeee3645d33f0a69f3d70c5b2d",
+        12
+      ],
+      [
+        "7e5ae919e9327fd3bbbcce9b199107bc357cf9c9a16681b2692748c47b428587",
+        10
+      ],
+      [
+        "b407d9ae836c6e33312cc7806a876bdd78daa3cc128bc5bdf5d2197a66aaefce",
+        10
+      ],
+      [
+        "141518e526488bc1d171458dccddefec174240f01c9fd5226de34ba434637a9c",
+        8
+      ],
+      [
+        "0329b08e8d9848367281acb51c4a7a3fce0e85cf794d8efb13dd9304eb626d87",
+        5
+      ],
+      [
+        "80bd004f7f2559178fec92d171dbde9784712d90c4a10db6536de7e52980a90a",
+        3
+      ],
+      [
+        "24acf718055c166c00fc9f82c935e6dc93eca2e9cd497f83ee4496fd4d8c0dca",
+        1
+      ],
+      [
+        "c33efeb0767c044ac24f76463526d4bc740b6ac7af30ae326046a8ff21fc4c90",
+        1
+      ],
+      [
+        "a73656707dda8bc477f1ff6b98931a15c40cd169aabf9b4ddd6d8ebc22fcc25b",
+        1
+      ]
+    ],
+    "families": [
+      [
+        "短路阻抗和负载损耗测量（重复例行试验）",
+        15
+      ],
+      [
+        "短路阻抗和负载损耗测量（例行试验）",
+        14
+      ],
+      [
+        "空载损耗和空载电流测量（重复例行试验）",
+        6
+      ],
+      [
+        "电压比测量和联结组标号检定（例行试验）",
+        4
+      ],
+      [
+        "空载损耗和空载电流测量（例行试验）",
+        4
+      ],
+      [
+        "声级测定（特殊试验）",
+        3
+      ],
+      [
+        "电压比测量和联结组标号检定（重复例行试验）",
+        3
+      ]
+    ],
+    "gold_chunks": [
+      {
+        "text_sha256": "e3deef2dc2419f9d368b0ae5076c2d105a070a626006c0d71b76ca33ea90c5f1",
+        "missed_case_bindings": 16,
+        "total_case_bindings": 37,
+        "covered_elsewhere_at_30": true,
+        "standard_no": "GB/T 6451-2023",
+        "content_type": "table",
+        "section": null,
+        "table_no": "3"
+      },
+      {
+        "text_sha256": "6d16c01580146b5a6b99d36a796f14855dd26bbeee3645d33f0a69f3d70c5b2d",
+        "missed_case_bindings": 12,
+        "total_case_bindings": 26,
+        "covered_elsewhere_at_30": true,
+        "standard_no": "GB/T 6451-2023",
+        "content_type": "table",
+        "section": null,
+        "table_no": "1"
+      },
+      {
+        "text_sha256": "7e5ae919e9327fd3bbbcce9b199107bc357cf9c9a16681b2692748c47b428587",
+        "missed_case_bindings": 10,
+        "total_case_bindings": 21,
+        "covered_elsewhere_at_30": true,
+        "standard_no": "GB/T 6451-2023",
+        "content_type": "table",
+        "section": null,
+        "table_no": "7"
+      },
+      {
+        "text_sha256": "b407d9ae836c6e33312cc7806a876bdd78daa3cc128bc5bdf5d2197a66aaefce",
+        "missed_case_bindings": 10,
+        "total_case_bindings": 10,
+        "covered_elsewhere_at_30": false,
+        "standard_no": "GB/T 1094.1-2013",
+        "content_type": "section",
+        "section": "11.1",
+        "table_no": null
+      },
+      {
+        "text_sha256": "141518e526488bc1d171458dccddefec174240f01c9fd5226de34ba434637a9c",
+        "missed_case_bindings": 8,
+        "total_case_bindings": 8,
+        "covered_elsewhere_at_30": false,
+        "standard_no": "GB/T 6451-2023",
+        "content_type": "table",
+        "section": null,
+        "table_no": "4"
+      },
+      {
+        "text_sha256": "0329b08e8d9848367281acb51c4a7a3fce0e85cf794d8efb13dd9304eb626d87",
+        "missed_case_bindings": 5,
+        "total_case_bindings": 6,
+        "covered_elsewhere_at_30": true,
+        "standard_no": "GB/T 25438-2010",
+        "content_type": "table",
+        "section": null,
+        "table_no": "1"
+      },
+      {
+        "text_sha256": "80bd004f7f2559178fec92d171dbde9784712d90c4a10db6536de7e52980a90a",
+        "missed_case_bindings": 3,
+        "total_case_bindings": 8,
+        "covered_elsewhere_at_30": false,
+        "standard_no": "GB/T 6451-2023",
+        "content_type": "table",
+        "section": null,
+        "table_no": "5"
+      },
+      {
+        "text_sha256": "24acf718055c166c00fc9f82c935e6dc93eca2e9cd497f83ee4496fd4d8c0dca",
+        "missed_case_bindings": 1,
+        "total_case_bindings": 1,
+        "covered_elsewhere_at_30": false,
+        "standard_no": "GB/T 1094.10-2022",
+        "content_type": "table",
+        "section": null,
+        "table_no": null
+      },
+      {
+        "text_sha256": "c33efeb0767c044ac24f76463526d4bc740b6ac7af30ae326046a8ff21fc4c90",
+        "missed_case_bindings": 1,
+        "total_case_bindings": 1,
+        "covered_elsewhere_at_30": false,
+        "standard_no": "GB/T 1094.10-2022",
+        "content_type": "table",
+        "section": null,
+        "table_no": null
+      },
+      {
+        "text_sha256": "a73656707dda8bc477f1ff6b98931a15c40cd169aabf9b4ddd6d8ebc22fcc25b",
+        "missed_case_bindings": 1,
+        "total_case_bindings": 6,
+        "covered_elsewhere_at_30": true,
+        "standard_no": "GB/T 25438-2010",
+        "content_type": "table",
+        "section": null,
+        "table_no": "2"
+      },
+      {
+        "text_sha256": "e7a8f5151e43fb207ac2c49f94526708e2ddc71e9f87400356e9e9f0e398f15e",
+        "missed_case_bindings": 1,
+        "total_case_bindings": 4,
+        "covered_elsewhere_at_30": true,
+        "standard_no": "GB/T 6451-2023",
+        "content_type": "table",
+        "section": null,
+        "table_no": "7"
+      }
+    ]
+  },
+  "top30_slices": {
+    "rewrite_mode": [
+      {
+        "rewrite_mode": "fallback",
+        "hits": 265,
+        "cases": 311,
+        "recall": 0.8520900321543409
+      },
+      {
+        "rewrite_mode": "rewritten",
+        "hits": 126,
+        "cases": 129,
+        "recall": 0.9767441860465116
+      }
+    ],
+    "gold_content_type": [
+      {
+        "gold_content_type": "section",
+        "hits": 207,
+        "cases": 217,
+        "recall": 0.9539170506912442
+      },
+      {
+        "gold_content_type": "table",
+        "hits": 154,
+        "cases": 193,
+        "recall": 0.7979274611398963
+      },
+      {
+        "gold_content_type": "section+table",
+        "hits": 30,
+        "cases": 30,
+        "recall": 1.0
+      }
+    ],
+    "domain": [
+      {
+        "domain": "dielectric",
+        "hits": 157,
+        "cases": 157,
+        "recall": 1.0
+      },
+      {
+        "domain": "electrical_parameters",
+        "hits": 96,
+        "cases": 142,
+        "recall": 0.676056338028169
+      },
+      {
+        "domain": "mechanical",
+        "hits": 138,
+        "cases": 141,
+        "recall": 0.9787234042553191
+      }
+    ]
+  },
+  "weighting": {
+    "cases": 440,
+    "unique_queries": 130,
+    "unique_gold_chunks": 71,
+    "largest_cases_per_gold_chunk": 62,
+    "median_cases_per_gold_chunk": 3
+  }
+}

@@ -228,17 +228,17 @@ def test_runtime_retrieval_config_and_selection_apply_version_values() -> None:
     )
 
     assert config["route_top_k"] == 7
-    assert config["final_table"] == 8
-    assert config["final_section"] == 6
-    assert config["final_per_type"] == 8
+    assert config["final_table"] is None
+    assert config["final_section"] is None
+    assert config["final_per_type"] is None
     assert config["special_route_reserve"] == 3
     assert config["aggregate_continuation_tables"] is True
     assert config["expand_references"] is True
     assert [item["id"] for item in selected] == ["keep"]
 
     defaults = workflow._retrieval_runtime_config({"retrieval_config": {}})
-    assert defaults["final_table"] == 8
-    assert defaults["final_section"] == 6
+    assert defaults["final_table"] is None
+    assert defaults["final_section"] is None
     assert defaults["aggregate_continuation_tables"] is False
     assert defaults["expand_references"] is False
 
@@ -256,6 +256,10 @@ def test_load_assistant_version_includes_category_provenance(
     profile = workflow._load_assistant_version("assistant_oil_transformer_audit")
     assert profile["category_profile"] == {}
     assert profile["initialization_provenance"]["source"] == "built_in_seed"
+    assert profile["retrieval_config"]["top_k"] == 10
+    assert profile["retrieval_config"]["delivery_policy"] == "top_k"
+    assert "final_table" not in profile["retrieval_config"]
+    assert "final_section" not in profile["retrieval_config"]
     keys = {field["key"] for field in profile["parameter_schema"]["fields"]}
     assert {
         "product_type",
@@ -268,6 +272,51 @@ def test_load_assistant_version_includes_category_provenance(
         "tank_structure",
         "sealing_type",
     } <= keys
+    _close_temp_db(monkeypatch)
+
+
+def test_default_typed_delivery_config_migrates_to_global_top10(
+    monkeypatch, tmp_path
+) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    version_id = "assistant_audit_template_v1"
+    old_config = {
+        "top_k": 10,
+        "final_table": 8,
+        "final_section": 6,
+        "final_per_type": 15,
+    }
+    with db.transaction() as conn:
+        conn.execute(
+            "UPDATE assistant_versions SET retrieval_config=? WHERE id=?",
+            (json.dumps(old_config), version_id),
+        )
+
+    db._migrate_default_delivery_to_top_k()
+
+    row = db.get_conn().execute(
+        "SELECT retrieval_config FROM assistant_versions WHERE id=?",
+        (version_id,),
+    ).fetchone()
+    migrated = json.loads(row["retrieval_config"])
+    assert migrated["top_k"] == 10
+    assert migrated["delivery_policy"] == "top_k"
+    assert "final_table" not in migrated
+    assert "final_section" not in migrated
+    assert "final_per_type" not in migrated
+
+    custom_config = {"top_k": 12, "final_table": 8, "final_section": 6}
+    with db.transaction() as conn:
+        conn.execute(
+            "UPDATE assistant_versions SET retrieval_config=? WHERE id=?",
+            (json.dumps(custom_config), version_id),
+        )
+    db._migrate_default_delivery_to_top_k()
+    row = db.get_conn().execute(
+        "SELECT retrieval_config FROM assistant_versions WHERE id=?",
+        (version_id,),
+    ).fetchone()
+    assert json.loads(row["retrieval_config"]) == custom_config
     _close_temp_db(monkeypatch)
 
 
@@ -1409,6 +1458,38 @@ def test_retrieve_hybrid_candidates_maps_hits_and_passes_scope(monkeypatch) -> N
     assert debug["routes_injected"] is True
     assert debug["final_table"] == 8
     assert debug["final_section"] == 6
+
+
+def test_retrieve_hybrid_candidates_uses_global_top_k_without_typed_quotas(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_hybrid_search(query: str, **kwargs):
+        captured["kwargs"] = kwargs
+        return {"hits": [], "candidate_count": 0, "degraded": []}
+
+    import app.retrieval as retrieval_mod
+
+    monkeypatch.setattr(retrieval_mod, "hybrid_search", fake_hybrid_search)
+    workflow._retrieve_hybrid_candidates(
+        "空载损耗限值",
+        file_ids=["standard"],
+        top_k=10,
+        route_top_k=30,
+        candidates_per_type=20,
+        final_table=None,
+        final_section=None,
+        special_route_reserve=3,
+        rrf_k=60,
+        similarity_threshold=0.2,
+        aggregate_continuation_tables=False,
+        expand_references=False,
+    )
+
+    assert captured["kwargs"]["top_k"] == 10
+    assert captured["kwargs"]["final_table"] is None
+    assert captured["kwargs"]["final_section"] is None
 
 
 def test_workflow_has_no_fixed_applicability_lookup_hook() -> None:

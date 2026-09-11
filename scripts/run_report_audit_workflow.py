@@ -2080,8 +2080,12 @@ def _run_audit_judge_with_consistency(
     }
 
 
-def _resolve_final_delivery_quotas(raw: dict[str, Any]) -> tuple[int, int]:
-    """Judge delivery after rerank: prefer final_table / final_section (default 8+6)."""
+def _resolve_final_delivery_quotas(
+    raw: dict[str, Any],
+) -> tuple[int | None, int | None]:
+    """Return optional typed delivery quotas; absent quotas use global Top-K."""
+    if raw.get("delivery_policy") == "top_k":
+        return None, None
     has_table = "final_table" in raw
     has_section = "final_section" in raw
     if has_table or has_section:
@@ -2092,10 +2096,12 @@ def _resolve_final_delivery_quotas(raw: dict[str, Any]) -> tuple[int, int]:
     if "final_per_type" in raw:
         equal = int(raw["final_per_type"])
         return equal, equal
-    return 8, 6
+    return None, None
 
 
-def _retrieval_runtime_config(profile: dict[str, Any]) -> dict[str, int | float | bool]:
+def _retrieval_runtime_config(
+    profile: dict[str, Any],
+) -> dict[str, int | float | bool | None]:
     raw = profile["retrieval_config"]
     final_table, final_section = _resolve_final_delivery_quotas(raw)
     values: dict[str, int | float] = {
@@ -2107,7 +2113,11 @@ def _retrieval_runtime_config(profile: dict[str, Any]) -> dict[str, int | float 
         "final_table": final_table,
         "final_section": final_section,
         # Legacy mirror: max of typed quotas (tests / older debug fields).
-        "final_per_type": max(final_table, final_section),
+        "final_per_type": (
+            max(final_table, final_section)
+            if final_table is not None and final_section is not None
+            else None
+        ),
         "special_route_reserve": int(raw.get("special_route_reserve", 3)),
         "rrf_k": int(raw.get("rrf_k", RRF_K)),
         "similarity_threshold": float(raw.get("similarity_threshold", 0.2)),
@@ -2129,6 +2139,8 @@ def _retrieval_runtime_config(profile: dict[str, Any]) -> dict[str, int | float 
     }
     for key, value in values.items():
         if isinstance(value, bool):
+            continue
+        if value is None:
             continue
         lower, upper = bounds[key]
         if not lower <= value <= upper:
@@ -2160,8 +2172,8 @@ def _retrieve_hybrid_candidates(
     top_k: int,
     route_top_k: int,
     candidates_per_type: int,
-    final_table: int,
-    final_section: int,
+    final_table: int | None,
+    final_section: int | None,
     special_route_reserve: int,
     rrf_k: int,
     similarity_threshold: float,
@@ -2172,7 +2184,11 @@ def _retrieve_hybrid_candidates(
     """Run hybrid_search with planner routes when provided."""
     from app import retrieval
 
-    delivery_n = final_table + final_section
+    delivery_n = (
+        final_table + final_section
+        if final_table is not None and final_section is not None
+        else 0
+    )
     result = retrieval.hybrid_search(
         query,
         top_k=max(top_k, delivery_n),
@@ -2449,8 +2465,8 @@ def _audit_one_case(
     top_k: int,
     route_top_k: int,
     candidates_per_type: int,
-    final_table: int,
-    final_section: int,
+    final_table: int | None,
+    final_section: int | None,
     special_route_reserve: int,
     rrf_k: int,
     similarity_threshold: float,
@@ -3294,8 +3310,10 @@ def main() -> None:
     top_k = int(retrieval_config["top_k"])
     route_top_k = int(retrieval_config["route_top_k"])
     candidates_per_type = int(retrieval_config["candidate_count_per_type"])
-    final_table = int(retrieval_config["final_table"])
-    final_section = int(retrieval_config["final_section"])
+    final_table_value = retrieval_config["final_table"]
+    final_section_value = retrieval_config["final_section"]
+    final_table = int(final_table_value) if final_table_value is not None else None
+    final_section = int(final_section_value) if final_section_value is not None else None
     special_route_reserve = int(retrieval_config["special_route_reserve"])
     rrf_k = int(retrieval_config["rrf_k"])
     similarity_threshold = float(retrieval_config["similarity_threshold"])
