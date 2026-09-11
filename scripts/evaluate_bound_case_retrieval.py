@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import csv
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -58,7 +59,7 @@ def compact_hit(rank: int, hit: dict[str, Any]) -> dict[str, Any]:
 
 def retrieve_query(query: str) -> dict[str, Any]:
     started = time.perf_counter()
-    result = retrieval.hybrid_search(query, top_k=MAX_TOP_K)
+    result = retrieval.hybrid_search(query, top_k=MAX_TOP_K, include_diagnostics=True)
     return {
         "query": query,
         "duration_seconds": round(time.perf_counter() - started, 3),
@@ -66,8 +67,82 @@ def retrieve_query(query: str) -> dict[str, Any]:
         "retrieval_mode": result.get("retrieval_mode"),
         "rerank_model": result.get("rerank_model"),
         "degraded": result.get("degraded") or [],
+        "query_routes": result.get("query_routes") or {},
+        "diagnostics": result.get("diagnostics") or {},
         "hits": [compact_hit(rank, hit) for rank, hit in enumerate(result["hits"][:MAX_TOP_K], 1)],
     }
+
+
+def _best_hash_rank(items: list[dict[str, Any]], text_hash: str) -> int | None:
+    ranks = [int(item["rank"]) for item in items if item.get("text_sha256") == text_hash]
+    return min(ranks) if ranks else None
+
+
+def build_diagnostic_rows(
+    cases: list[dict[str, Any]],
+    query_runs: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows = []
+    for case in cases:
+        query = build_production_query(case)
+        run = query_runs[query_key(query)]
+        diagnostics = run.get("diagnostics") or {}
+        sources = diagnostics.get("sources") or {}
+        fusion = diagnostics.get("fusion") or []
+        reranked = diagnostics.get("rerank") or []
+        rewrite_status = (
+            "fallback"
+            if "query_rewrite_failed" in (run.get("degraded") or [])
+            else "rewritten"
+        )
+        for group in case["required_evidence_groups"]:
+            for alternative in group["alternatives"]:
+                locator = alternative["locator"]
+                text_hash = locator["text_sha256"]
+                source_ranks = {
+                    source: rank
+                    for source, items in sources.items()
+                    if (rank := _best_hash_rank(items, text_hash)) is not None
+                }
+                fusion_rank = _best_hash_rank(fusion, text_hash)
+                rerank_rank = _best_hash_rank(reranked, text_hash)
+                if rerank_rank is not None and rerank_rank <= 8:
+                    outcome = "top8"
+                elif rerank_rank is not None and rerank_rank <= 30:
+                    outcome = "reranked_9_30"
+                elif fusion_rank is not None:
+                    outcome = "reranked_below_30"
+                elif source_ranks:
+                    outcome = "dropped_before_fusion"
+                else:
+                    outcome = "not_recalled"
+                rows.append(
+                    {
+                        "query_key": query_key(query),
+                        "query": query,
+                        "case_id": case["case_id"],
+                        "group_id": group["group_id"],
+                        "gold_chunk": text_hash,
+                        "gold_standard": locator.get("standard_no"),
+                        "gold_locator": locator.get("section") or locator.get("table_no"),
+                        "evidence_type": locator.get("content_type"),
+                        "rewrite_status": rewrite_status,
+                        "source_ranks": json.dumps(source_ranks, ensure_ascii=False, sort_keys=True),
+                        "fusion_rank": fusion_rank,
+                        "rerank_rank": rerank_rank,
+                        "outcome": outcome,
+                    }
+                )
+    return rows
+
+
+def write_diagnostic_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = list(rows[0]) if rows else []
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def score_case(case: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
@@ -254,6 +329,7 @@ def main() -> None:
     parser.add_argument("--ground-truth", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-md", type=Path, required=True)
+    parser.add_argument("--output-diagnostics-csv", type=Path)
     parser.add_argument("--delay", type=float, default=0.0)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
@@ -339,6 +415,11 @@ def main() -> None:
     write_json(args.output_json, report)
     args.output_md.parent.mkdir(parents=True, exist_ok=True)
     args.output_md.write_text(render_markdown(report), encoding="utf-8")
+    if args.output_diagnostics_csv is not None:
+        write_diagnostic_csv(
+            args.output_diagnostics_csv,
+            build_diagnostic_rows(eligible, query_runs),
+        )
     print(json.dumps(report["summary"], ensure_ascii=False, indent=2), flush=True)
 
 

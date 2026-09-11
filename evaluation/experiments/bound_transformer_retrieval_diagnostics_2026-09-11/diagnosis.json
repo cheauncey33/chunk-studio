@@ -1,0 +1,127 @@
+{
+  "groups": 440,
+  "stage_recall": {
+    "any_source_top30": 0.9590909090909091,
+    "fusion_pool": 0.9022727272727272,
+    "fusion_top8": 0.55,
+    "fusion_top30": 0.8113636363636364,
+    "rerank_top8": 0.7340909090909091,
+    "rerank_top30": 0.8886363636363637
+  },
+  "outcomes": {
+    "reranked_9_30": 68,
+    "top8": 323,
+    "dropped_before_fusion": 25,
+    "reranked_below_30": 6,
+    "not_recalled": 18
+  },
+  "reranker_movement": {
+    "promoted_into_top8": 130,
+    "demoted_out_of_top8": 49,
+    "promoted_into_top30": 39,
+    "demoted_out_of_top30": 5
+  },
+  "route_recall": {
+    "dense:keyword:section": {
+      "hits": 21,
+      "groups": 129,
+      "recall": 0.16279069767441862
+    },
+    "dense:keyword:table": {
+      "hits": 24,
+      "groups": 129,
+      "recall": 0.18604651162790697
+    },
+    "dense:production:section": {
+      "hits": 217,
+      "groups": 440,
+      "recall": 0.49318181818181817
+    },
+    "dense:production:table": {
+      "hits": 165,
+      "groups": 440,
+      "recall": 0.375
+    },
+    "dense:semantic:section": {
+      "hits": 78,
+      "groups": 129,
+      "recall": 0.6046511627906976
+    },
+    "dense:semantic:table": {
+      "hits": 46,
+      "groups": 129,
+      "recall": 0.35658914728682173
+    },
+    "lexical:keyword:section": {
+      "hits": 16,
+      "groups": 129,
+      "recall": 0.12403100775193798
+    },
+    "lexical:keyword:table": {
+      "hits": 32,
+      "groups": 129,
+      "recall": 0.24806201550387597
+    },
+    "lexical:production:section": {
+      "hits": 234,
+      "groups": 440,
+      "recall": 0.5318181818181819
+    },
+    "lexical:production:table": {
+      "hits": 205,
+      "groups": 440,
+      "recall": 0.4659090909090909
+    }
+  },
+  "slices": {
+    "rewrite_status": [
+      {
+        "value": "fallback",
+        "groups": 311,
+        "source_recall": 0.9421221864951769,
+        "fusion_pool_recall": 0.8681672025723473,
+        "fusion_top8": 0.5691318327974276,
+        "rerank_top8": 0.6688102893890675,
+        "rerank_top30": 0.8520900321543409
+      },
+      {
+        "value": "rewritten",
+        "groups": 129,
+        "source_recall": 1.0,
+        "fusion_pool_recall": 0.9844961240310077,
+        "fusion_top8": 0.5038759689922481,
+        "rerank_top8": 0.8914728682170543,
+        "rerank_top30": 0.9767441860465116
+      }
+    ],
+    "evidence_type": [
+      {
+        "value": "section",
+        "groups": 217,
+        "source_recall": 0.9769585253456221,
+        "fusion_pool_recall": 0.9539170506912442,
+        "fusion_top8": 0.6497695852534562,
+        "rerank_top8": 0.8617511520737328,
+        "rerank_top30": 0.9539170506912442
+      },
+      {
+        "value": "section+table",
+        "groups": 30,
+        "source_recall": 1.0,
+        "fusion_pool_recall": 1.0,
+        "fusion_top8": 0.6666666666666666,
+        "rerank_top8": 0.9,
+        "rerank_top30": 1.0
+      },
+      {
+        "value": "table",
+        "groups": 193,
+        "source_recall": 0.9326424870466321,
+        "fusion_pool_recall": 0.8290155440414507,
+        "fusion_top8": 0.41968911917098445,
+        "rerank_top8": 0.5647668393782384,
+        "rerank_top30": 0.7979274611398963
+      }
+    ]
+  }
+}

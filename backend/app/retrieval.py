@@ -339,6 +339,7 @@ def hybrid_search(
     file_ids: list[str] | None = None,
     workspace_id: str | None = None,
     usage_context: UsageContext | None = None,
+    include_diagnostics: bool = False,
 ) -> dict[str, Any]:
     total_started = time.perf_counter()
     timings_ms: dict[str, float] = {}
@@ -454,6 +455,7 @@ def hybrid_search(
     finish_stage("query_embedding", stage_started)
 
     route_vector_by_name = dict(zip(route_names, route_vectors, strict=True))
+    diagnostic_sources: dict[str, list[dict[str, Any]]] = {}
     dense_by_type: dict[str, list[dict[str, Any]]] = {}
     total_by_type: dict[str, int] = {}
     reserved_by_type: dict[str, list[dict[str, Any]]] = {kind: [] for kind in CONTENT_TYPES}
@@ -479,6 +481,11 @@ def hybrid_search(
                 route_vector_by_name[route],
                 **vector_kwargs,
             )
+            if include_diagnostics:
+                diagnostic_sources[f"dense:{route}:{content_type}"] = [
+                    _diagnostic_source_hit(hit, rank=rank)
+                    for rank, hit in enumerate(result["hits"], start=1)
+                ]
             total_by_type.setdefault(content_type, int(result["total_candidates"]))
             for rank, hit in enumerate(result["hits"], start=1):
                 if (
@@ -532,6 +539,11 @@ def hybrid_search(
                         route_query,
                         **lexical_kwargs,
                     )
+                    if include_diagnostics:
+                        diagnostic_sources[f"lexical:{route}:{content_type}"] = [
+                            _diagnostic_source_hit(hit, rank=rank)
+                            for rank, hit in enumerate(result["hits"], start=1)
+                        ]
                     sync_index = False
                     for rank, hit in enumerate(result["hits"], start=1):
                         candidate = merged.setdefault(
@@ -568,6 +580,14 @@ def hybrid_search(
 
     candidate_pool = _rank_candidates(candidate_pool)
     candidate_count = len(candidate_pool)
+    diagnostic_fusion = (
+        [
+            _diagnostic_candidate(candidate, rank=rank)
+            for rank, candidate in enumerate(candidate_pool, start=1)
+        ]
+        if include_diagnostics
+        else []
+    )
     finish_stage("candidate_merge", stage_started)
     mode_prefix = "dual" if dual_active else "dense"
     if not candidate_pool:
@@ -589,12 +609,17 @@ def hybrid_search(
             dense_threshold=dense_threshold,
             rerank_threshold=rerank_threshold,
             timings_ms=timings_ms,
+            diagnostics=(
+                {"sources": diagnostic_sources, "fusion": [], "rerank": []}
+                if include_diagnostics
+                else None
+            ),
         )
 
     documents = [_rerank_document(candidate) for candidate in candidate_pool]
     select_n = (
         candidate_count
-        if final_quotas is not None
+        if final_quotas is not None or include_diagnostics
         else min(top_k, candidate_count)
     )
     stage_started = time.perf_counter()
@@ -668,6 +693,18 @@ def hybrid_search(
         dense_threshold=dense_threshold,
         rerank_threshold=rerank_threshold,
         timings_ms=timings_ms,
+        diagnostics=(
+            {
+                "sources": diagnostic_sources,
+                "fusion": diagnostic_fusion,
+                "rerank": [
+                    _diagnostic_result_hit(hit, rank=rank)
+                    for rank, hit in enumerate(ordered, start=1)
+                ],
+            }
+            if include_diagnostics
+            else None
+        ),
     )
 
 
@@ -1107,8 +1144,9 @@ def _response(
     dense_threshold: float | None = None,
     rerank_threshold: float | None = None,
     timings_ms: dict[str, float] | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    response = {
         "query": query,
         "model": embeddings.DEFAULT_MODEL,
         "dimension": embeddings.DEFAULT_DIMENSION,
@@ -1127,6 +1165,46 @@ def _response(
         "degraded": degraded,
         "timings_ms": timings_ms or {},
         "hits": hits,
+    }
+    if diagnostics is not None:
+        response["diagnostics"] = diagnostics
+    return response
+
+
+def _diagnostic_source_hit(hit: dict[str, Any], *, rank: int) -> dict[str, Any]:
+    metadata = hit.get("business_metadata") or {}
+    return {
+        "rank": rank,
+        "chunk_id": hit.get("chunk_id"),
+        "text_sha256": chunk_text_sha256(hit.get("text")),
+        "content_type": metadata.get("content_type") or hit.get("content_type"),
+        "score": hit.get("score"),
+    }
+
+
+def _diagnostic_candidate(candidate: dict[str, Any], *, rank: int) -> dict[str, Any]:
+    hit = candidate["hit"]
+    metadata = hit.get("business_metadata") or {}
+    return {
+        "rank": rank,
+        "chunk_id": hit.get("chunk_id"),
+        "text_sha256": chunk_text_sha256(hit.get("text")),
+        "content_type": metadata.get("content_type") or candidate.get("content_type"),
+        "rrf_score": candidate["rrf_score"],
+        "source_ranks": dict(candidate["source_ranks"]),
+        "source_scores": dict(candidate["source_scores"]),
+    }
+
+
+def _diagnostic_result_hit(hit: dict[str, Any], *, rank: int) -> dict[str, Any]:
+    metadata = hit.get("business_metadata") or {}
+    return {
+        "rank": rank,
+        "chunk_id": hit.get("chunk_id"),
+        "text_sha256": chunk_text_sha256(hit.get("text")),
+        "content_type": metadata.get("content_type") or hit.get("content_type"),
+        "rerank_score": hit.get("rerank_score"),
+        "rrf_score": hit.get("rrf_score"),
     }
 
 

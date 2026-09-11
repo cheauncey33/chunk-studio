@@ -121,6 +121,9 @@ def analyze(report: dict[str, Any], ground_truth: dict[str, Any]) -> dict[str, A
     }
 
     return {
+        "stage_diagnostics_available": any(
+            bool(run.get("diagnostics")) for run in report.get("query_runs", {}).values()
+        ),
         "case_weighted": {str(top_k): recall_at(cases, top_k) for top_k in TOP_K_VALUES},
         "unique_gold_chunk": unique_gold,
         "top8_slices": {
@@ -232,8 +235,8 @@ def render_markdown(result: dict[str, Any]) -> str:
             f"- Dataset weighting: {result['weighting']['cases']} cases collapse to "
             f"{result['weighting']['unique_queries']} queries and {result['weighting']['unique_gold_chunks']} gold chunks; "
             f"one gold chunk is repeated by as many as {result['weighting']['largest_cases_per_gold_chunk']} cases.",
-            "- The saved report contains only post-rerank Top-30 hits. It cannot prove whether a Top-30 miss "
-            "was absent from first-stage candidates or was pushed below rank 30 by the reranker.",
+            "- A case-level Top-K summary cannot prove whether a miss was absent from first-stage candidates "
+            "or was pushed down by fusion/reranking; use the stage-level diagnostics for that split.",
             "",
             "### Largest missed families",
             "",
@@ -261,7 +264,11 @@ def render_markdown(result: dict[str, Any]) -> str:
             "2. Table evidence and the electrical_parameters domain are the dominant weak slices at Top-8.",
             "3. Duplicate corpus rows consume retrieval slots and are a concrete efficiency defect, though they do not alone explain all misses.",
             "4. Case-weighted recall overstates performance relative to equal-weight gold-chunk macro recall because a small set of chunks is reused heavily.",
-            "5. To separate first-stage recall from reranker loss, the next evaluation must persist the pre-rerank candidate list and score both stages from the same run.",
+            (
+                "5. The stage-level rerun now separates first-stage, fusion, and reranker loss; see diagnosis.md."
+                if result["stage_diagnostics_available"]
+                else "5. To separate first-stage recall from reranker loss, the next evaluation must persist the pre-rerank candidate list and score both stages from the same run."
+            ),
             "",
         ]
     )

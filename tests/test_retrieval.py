@@ -71,6 +71,42 @@ def test_hybrid_search_separates_dense_and_rerank_thresholds() -> None:
     assert result["rerank_threshold"] == 0.8
 
 
+def test_hybrid_search_diagnostics_capture_source_fusion_and_full_rerank() -> None:
+    def vector_searcher(_query: str, _vector: list[float], **kwargs):
+        if kwargs["content_type"] != "table":
+            return {"total_candidates": 0, "hits": []}
+        return {
+            "total_candidates": 2,
+            "hits": [
+                _hit("first", 0.9, content_type="table", text="first body"),
+                _hit("second", 0.8, content_type="table", text="second body"),
+            ],
+        }
+
+    def reranker(_query: str, _documents: list[str], top_n: int):
+        assert top_n == 2
+        return [(1, 0.95), (0, 0.7)]
+
+    result = retrieval.hybrid_search(
+        "诊断查询",
+        top_k=1,
+        query_routes={"production": "诊断查询"},
+        batch_embedder=lambda queries, **kwargs: [
+            [1.0] * embeddings.DEFAULT_DIMENSION for _ in queries
+        ],
+        vector_searcher=vector_searcher,
+        reranker=reranker,
+        lexical_enabled=False,
+        include_diagnostics=True,
+    )
+
+    assert [hit["chunk_id"] for hit in result["hits"]] == ["second"]
+    diagnostics = result["diagnostics"]
+    assert [item["rank"] for item in diagnostics["sources"]["dense:production:table"]] == [1, 2]
+    assert [item["chunk_id"] for item in diagnostics["fusion"]] == ["first", "second"]
+    assert [item["chunk_id"] for item in diagnostics["rerank"]] == ["second", "first"]
+
+
 def test_normalize_retrieval_config_removes_unused_legacy_settings() -> None:
     normalized = retrieval.normalize_retrieval_config({
         "similarity_threshold": 0.46,

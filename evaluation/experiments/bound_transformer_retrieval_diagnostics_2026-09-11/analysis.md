@@ -6,14 +6,14 @@ This analysis reuses the saved Top-30 result set; it does not call the query pla
 
 | K | Case-weighted recall | Unique-gold coverage | Gold-chunk macro recall |
 |---:|---:|---:|---:|
-| 1 | 33.4% (147/440) | 18.3% (13/71) | 11.9% |
-| 3 | 47.7% (210/440) | 36.6% (26/71) | 26.5% |
-| 5 | 67.7% (298/440) | 56.3% (40/71) | 44.0% |
-| 8 | 73.4% (323/440) | 60.6% (43/71) | 52.2% |
-| 10 | 78.0% (343/440) | 62.0% (44/71) | 56.0% |
-| 15 | 85.5% (376/440) | 70.4% (50/71) | 62.8% |
-| 20 | 87.5% (385/440) | 78.9% (56/71) | 69.2% |
-| 30 | 88.9% (391/440) | 87.3% (62/71) | 77.1% |
+| 1 | 34.3% (151/440) | 18.3% (13/71) | 11.7% |
+| 3 | 47.7% (210/440) | 36.6% (26/71) | 26.2% |
+| 5 | 67.7% (298/440) | 56.3% (40/71) | 43.6% |
+| 8 | 73.4% (323/440) | 60.6% (43/71) | 51.8% |
+| 10 | 78.0% (343/440) | 63.4% (45/71) | 56.2% |
+| 15 | 85.5% (376/440) | 70.4% (50/71) | 62.5% |
+| 20 | 87.5% (385/440) | 78.9% (56/71) | 68.8% |
+| 30 | 88.9% (391/440) | 87.3% (62/71) | 76.8% |
 
 ## Top-8 slices
 
@@ -21,8 +21,8 @@ This analysis reuses the saved Top-30 result set; it does not call the query pla
 
 | Value | Recall | Cases |
 |---|---:|---:|
-| fallback | 67.4% | 301 |
-| rewritten | 86.3% | 139 |
+| fallback | 66.9% | 311 |
+| rewritten | 89.1% | 129 |
 
 ### Gold content type
 
@@ -53,8 +53,8 @@ This analysis reuses the saved Top-30 result set; it does not call the query pla
 
 | Slice | Value | Recall | Cases |
 |---|---|---:|---:|
-| rewrite_mode | fallback | 84.7% | 301 |
-| rewrite_mode | rewritten | 97.8% | 139 |
+| rewrite_mode | fallback | 85.2% | 311 |
+| rewrite_mode | rewritten | 97.7% | 129 |
 | gold_content_type | section | 95.4% | 217 |
 | gold_content_type | table | 79.8% | 193 |
 | gold_content_type | section+table | 100.0% | 30 |
@@ -103,4 +103,4 @@ This analysis reuses the saved Top-30 result set; it does not call the query pla
 2. Table evidence and the electrical_parameters domain are the dominant weak slices at Top-8.
 3. Duplicate corpus rows consume retrieval slots and are a concrete efficiency defect, though they do not alone explain all misses.
 4. Case-weighted recall overstates performance relative to equal-weight gold-chunk macro recall because a small set of chunks is reused heavily.
-5. To separate first-stage recall from reranker loss, the next evaluation must persist the pre-rerank candidate list and score both stages from the same run.
+5. The stage-level rerun now separates first-stage, fusion, and reranker loss; see diagnosis.md.
