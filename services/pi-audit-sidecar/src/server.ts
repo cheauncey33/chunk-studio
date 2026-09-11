@@ -1,9 +1,10 @@
 /**
- * Stateless HTTP executor for Pi-agent standard-value audit cases.
+ * Stateless HTTP executor for Pi-agent audit cases and one-shot chat turns.
  *
  * Endpoints:
  *   GET  /health       — liveness + model info
  *   POST /audit/case   — run one audit case in a fresh agent session
+ *   POST /chat/turn    — run one Q&A turn in a fresh in-memory session
  *
  * Concurrency is bounded by AGENT_CONCURRENCY (default 5); extra requests queue.
  * Auth: when AGENT_SIDECAR_TOKEN is set, requests must send
@@ -14,6 +15,7 @@ import { readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import { runCase, type AgentCaseInput, type AgentCaseOutcome } from "./agent.ts";
+import { runChatTurn, type ChatTurnInput, type ChatTurnOutcome } from "./chat.ts";
 import { verdictToStatus } from "./parse.ts";
 
 const PORT = Number(process.env.PORT ?? "8787");
@@ -133,6 +135,42 @@ async function handleAuditCase(req: IncomingMessage, res: ServerResponse): Promi
 	}
 }
 
+async function handleChatTurn(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	let raw: string;
+	try {
+		raw = await readBody(req);
+	} catch (err) {
+		send(res, 413, { ok: false, error: String(err instanceof Error ? err.message : err) });
+		return;
+	}
+	let input: ChatTurnInput;
+	try {
+		input = JSON.parse(raw) as ChatTurnInput;
+	} catch {
+		send(res, 400, { ok: false, error: "invalid JSON body" });
+		return;
+	}
+	if (!input || typeof input.current_question !== "string" || !input.current_question.trim()) {
+		send(res, 422, { ok: false, error: "current_question is required" });
+		return;
+	}
+
+	try {
+		const outcome: ChatTurnOutcome = await withSlot(() => runChatTurn(input));
+		send(res, 200, {
+			ok: true,
+			answer: outcome.answer,
+			citations: outcome.citations,
+			charts: outcome.charts,
+			stats: outcome.stats,
+			trace_file: outcome.trace_file,
+		});
+	} catch (err) {
+		const message = String(err instanceof Error ? err.message : err);
+		send(res, 502, { ok: false, error: message, retryable: true });
+	}
+}
+
 const server = createServer((req, res) => {
 	const url = (req.url ?? "").split("?")[0];
 	if (req.method === "GET" && url === "/health") {
@@ -153,6 +191,12 @@ const server = createServer((req, res) => {
 	}
 	if (req.method === "POST" && url === "/audit/case") {
 		handleAuditCase(req, res).catch((err) => {
+			send(res, 500, { ok: false, error: String(err instanceof Error ? err.message : err) });
+		});
+		return;
+	}
+	if (req.method === "POST" && url === "/chat/turn") {
+		handleChatTurn(req, res).catch((err) => {
 			send(res, 500, { ok: false, error: String(err instanceof Error ? err.message : err) });
 		});
 		return;

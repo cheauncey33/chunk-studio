@@ -29,7 +29,7 @@ function apiBase(): string {
 	return (process.env.CHUNK_STUDIO_API_BASE ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 }
 
-async function apiFetch(
+export async function apiFetch(
 	path: string,
 	signal: AbortSignal | undefined,
 	init?: RequestInit,
@@ -46,7 +46,7 @@ async function apiFetch(
 	return res.json();
 }
 
-function normalizeScope(ids: string[] | undefined | null): string[] {
+export function normalizeScope(ids: string[] | undefined | null): string[] {
 	return Array.isArray(ids) ? ids.filter((x) => typeof x === "string" && x) : [];
 }
 

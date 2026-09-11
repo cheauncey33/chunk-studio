@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app import chat_agent
+import pytest
 
 
 def test_knowledge_tool_passes_split_retrieval_thresholds(monkeypatch) -> None:
@@ -28,54 +29,64 @@ def test_knowledge_tool_passes_split_retrieval_thresholds(monkeypatch) -> None:
 
     assert captured["dense_threshold"] == 0.35
     assert captured["rerank_threshold"] == 0.72
+    assert captured["query_routes"] == {"production": "原始问题"}
     assert "similarity_threshold" not in captured
+    assert "agentic_rag" not in captured
 
 
-def test_chat_agent_runs_native_tool_loop_and_collects_citations(monkeypatch) -> None:
-    calls: list[list[dict]] = []
+def test_pack_chat_turn_keeps_summary_and_recent_text_only() -> None:
+    packed = chat_agent.pack_chat_turn(
+        [
+            {
+                "role": "system",
+                "content": "Conversation summary from earlier turns:\n用户在问绝缘电阻",
+            },
+            {"role": "user", "content": "上一问"},
+            {"role": "assistant", "content": "上一答"},
+            {
+                "role": "tool",
+                "name": "search_knowledge_base",
+                "content": "{\"hits\":[]}",
+            },
+            {"role": "user", "content": "当前问题"},
+        ]
+    )
+    assert packed["conversation_summary"] == "用户在问绝缘电阻"
+    assert packed["current_question"] == "当前问题"
+    assert packed["recent_turns"] == [
+        {"role": "user", "content": "上一问"},
+        {"role": "assistant", "content": "上一答"},
+    ]
+
+
+def test_chat_agent_runs_sidecar_turn_and_collects_citations(monkeypatch) -> None:
     events: list[dict] = []
-    responses = iter([
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{
-                "id": "call_search",
-                "type": "function",
-                "function": {
-                    "name": "search_knowledge_base",
-                    "arguments": '{"query":"绝缘电阻"}',
-                },
-            }],
-        },
-        {
-            "role": "assistant",
-            "content": "要求见 GB/T 1094.1，第 3 页。",
-            "tool_calls": [],
-        },
-    ])
+    payloads: list[dict] = []
 
-    def fake_chat_tools(messages, tools, **kwargs):
-        calls.append([dict(message) for message in messages])
-        assert tools[0]["function"]["name"] == "search_knowledge_base"
-        assert tools[0]["function"]["parameters"]["required"] == ["query"]
-        return next(responses)
-
-    monkeypatch.setattr(chat_agent.llm, "chat_tools", fake_chat_tools)
-    monkeypatch.setattr(
-        chat_agent.retrieval,
-        "hybrid_search",
-        lambda query, **kwargs: {
-            "hits": [{
+    def fake_sidecar(payload, **kwargs):
+        payloads.append(payload)
+        del kwargs
+        return {
+            "ok": True,
+            "answer": "要求见 GB/T 1094.1，第 3 页。",
+            "citations": [{
                 "chunk_id": "c1",
                 "file_id": "f1",
                 "file_name": "GB.pdf",
                 "page": 3,
-                "text": "绝缘电阻不低于 1000 MΩ",
-                "score": 0.9,
+                "snippet": "绝缘电阻不低于 1000 MΩ",
             }],
-            "degraded": [],
-        },
-    )
+            "charts": [],
+            "stats": {
+                "tool_calls": 2,
+                "search_calls": 1,
+                "read_chunks": 1,
+                "turns": 3,
+                "knowledge_grounded": True,
+            },
+        }
+
+    monkeypatch.setattr(chat_agent, "_call_chat_sidecar", fake_sidecar)
 
     result = chat_agent.run_chat_agent(
         assistant_id="assistant-1",
@@ -84,49 +95,39 @@ def test_chat_agent_runs_native_tool_loop_and_collects_citations(monkeypatch) ->
         retrieval_config={},
         model="test-model",
         event_sink=events.append,
+        conversation_id="chat_1",
     )
 
     assert result["stop_reason"] == "finished"
     assert result["answer"] == "要求见 GB/T 1094.1，第 3 页。"
-    assert result["tool_calls"] == 1
+    assert result["tool_calls"] == 2
     assert result["citations"][0]["file_name"] == "GB.pdf"
     assert "tool_calls" not in result["new_messages"][-1]
-    assert calls[1][-1]["role"] == "user"
-    assert calls[1][0]["role"] == "system"
-    assert "current_question" in calls[1][-1]["content"]
+    assert payloads[0]["current_question"] == "绝缘电阻要求是什么？"
+    assert payloads[0]["file_ids"] == ["f1"]
+    assert payloads[0]["conversation_id"] == "chat_1"
     assert [event["type"] for event in events if event["type"] != "node_timing"] == [
-        "turn_started", "assistant_message", "tool_call", "tool_result",
-        "assistant_message",
+        "turn_started", "first_token", "assistant_message",
     ]
-    assert [event["node"] for event in events if event["type"] == "node_timing"] == [
-        "llm", "tool", "llm",
-    ]
+    assert [event["node"] for event in events if event["type"] == "node_timing"] == ["sidecar"]
 
 
 def test_chat_agent_returns_chart_from_business_tool(monkeypatch) -> None:
-    responses = iter([
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{
-                "id": "call_business",
-                "type": "function",
-                "function": {
-                    "name": "query_business_data",
-                    "arguments": '{"question":"审查状态分布"}',
-                },
-            }],
-        },
-        {"role": "assistant", "content": "已生成状态分布饼图。", "tool_calls": []},
-    ])
-    monkeypatch.setattr(chat_agent.llm, "chat_tools", lambda *args, **kwargs: next(responses))
     monkeypatch.setattr(
-        chat_agent.business_analytics,
-        "query_business_data",
-        lambda *args, **kwargs: {
-            "answer": "状态分布",
-            "rows": [{"label": "supported", "value": 3}],
-            "chart": {"type": "pie", "data": [{"label": "supported", "value": 3}]},
+        chat_agent,
+        "_call_chat_sidecar",
+        lambda payload, **kwargs: {
+            "ok": True,
+            "answer": "已生成状态分布饼图。",
+            "citations": [],
+            "charts": [{"type": "pie", "data": [{"label": "supported", "value": 3}]}],
+            "stats": {
+                "tool_calls": 1,
+                "search_calls": 0,
+                "read_chunks": 0,
+                "turns": 2,
+                "knowledge_grounded": False,
+            },
         },
     )
 
@@ -185,14 +186,17 @@ def test_document_table_intent_keeps_knowledge_search() -> None:
 
 def test_chat_agent_forwards_provider_token_events(monkeypatch) -> None:
     seen = []
-
-    def fake_stream(messages, tools, **kwargs):
-        assert tools
-        kwargs["event_sink"]({"type": "token", "content": "流"})
-        kwargs["event_sink"]({"type": "token", "content": "式"})
-        return {"role": "assistant", "content": "流式", "tool_calls": []}
-
-    monkeypatch.setattr(chat_agent.llm, "chat_tools_stream", fake_stream)
+    monkeypatch.setattr(
+        chat_agent,
+        "_call_chat_sidecar",
+        lambda payload, **kwargs: {
+            "ok": True,
+            "answer": "流式",
+            "citations": [],
+            "charts": [],
+            "stats": {"tool_calls": 0, "search_calls": 0, "read_chunks": 0, "turns": 1},
+        },
+    )
     result = chat_agent.run_chat_agent(
         assistant_id="assistant-1",
         messages=[{"role": "user", "content": "开始"}],
@@ -204,9 +208,27 @@ def test_chat_agent_forwards_provider_token_events(monkeypatch) -> None:
     )
 
     assert result["answer"] == "流式"
-    assert [item["content"] for item in seen if item["type"] == "token"] == ["流", "式"]
+    assert [item["content"] for item in seen if item["type"] == "token"] == ["流式"]
     assert result["performance"]["ttft_ms"] is not None
     assert result["performance"]["total_ms"] >= result["performance"]["ttft_ms"]
-    assert result["performance"]["nodes"][0]["node"] == "llm"
+    assert result["performance"]["nodes"][0]["node"] == "sidecar"
     assert len([item for item in seen if item["type"] == "first_token"]) == 1
     assert any(item["type"] == "node_timing" for item in seen)
+    assert any(item["type"] == "turn_started" for item in seen)
+    assert any(item["type"] == "assistant_message" for item in seen)
+
+
+def test_chat_agent_raises_when_sidecar_fails(monkeypatch) -> None:
+    def boom(payload, **kwargs):
+        del payload, kwargs
+        raise RuntimeError("agent sidecar 5xx (502): sidecar down")
+
+    monkeypatch.setattr(chat_agent, "_call_chat_sidecar", boom)
+    with pytest.raises(RuntimeError, match="sidecar"):
+        chat_agent.run_chat_agent(
+            assistant_id="assistant-1",
+            messages=[{"role": "user", "content": "开始"}],
+            file_ids=["f1"],
+            retrieval_config={},
+            model="test-model",
+        )

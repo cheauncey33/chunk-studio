@@ -1180,6 +1180,7 @@ def assistant_agent_chat(
                     model=context["model"],
                     temperature=context["temperature"],
                     workspace_id=context["workspace_id"],
+                    conversation_id=context["conversation_id"],
                 )
             except RuntimeError as exc:
                 raise HTTPException(502, str(exc)) from exc
@@ -1316,6 +1317,7 @@ def assistant_agent_chat_stream(
                 model=context["model"],
                 temperature=context["temperature"],
                 workspace_id=context["workspace_id"],
+                conversation_id=context["conversation_id"],
                 event_sink=lambda event: publish("agent", event),
                 stream_tokens=True,
             )

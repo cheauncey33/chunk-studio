@@ -1,13 +1,13 @@
-"""Bounded native tool-call Agent for knowledge-base conversations."""
+"""Pi sidecar client for knowledge-base Agent conversations."""
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 from typing import Any, Callable
 
+import httpx
+
 from . import (
-    agentic_rag,
     business_analytics,
     config,
     db,
@@ -20,43 +20,9 @@ from .agent_runtime.models import ToolDefinition
 from .tool_registry import ToolContext, ToolFactory, ToolRegistry
 
 
-CHAT_SYSTEM_PROMPT = """You are the unified knowledge and business question answering agent.
-First route the user's intent:
-- For facts, definitions, requirements, or parameters from uploaded documents,
-  call search_knowledge_base before answering.
-- For workspace metrics, audit distributions, aggregations, tables, database
-  schema questions, or a request for a pie/bar chart, call the read-only
-  business tools. A chart is a presentation of the query result, not a reason
-  to invent data.
-- For a mixed question, call both tools when both kinds of evidence are needed.
-If search_knowledge_base is unavailable, explain that no knowledge base is
-connected instead of answering document facts from memory.
-The host preserves the user's current question as the primary retrieval query;
-the tool query is only a refinement and must never replace the original intent.
-Answer only from returned evidence and follow the returned fixed_judge status.
-If fixed_judge.sufficient is false, say that the knowledge base does not contain
-enough evidence instead of guessing. Cite the source file and page for factual
-claims. Do not invent standards, parameters, numbers, or citations, and do not
-broaden a precise question into a general summary.
-Use query_business_data only for workspace metrics, audit distributions, tables,
-or charts. It is read-only and may return a pie, bar, metric, or table chart.
-Answer in the user's language. Keep the final answer concise and distinguish
-document evidence from business analytics results. This is not an audit run.
-Do not expose internal tool-call narration such as "let me query" or provider
-debugging text in the final answer; present only the verified result and its
-short explanation.
-"""
-
-CHAT_FINAL_ANSWER_PROMPT = """You are the final user-facing answerer for a knowledge-base question.
-Use only the evidence supplied below. Never mention agents, tools, tool calls,
-retrieval budgets, search attempts, prompts, or internal reasoning. Do not say
-that you are going to search. Resolve short follow-up questions from the user
-conversation context, but do not invent a topic that is not supported there.
-If fixed_judge.sufficient is false, state plainly that the knowledge base does
-not contain enough evidence and explain the missing evidence briefly. When the
-Judge is sufficient, answer directly in concise Chinese and cite the supplied
-file/page evidence. Do not output an internal process preface.
-"""
+_KNOWLEDGE_ABSTAIN = "知识库中没有检索到足够证据，暂时无法可靠回答。"
+_SUMMARY_PREFIX = "Conversation summary from earlier turns:"
+_RECENT_TEXT_TURNS = 8
 
 
 def _citation(hit: dict[str, Any]) -> dict[str, Any]:
@@ -70,27 +36,6 @@ def _citation(hit: dict[str, Any]) -> dict[str, Any]:
         else hit.get("score"),
         "snippet": str(hit.get("text") or hit.get("content") or "")[:240],
     }
-
-
-def _tool_schema(tool: ToolDefinition) -> dict[str, Any]:
-    return {
-        "type": "function",
-        "function": {
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.input_schema,
-        },
-    }
-
-
-def _signature(name: str, arguments: dict[str, Any]) -> str:
-    value = json.dumps(
-        {"name": name, "arguments": arguments},
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _require_question(arguments: dict[str, Any]) -> None:
@@ -116,59 +61,28 @@ def _knowledge_base_tools(context: ToolContext) -> list[ToolDefinition]:
         if retrieval_config.get("rerank_threshold") is not None
         else retrieval.DEFAULT_RERANK_THRESHOLD
     )
-    final_table = retrieval_config.get("final_table")
-    final_section = retrieval_config.get("final_section")
-
-    def bounded_quota(value: Any) -> int | None:
-        if value is None:
-            return None
-        try:
-            return max(1, min(int(value), 50))
-        except (TypeError, ValueError):
-            return None
 
     def search(arguments: dict[str, Any]) -> dict[str, Any]:
         requested_query = str(arguments.get("query") or "").strip()
-        # The model may propose a compact query, but the current user question
-        # is the production route and must remain the source of truth. The
-        # retrieval layer can add validated rewrite routes without replacing it.
+        # Host leftover path: production query stays the current user question.
+        # Live Agent chat search runs in the sidecar, not here.
         query = context.current_question.strip() or requested_query
         _require_question({"query": query})
-        def retrieve(
-            original_query: str,
-            query_routes: dict[str, str] | None,
-        ) -> dict[str, Any]:
-            return retrieval.hybrid_search(
-                original_query,
-                top_k=top_k,
-                route_top_k=route_top_k,
-                candidates_per_type=candidates_per_type,
-                dense_threshold=dense_threshold,
-                rerank_threshold=rerank_threshold,
-                query_routes=query_routes,
-                aggregate_continuation_tables=bool(
-                    retrieval_config.get("aggregate_continuation_tables", False)
-                ),
-                expand_references=bool(retrieval_config.get("expand_references", False)),
-                file_ids=context.file_ids,
-                workspace_id=context.workspace_id,
-            )
-
-        agentic_result = agentic_rag.run_agentic_rag(
+        result = retrieval.hybrid_search(
             query,
-            config=retrieval_config,
-            searcher=retrieve,
-            merger=retrieval.merge_and_rerank_candidate_pools,
             top_k=top_k,
+            route_top_k=route_top_k,
+            candidates_per_type=candidates_per_type,
+            dense_threshold=dense_threshold,
             rerank_threshold=rerank_threshold,
-            final_table=bounded_quota(final_table),
-            final_section=bounded_quota(final_section),
+            query_routes={"production": query},
             aggregate_continuation_tables=bool(
                 retrieval_config.get("aggregate_continuation_tables", False)
             ),
             expand_references=bool(retrieval_config.get("expand_references", False)),
+            file_ids=context.file_ids,
+            workspace_id=context.workspace_id,
         )
-        result = agentic_result["retrieval"]
         hits = list(result.get("hits") or [])[:top_k]
         bounded_hits = []
         for hit in hits:
@@ -196,9 +110,8 @@ def _knowledge_base_tools(context: ToolContext) -> list[ToolDefinition]:
                 "retrieval_mode": result.get("retrieval_mode"),
                 "rerank_model": result.get("rerank_model"),
                 "query_routes": result.get("query_routes") or {},
-                "agentic_rag": agentic_result["trace"],
             },
-            "fixed_judge": result.get("fixed_judge") or agentic_result["trace"].get("final_judgment"),
+            "fixed_judge": result.get("fixed_judge") or {},
             "degraded": list(result.get("degraded") or []),
         }
 
@@ -338,50 +251,95 @@ def _latest_user_question(messages: list[dict[str, Any]]) -> str:
     return ""
 
 
-def _has_knowledge_evidence(tool_events: list[dict[str, Any]]) -> bool:
+def _message_text(message: dict[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        return " ".join(
+            str(item.get("text") or "")
+            for item in content
+            if isinstance(item, dict)
+        ).strip()
+    return str(content or "").strip()
+
+
+def pack_chat_turn(
+    messages: list[dict[str, Any]],
+    *,
+    current_question: str | None = None,
+) -> dict[str, Any]:
+    """Pack summary + recent user/assistant text for one sidecar turn."""
+    question = (current_question or _latest_user_question(messages)).strip()
+    summary = ""
+    recent: list[dict[str, str]] = []
+    for message in messages:
+        role = str(message.get("role") or "")
+        text = _message_text(message)
+        if role == "system" and text.startswith(_SUMMARY_PREFIX):
+            summary = text[len(_SUMMARY_PREFIX):].strip()
+            continue
+        if role == "tool":
+            continue
+        if role in {"user", "assistant"} and text:
+            recent.append({"role": role, "content": text[:4000]})
+    if recent and recent[-1]["role"] == "user" and recent[-1]["content"] == question:
+        recent = recent[:-1]
+    return {
+        "conversation_summary": summary,
+        "recent_turns": recent[-_RECENT_TEXT_TURNS:],
+        "current_question": question,
+    }
+
+
+def _looks_like_abstain(text: str) -> bool:
     return any(
-        event.get("name") == "search_knowledge_base"
-        and isinstance(event.get("result"), dict)
-        and bool(event["result"].get("hits"))
-        and isinstance(event["result"].get("fixed_judge"), dict)
-        and bool(event["result"]["fixed_judge"].get("sufficient"))
-        for event in tool_events
+        marker in text
+        for marker in (
+            "没有检索到足够证据",
+            "无法可靠回答",
+            "知识库中没有",
+            "未绑定知识库",
+            "无法检索文档",
+        )
     )
 
 
-def _build_final_knowledge_messages(
-    messages: list[dict[str, Any]],
-    current_question: str,
-    tool_result: dict[str, Any],
-) -> list[dict[str, str]]:
-    user_context: list[str] = []
-    for message in messages:
-        if message.get("role") != "user":
-            continue
-        content = message.get("content")
-        if isinstance(content, str) and content.strip():
-            user_context.append(content.strip()[:2000])
-    evidence = {
-        "fixed_judge": tool_result.get("fixed_judge"),
-        "hits": tool_result.get("hits") or [],
-        "citations": tool_result.get("citations") or [],
-        "degraded": tool_result.get("degraded") or [],
-    }
-    return [
-        {"role": "system", "content": CHAT_FINAL_ANSWER_PROMPT},
-        {
-            "role": "user",
-            "content": json.dumps(
-                {
-                    "conversation_user_context": user_context[-6:],
-                    "current_question": current_question,
-                    "evidence": evidence,
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
-        },
-    ]
+def _call_chat_sidecar(
+    payload: dict[str, Any],
+    *,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """POST one Q&A turn to the Pi sidecar; raise on transport/5xx errors."""
+    base_url = str(config.AGENT_SIDECAR_URL or "").rstrip("/")
+    token = str(config.AGENT_SIDECAR_TOKEN or "").strip()
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        response = httpx.post(
+            f"{base_url}/chat/turn",
+            json=payload,
+            headers=headers,
+            timeout=timeout_seconds,
+        )
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            f"agent sidecar unreachable at {base_url} "
+            f"(start it: cd services/pi-audit-sidecar && npm start): {exc}"
+        ) from exc
+    if response.status_code >= 500:
+        raise RuntimeError(
+            f"agent sidecar 5xx ({response.status_code}): {response.text[:300]}"
+        )
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"agent sidecar rejected request ({response.status_code}): {response.text[:300]}"
+        )
+    body = response.json()
+    if not body.get("ok"):
+        raise RuntimeError(f"agent sidecar error: {str(body.get('error'))[:300]}")
+    return body
 
 
 _BUSINESS_INTENT_MARKERS = (
@@ -415,27 +373,6 @@ def _select_tools(tools: list[ToolDefinition], question: str) -> list[ToolDefini
         knowledge_tools = [tool for tool in tools if tool.name == "search_knowledge_base"]
         return knowledge_tools or tools
     return tools
-
-
-def _parse_tool_call(raw: Any) -> tuple[str, str, dict[str, Any]] | None:
-    if not isinstance(raw, dict):
-        return None
-    function = raw.get("function")
-    if not isinstance(function, dict):
-        return None
-    name = str(function.get("name") or "").strip()
-    raw_arguments = function.get("arguments") or "{}"
-    try:
-        arguments = (
-            json.loads(raw_arguments)
-            if isinstance(raw_arguments, str)
-            else raw_arguments
-        )
-    except json.JSONDecodeError:
-        return None
-    if not name or not isinstance(arguments, dict):
-        return None
-    return str(raw.get("id") or ""), name, arguments
 
 
 def summarize_context(
@@ -484,38 +421,20 @@ def run_chat_agent(
     max_turns: int = 6,
     max_tool_calls: int = 6,
     max_search_calls: int = 3,
-    timeout_seconds: float = 90,
+    timeout_seconds: float = 120,
     event_sink: Callable[[dict[str, Any]], None] | None = None,
     stream_tokens: bool = False,
     workspace_id: str | None = None,
+    conversation_id: str | None = None,
 ) -> dict[str, Any]:
-    """Run model -> native tool call -> tool result until final text."""
-    request_messages: list[dict[str, Any]] = [
-        {"role": "system", "content": CHAT_SYSTEM_PROMPT},
-        *messages,
-    ]
-    new_messages: list[dict[str, Any]] = []
-    tool_events: list[dict[str, Any]] = []
-    citations: list[dict[str, Any]] = []
-    charts: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    tool_calls = 0
-    search_calls = 0
+    """Run one Q&A turn via the Pi sidecar; Python owns compact/SSE persistence."""
+    del temperature, max_turns, max_tool_calls, max_search_calls
+    packed = pack_chat_turn(messages)
+    current_question = packed["current_question"]
+    tool_intent = _tool_intent(current_question)
     started = time.monotonic()
     first_token_ms: float | None = None
     node_timings: list[dict[str, Any]] = []
-
-    def forward_llm_event(event: dict[str, Any]) -> None:
-        nonlocal first_token_ms
-        if event.get("type") == "token" and first_token_ms is None:
-            first_token_ms = round((time.monotonic() - started) * 1000, 3)
-            observability.metrics.observe(
-                "chunk_studio_agent_ttft_seconds",
-                first_token_ms / 1000,
-                model=model,
-            )
-            _emit(event_sink, {"type": "first_token", "ttft_ms": first_token_ms})
-        _emit(event_sink, event)
 
     def record_node(
         node: str,
@@ -560,254 +479,64 @@ def run_chat_agent(
         }
         return value
 
-    current_question = _latest_user_question(messages)
-    knowledge_result: dict[str, Any] | None = None
-    business_tool_used = False
-    tools = _select_tools(_build_tools(
-        assistant_id=assistant_id,
-        file_ids=file_ids,
-        retrieval_config=retrieval_config,
+    retrieval_config = retrieval.normalize_retrieval_config(retrieval_config)
+    payload = {
+        "conversation_id": conversation_id or "",
+        "assistant_id": assistant_id,
+        "current_question": current_question,
+        "conversation_summary": packed["conversation_summary"],
+        "recent_turns": packed["recent_turns"],
+        "file_ids": list(file_ids or []),
+        "workspace_id": workspace_id or "",
+        "tool_intent": tool_intent,
+        "retrieval_config": {"top_k": retrieval_config.get("top_k") or 8},
+    }
+    _emit(event_sink, {"type": "turn_started", "turn": 1})
+    sidecar_started = time.monotonic()
+    try:
+        body = _call_chat_sidecar(payload, timeout_seconds=timeout_seconds)
+    except Exception:
+        record_node("sidecar", sidecar_started, status="error")
+        record_run("error")
+        raise
+    record_node("sidecar", sidecar_started, status="ok")
+    stats = body.get("stats") if isinstance(body.get("stats"), dict) else {}
+    citations = [
+        item for item in (body.get("citations") or []) if isinstance(item, dict)
+    ]
+    charts = [item for item in (body.get("charts") or []) if isinstance(item, dict)]
+    answer = str(body.get("answer") or "").strip()
+    search_calls = int(stats.get("search_calls") or 0)
+    read_chunks = int(stats.get("read_chunks") or 0)
+    grounded = bool(stats.get("knowledge_grounded")) or read_chunks > 0
+    if search_calls and not grounded and not charts and not _looks_like_abstain(answer):
+        answer = _KNOWLEDGE_ABSTAIN
+    elif not answer:
+        answer = "The model returned no displayable answer."
+    assistant_message = {"role": "assistant", "content": answer}
+    first_token_ms = round((time.monotonic() - started) * 1000, 3)
+    observability.metrics.observe(
+        "chunk_studio_agent_ttft_seconds",
+        first_token_ms / 1000,
         model=model,
-        current_question=current_question,
-        workspace_id=workspace_id,
-    ), current_question)
-    by_name = {tool.name: tool for tool in tools}
-
-    for turn in range(1, max_turns + 1):
-        if time.monotonic() - started >= timeout_seconds:
-            return finish({
-                "answer": "本次对话超出运行时限，请缩小问题范围后重试。",
-                "stop_reason": "timeout",
-                "new_messages": new_messages,
-                "tool_events": tool_events,
-                "citations": citations,
-                "charts": charts,
-                "turns": turn - 1,
-                "tool_calls": tool_calls,
-            })
-        _emit(event_sink, {"type": "turn_started", "turn": turn})
-        tool_schemas = [_tool_schema(tool) for tool in tools]
-        model_started = time.monotonic()
-        try:
-            if stream_tokens:
-                response = llm.chat_tools_stream(
-                    request_messages,
-                    tool_schemas,
-                    model=model,
-                    temperature=temperature,
-                    event_sink=forward_llm_event,
-                )
-            else:
-                response = llm.chat_tools(
-                    request_messages,
-                    tool_schemas,
-                    model=model,
-                    temperature=temperature,
-                )
-        except Exception:
-            record_node("llm", model_started, status="error", turn=turn, phase="agent_decision")
-            record_run("error")
-            raise
-        record_node("llm", model_started, turn=turn, phase="agent_decision")
-        assistant_message = {
-            "role": "assistant",
-            "content": str(response.get("content") or ""),
-        }
-        raw_calls = list(response.get("tool_calls") or [])
-        # OpenAI-compatible providers reject a final assistant message with
-        # `tool_calls: []`. Only tool-call turns should carry this field.
-        if raw_calls:
-            assistant_message["tool_calls"] = raw_calls
-        request_messages.append(assistant_message)
-        new_messages.append(assistant_message)
-        _emit(event_sink, {
-            "type": "assistant_message",
-            "turn": turn,
-            "message": assistant_message,
-        })
-        raw_calls = list(assistant_message.get("tool_calls") or [])
-        if not raw_calls:
-            answer = str(assistant_message["content"] or "").strip()
-            if search_calls and not _has_knowledge_evidence(tool_events):
-                answer = "知识库中没有检索到足够证据，暂时无法可靠回答。"
-            elif not answer:
-                answer = "The model returned no displayable answer."
-            return finish({
-                "answer": answer,
-                "stop_reason": "finished",
-                "new_messages": new_messages,
-                "tool_events": tool_events,
-                "citations": citations,
-                "charts": charts,
-                "turns": turn,
-                "tool_calls": tool_calls,
-            })
-
-        for raw_call in raw_calls:
-            parsed = _parse_tool_call(raw_call)
-            if parsed is None:
-                invalid_tool_call = True
-                call_id = str(raw_call.get("id") or "") if isinstance(raw_call, dict) else ""
-                function = raw_call.get("function") if isinstance(raw_call, dict) else {}
-                tool_name = str(function.get("name") or "") if isinstance(function, dict) else ""
-                arguments: dict[str, Any] = {}
-                result: dict[str, Any] = {"ok": False, "error": "invalid tool call payload"}
-            else:
-                invalid_tool_call = False
-                call_id, tool_name, arguments = parsed
-                result = {}
-            tool = by_name.get(tool_name)
-            if not call_id:
-                call_id = f"call_{turn}_{tool_calls + 1}"
-            reused_knowledge_result = False
-            _emit(event_sink, {
-                "type": "tool_call",
-                "turn": turn,
-                "tool_call_id": call_id,
-                "name": tool_name,
-                "arguments": arguments,
-            })
-            if (
-                not invalid_tool_call
-                and tool_name == "search_knowledge_base"
-                and knowledge_result is not None
-            ):
-                # Agentic RAG already owns the bounded recovery loop. Reuse
-                # its result for any additional model-requested search calls
-                # in the same response instead of exposing a second budget
-                # or another uncontrolled retrieval path.
-                result = dict(knowledge_result)
-                reused_knowledge_result = True
-            elif invalid_tool_call:
-                pass
-            elif tool is None:
-                result = {"ok": False, "error": "unknown tool"}
-            elif tool_calls >= max_tool_calls:
-                result = {"ok": False, "error": "tool budget exhausted"}
-            elif tool.category == "search" and search_calls >= max_search_calls:
-                result = {"ok": False, "error": "search budget exhausted"}
-            elif _signature(tool_name, arguments) in seen:
-                result = {"ok": False, "error": "duplicate tool call rejected"}
-            else:
-                seen.add(_signature(tool_name, arguments))
-                tool_started = time.monotonic()
-                try:
-                    if tool.validate:
-                        tool.validate(arguments)
-                    result = {"ok": True, **tool.execute(arguments)}
-                except Exception as exc:
-                    result = {
-                        "ok": False,
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                    }
-                tool_calls += 1
-                if tool.category == "search":
-                    search_calls += 1
-                if tool_name == "search_knowledge_base":
-                    knowledge_result = dict(result)
-                else:
-                    business_tool_used = True
-                record_node(
-                    "tool",
-                    tool_started,
-                    status="ok" if result.get("ok") else "error",
-                    turn=turn,
-                    tool=tool_name,
-                )
-            _emit(event_sink, {
-                "type": "tool_result",
-                "turn": turn,
-                "tool_call_id": call_id,
-                "name": tool_name,
-                "result": result,
-            })
-            if not reused_knowledge_result and isinstance(result.get("citations"), list):
-                citations.extend(item for item in result["citations"] if isinstance(item, dict))
-            chart = result.get("chart")
-            if isinstance(chart, dict):
-                charts.append(chart)
-            content = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
-            tool_message = {
-                "role": "tool",
-                "tool_call_id": call_id,
-                "name": tool_name,
-                "content": content,
-            }
-            request_messages.append(tool_message)
-            new_messages.append(tool_message)
-            tool_events.append({
-                "tool_call_id": call_id,
-                "name": tool_name,
-                "arguments": arguments,
-                "result": result,
-            })
-
-        if knowledge_result is not None and not business_tool_used:
-            final_messages = _build_final_knowledge_messages(
-                messages,
-                current_question,
-                knowledge_result,
-            )
-            model_started = time.monotonic()
-            try:
-                final_response = (
-                    llm.chat_tools_stream(
-                        final_messages,
-                        tool_schemas,
-                        model=model,
-                        temperature=temperature,
-                        tool_choice="none",
-                        event_sink=forward_llm_event,
-                    )
-                    if stream_tokens
-                    else llm.chat_tools(
-                        final_messages,
-                        tool_schemas,
-                        model=model,
-                        temperature=temperature,
-                        tool_choice="none",
-                    )
-                )
-            except Exception:
-                record_node("llm", model_started, status="error", turn=turn, phase="final_answer")
-                record_run("error")
-                raise
-            record_node("llm", model_started, turn=turn, phase="final_answer")
-            final_message = {
-                "role": "assistant",
-                "content": str(final_response.get("content") or "").strip(),
-            }
-            request_messages.append(final_message)
-            new_messages.append(final_message)
-            _emit(event_sink, {
-                "type": "assistant_message",
-                "turn": turn,
-                "message": final_message,
-            })
-            answer = final_message["content"]
-            if not _has_knowledge_evidence(tool_events):
-                answer = "知识库中没有检索到足够证据，暂时无法可靠回答。"
-            elif not answer:
-                answer = "The model returned no displayable answer."
-            return finish({
-                "answer": answer,
-                "stop_reason": "finished",
-                "new_messages": new_messages,
-                "tool_events": tool_events,
-                "citations": citations,
-                "charts": charts,
-                "turns": turn,
-                "tool_calls": tool_calls,
-            })
-
+    )
+    _emit(event_sink, {"type": "first_token", "ttft_ms": first_token_ms})
+    if stream_tokens:
+        _emit(event_sink, {"type": "token", "content": answer})
+    _emit(event_sink, {
+        "type": "assistant_message",
+        "turn": int(stats.get("turns") or 1),
+        "message": assistant_message,
+    })
     return finish({
-        "answer": "工具调用次数达到上限，暂时无法完成这次回答。",
-        "stop_reason": "max_turns",
-        "new_messages": new_messages,
-        "tool_events": tool_events,
+        "answer": answer,
+        "stop_reason": "finished",
+        "new_messages": [assistant_message],
+        "tool_events": [],
         "citations": citations,
         "charts": charts,
-        "turns": max_turns,
-        "tool_calls": tool_calls,
+        "turns": int(stats.get("turns") or 1),
+        "tool_calls": int(stats.get("tool_calls") or 0),
+        "stats": stats,
+        "trace_file": body.get("trace_file"),
     })

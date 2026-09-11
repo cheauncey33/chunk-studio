@@ -116,7 +116,7 @@ export function resolveThinkingLevel(modelId: string, requested?: string): strin
 	return level;
 }
 
-async function getModel(): Promise<{ runtime: any; model: any; modelId: string }> {
+export async function getModel(): Promise<{ runtime: any; model: any; modelId: string }> {
 	if (!modelRuntimePromise) {
 		modelRuntimePromise = (async () => {
 			const modelId = defaultModelId();
@@ -251,7 +251,7 @@ const TRACE_TYPES = new Set([
 ]);
 
 /** Race a promise against a deadline, clearing the timer when either side settles. */
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+export function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
 	let timer: NodeJS.Timeout | undefined;
 	const timeout = new Promise<never>((_, reject) => {
 		timer = setTimeout(() => reject(new Error(message)), ms);
