@@ -114,6 +114,39 @@ def analyze(groups: list[dict[str, Any]]) -> dict[str, Any]:
             )
         slices[field] = rows
 
+    failure_groups = [
+        group
+        for group in groups
+        if group["outcome"] in {"dropped_before_fusion", "not_recalled"}
+    ]
+    failure_by_query_counter = Counter(
+        (
+            group["outcome"],
+            group["query"],
+            group["rewrite_status"],
+            group["evidence_type"],
+        )
+        for group in failure_groups
+    )
+    failure_by_query = [
+        {
+            "outcome": outcome,
+            "groups": groups_count,
+            "query": query,
+            "rewrite_status": rewrite_status,
+            "evidence_type": evidence_type,
+        }
+        for (outcome, query, rewrite_status, evidence_type), groups_count in sorted(
+            failure_by_query_counter.items(), key=lambda item: (-item[1], item[0])
+        )
+    ]
+    dropped_source_ranks = [
+        rank
+        for group in failure_groups
+        if group["outcome"] == "dropped_before_fusion"
+        for rank in group["route_ranks"].values()
+    ]
+
     return {
         "groups": count,
         "stage_recall": {
@@ -128,6 +161,11 @@ def analyze(groups: list[dict[str, Any]]) -> dict[str, Any]:
         "reranker_movement": dict(movement),
         "route_recall": route_recall,
         "slices": slices,
+        "failure_by_query": failure_by_query,
+        "dropped_source_rank_range": {
+            "min": min(dropped_source_ranks) if dropped_source_ranks else None,
+            "max": max(dropped_source_ranks) if dropped_source_ranks else None,
+        },
     }
 
 
@@ -178,6 +216,29 @@ def render_markdown(result: dict[str, Any]) -> str:
                 f"{row['fusion_pool_recall']:.1%} | {row['fusion_top8']:.1%} | "
                 f"{row['rerank_top8']:.1%} | {row['rerank_top30']:.1%} |"
             )
+    lines.extend(
+        [
+            "",
+            "## Failed Group patterns",
+            "",
+            "| Outcome | Groups | Rewrite | Evidence | Query |",
+            "|---|---:|---|---|---|",
+        ]
+    )
+    for row in result["failure_by_query"]:
+        lines.append(
+            f"| {row['outcome']} | {row['groups']} | {row['rewrite_status']} | "
+            f"{row['evidence_type']} | {row['query']} |"
+        )
+    rank_range = result["dropped_source_rank_range"]
+    lines.extend(
+        [
+            "",
+            f"Dropped-before-fusion raw source ranks span `{rank_range['min']}`–`{rank_range['max']}` "
+            "among the retained source-route hits; the production per-type candidate cap is 20.",
+            "",
+        ]
+    )
     lines.append("")
     return "\n".join(lines)
 
