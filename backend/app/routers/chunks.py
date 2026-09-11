@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import Response
 
 from .. import artifacts, chunk_schema, config, current_user, db, extractors, jobs, pdf
@@ -40,6 +40,22 @@ _REVIEW_SENSITIVE_JSON_FIELDS = (
 
 
 def _workspace_id() -> str:
+    return current_user.get_current_user().workspace_id
+
+
+def _sidecar_authorized(authorization: str | None) -> bool:
+    expected = str(config.AGENT_SIDECAR_TOKEN or "").strip()
+    return bool(expected) and str(authorization or "").strip() == f"Bearer {expected}"
+
+
+def _workspace_for_chunk_read(
+    authorization: str | None,
+    workspace_id: str | None,
+) -> str:
+    """Sidecar may read a bound originating workspace; users cannot hop."""
+    requested = str(workspace_id or "").strip()
+    if _sidecar_authorized(authorization) and requested:
+        return requested
     return current_user.get_current_user().workspace_id
 
 
@@ -192,8 +208,15 @@ def list_chunks(
 
 
 @router.get("/{chunk_id}")
-def get_chunk(chunk_id: str):
-    return _get_chunk(chunk_id)
+def get_chunk(
+    chunk_id: str,
+    workspace_id: str | None = Query(default=None),
+    authorization: str | None = Header(default=None),
+):
+    return _get_chunk(
+        chunk_id,
+        workspace_id=_workspace_for_chunk_read(authorization, workspace_id),
+    )
 
 
 @router.get("/{chunk_id}/crop")
@@ -430,16 +453,17 @@ def _review_sensitive_change(current: dict, body: ChunkUpdate) -> bool:
     return False
 
 
-def _get_chunk(cid: str) -> ChunkOut:
+def _get_chunk(cid: str, workspace_id: str | None = None) -> ChunkOut:
+    workspace = str(workspace_id or _workspace_id()).strip()
     repository = get_content_repository()
     if repository is not None:
-        row = repository.get_chunk(cid)
+        row = repository.get_chunk(cid, workspace_id=workspace)
         if not row:
             raise HTTPException(404, "chunk not found")
         return _row_to_out(row)
     row = db.get_conn().execute(
         "SELECT * FROM chunks WHERE id=? AND workspace_id=?",
-        (cid, _workspace_id()),
+        (cid, workspace),
     ).fetchone()
     if not row:
         raise HTTPException(404, "chunk not found")

@@ -80,10 +80,17 @@ function readableHits(
 	return formatSearchHits(payload?.hits ?? [], { query: options?.query });
 }
 
-function analyticsPath(path: string, workspaceId: string): string {
+function withWorkspaceQuery(path: string, workspaceId: string): string {
 	if (!workspaceId) return path;
 	const join = path.includes("?") ? "&" : "?";
 	return `${path}${join}workspace_id=${encodeURIComponent(workspaceId)}`;
+}
+
+export function readChunkPath(chunkId: string, workspaceId?: string): string {
+	return withWorkspaceQuery(
+		`/api/chunks/${encodeURIComponent(chunkId)}`,
+		String(workspaceId || "").trim(),
+	);
 }
 
 export function createChatTools(scope: ChatToolScope, progress?: EvidenceProgress) {
@@ -225,7 +232,7 @@ export function createChatTools(scope: ChatToolScope, progress?: EvidenceProgres
 			}
 			const blocked = takeBudget();
 			if (blocked) return blocked;
-			const payload = await apiFetch(`/api/chunks/${encodeURIComponent(params.chunk_id)}`, signal);
+			const payload = await apiFetch(readChunkPath(params.chunk_id, workspaceId), signal);
 			const chunk = payload as any;
 			const scoped = denyChunkFileScope(chunk?.file_id, fileIds);
 			if (scoped) {
@@ -297,7 +304,7 @@ export function createChatTools(scope: ChatToolScope, progress?: EvidenceProgres
 		async execute(_id, _params, signal, _onUpdate, _ctx) {
 			const blocked = takeBudget();
 			if (blocked) return blocked;
-			const payload = await apiFetch(analyticsPath("/api/analytics/schema", workspaceId), signal);
+			const payload = await apiFetch(withWorkspaceQuery("/api/analytics/schema", workspaceId), signal);
 			return {
 				content: [{ type: "text", text: JSON.stringify(payload).slice(0, 4000) }],
 				details: { schema: payload },
@@ -314,7 +321,7 @@ export function createChatTools(scope: ChatToolScope, progress?: EvidenceProgres
 		async execute(_id, _params, signal, _onUpdate, _ctx) {
 			const blocked = takeBudget();
 			if (blocked) return blocked;
-			const payload = await apiFetch(analyticsPath("/api/analytics/overview", workspaceId), signal);
+			const payload = await apiFetch(withWorkspaceQuery("/api/analytics/overview", workspaceId), signal);
 			return {
 				content: [{ type: "text", text: JSON.stringify(payload).slice(0, 4000) }],
 				details: { overview: payload },

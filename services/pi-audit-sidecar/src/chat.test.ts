@@ -10,6 +10,7 @@ import {
 	rememberSearchChunkIds,
 	denyUnreadChunk,
 	denyChunkFileScope,
+	readChunkPath,
 } from "./chatTools.ts";
 
 test("chat search binds production to the current user question", () => {
@@ -49,6 +50,12 @@ test("chat tool parameters do not expose file_ids or job identity", () => {
 	const readParams = source.split('name: "read_chunk"')[1].split("async execute")[0];
 	assert.equal(readParams.includes("file_ids"), false);
 	assert.equal(readParams.includes("job_id"), false);
+	assert.equal(readParams.includes("workspace_id"), false);
+});
+
+test("read_chunk HTTP path binds the originating workspace", () => {
+	assert.equal(readChunkPath("c1", "ws-a"), "/api/chunks/c1?workspace_id=ws-a");
+	assert.equal(readChunkPath("c1", ""), "/api/chunks/c1");
 });
 
 test("chat prompt is Q&A not audit JSON", () => {

@@ -432,6 +432,36 @@ def test_chat_sidecar_ingest_uses_conversation_not_job(monkeypatch, tmp_path: Pa
     assert chat_rows[0]["total_tokens"] == 25
 
 
+def test_chat_ingest_infers_stage_when_omitted(monkeypatch, tmp_path: Path) -> None:
+    _init_temp_db(monkeypatch, tmp_path)
+    now = jobs.now_iso()
+    with db.transaction() as conn:
+        conn.execute(
+            """INSERT INTO chat_conversations
+               (id, assistant_id, workspace_id, user_id, title, created_at, updated_at)
+               VALUES ('chat_inferred', 'assistant_oil_transformer_audit', ?, 'local-user',
+                       't', ?, ?)""",
+            (db.config.DEFAULT_WORKSPACE_ID, now, now),
+        )
+    monkeypatch.setattr(internal_router.config, "AGENT_SIDECAR_TOKEN", "secret")
+    body = internal_router.InternalUsageIngest(
+        request_id="pi:chat-inferred",
+        conversation_id="chat_inferred",
+        usage_source="sdk",
+        usage={"input": 4, "output": 1, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 5},
+    )
+    assert body.stage is None
+    recorded = internal_router.ingest_llm_usage(body, authorization="Bearer secret")
+    assert recorded == {"ok": True, "recorded": True}
+    rows = get_usage_repository().list_usage_events(
+        workspace_id=db.config.DEFAULT_WORKSPACE_ID,
+    )
+    chat_rows = [row for row in rows if row.get("conversation_id") == "chat_inferred"]
+    assert len(chat_rows) == 1
+    assert chat_rows[0]["stage"] == "chat_agent"
+    assert chat_rows[0]["job_id"] in (None, "")
+
+
 def test_three_sidecar_turns_are_three_events(monkeypatch, tmp_path: Path) -> None:
     _init_temp_db(monkeypatch, tmp_path)
     _insert_job("job-turns")

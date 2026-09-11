@@ -21,7 +21,7 @@ class InternalUsageIngest(BaseModel):
     conversation_id: str | None = None
     job_attempt: int | None = None
     request_attempt: int | None = 1
-    stage: str = llm_usage.STAGE_AUDIT_AGENT
+    stage: str | None = None
     provider: str = ""
     model: str = ""
     status: str = llm_usage.STATUS_SUCCESS
