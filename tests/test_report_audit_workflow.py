@@ -15,6 +15,50 @@ from app import db
 import run_report_audit_workflow as workflow
 
 
+def test_merged_review_checks_source_snippets_and_keeps_conflicts():
+    parameters = {"core": "电工钢", "closed": "", "oil": "油浸式", "inferred": "",
+        "_parameter_evidence": {"core": {"quote": "铁芯电工钢", "quote_verified": True},
+                                "oil": {"quote": "油浸式", "quote_verified": True}}}
+    fields = {
+        "core": {"value": "电工钢", "state": "conflict", "source": "report", "evidence_quote": "铁芯电工钢"},
+        "closed": {"value": "闭口", "state": "confirmed", "source": "report", "evidence_quote": "编造闭口"},
+        "oil": {"value": "油浸式", "state": "confirmed", "source": "report", "evidence_quote": "油浸式"},
+        "inferred": {"value": "非晶合金", "state": "confirmed", "source": "naming", "evidence_quote": "H非晶合金"},
+    }
+    review = workflow._normalize_parameter_review(fields, parameters, "H非晶合金")
+    assert review["fields"]["core"]["state"] == "conflict"
+    assert review["fields"]["closed"]["state"] == "unverified"
+    assert review["fields"]["oil"]["state"] == "confirmed"
+    assert review["fields"]["inferred"]["state"] == "confirmed"
+
+
+def test_case_payload_reuses_report_review_without_naming_document():
+    review = {"version": 1, "fields": {"oil": {"state": "confirmed"}}}
+    payload = workflow._agent_sidecar_payload(case_id="case", sample_context={}, test_item={},
+        reported_requirement={}, evidence_file_ids=[], naming_rule_context="large naming document", parameter_review=review)
+    assert payload["parameter_review"] is review
+    assert "naming_rule_context" not in payload
+
+
+def test_merged_decode_reuses_cache_and_invalidates_changed_inputs(monkeypatch):
+    calls = []
+    def decode(*args, **kwargs):
+        calls.append(args)
+        return {"parameter_review": {"version": 2, "fields": {}}}
+    monkeypatch.setattr(workflow, "_decode_model", decode)
+    parameters = {"model": "S20"}
+    cached = workflow._cached_model_decode(parameters, "naming", prompt="prompt", model="test")
+    for _ in range(3):
+        assert workflow._cached_model_decode(parameters, "naming", prompt="prompt", model="test", cached=cached) is cached
+    assert len(calls) == 1
+    workflow._cached_model_decode(parameters, "changed naming", prompt="prompt", model="test", cached=cached)
+    workflow._cached_model_decode({"model": "S21"}, "naming", prompt="prompt", model="test", cached=cached)
+    workflow._cached_model_decode(parameters, "naming", prompt="changed prompt", model="test", cached=cached)
+    assert len(calls) == 4
+    workflow._cached_model_decode(parameters, "naming", prompt="prompt", model="test", cached={"raw_model": "old"})
+    assert len(calls) == 5
+
+
 def _init_temp_db(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(db.config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(db.config, "DB_PATH", tmp_path / "chunkstudio.db")
@@ -389,6 +433,7 @@ def test_extract_parameters_uses_schema_and_open_list(monkeypatch) -> None:
         "model": "ABC-1",
         "rated_voltage": "10 kV",
         "extra_field": "x",
+        "_parameter_evidence": {},
     }
 
 
@@ -1649,8 +1694,13 @@ def test_build_sample_profile_merges_report_and_decode() -> None:
         },
     )
     assert profile["from_report"]["rated_capacity"] == "400 kVA"
-    assert profile["from_report"]["core_structure"] == "立体卷铁芯"
-    assert profile["from_report"]["sealing_type"] == "密封式"
+    assert profile["from_report"]["core_structure"] == ""
+    assert profile["from_report"]["sealing_type"] == ""
+    assert profile["effective_parameters"]["core_structure"] == "立体卷铁芯"
+    assert profile["reported_parameters"]["core_structure"] == ""
+    assert profile["parameter_evidence"]["core_structure"]["source"] == "model_decode"
+    assert profile["parameter_evidence"]["core_structure"]["verification"] == "requires_review"
+    assert profile["parameter_evidence"]["rated_capacity"]["source"] == "report_extraction"
     assert "not_a_schema_key" not in profile["from_report"]
     assert profile["from_model_decode"]["feature_meanings"]["RL"] == "立体卷铁芯"
     assert profile["from_model_decode"]["feature_meanings"]["M"] == "密封式"
@@ -1666,8 +1716,10 @@ def test_build_sample_profile_merges_report_and_decode() -> None:
 
 def test_decode_model_passes_empty_schema_fields_and_filters_fills(monkeypatch) -> None:
     captured: dict[str, object] = {}
+    calls = []
 
     def fake_call_model(prompt: str, payload: dict, *, model: str, **_kwargs):
+        calls.append(_kwargs.get("stage"))
         captured["payload"] = payload
         return {
             "raw_model": "S20-M.RL-400/10-NX2",
@@ -1681,6 +1733,9 @@ def test_decode_model_passes_empty_schema_fields_and_filters_fills(monkeypatch) 
                 "rated_capacity": "should_drop_already_filled",
                 "unknown_key": "nope",
             },
+            "parameter_review": {"fields": {"core_structure": {
+                "value": "立体卷铁芯", "state": "confirmed", "source": "naming", "evidence_quote": "RL 立体卷铁芯",
+            }}},
         }
 
     monkeypatch.setattr(workflow, "_call_model", fake_call_model)
@@ -1708,6 +1763,58 @@ def test_decode_model_passes_empty_schema_fields_and_filters_fills(monkeypatch) 
     }
     assert empty_keys == {"core_structure"}
     assert out["schema_fills"] == {"core_structure": "立体卷铁芯"}
+    assert calls == ["model_decode"]
+    assert "report_markdown" not in captured["payload"]
+    assert out["parameter_review"]["fields"]["core_structure"]["state"] == "confirmed"
+
+
+def test_parameter_quotes_are_checked_against_report_not_model_flags(monkeypatch) -> None:
+    monkeypatch.setattr(workflow, "_call_model", lambda *args, **kwargs: {
+        "model": "S20", "core_material": "电工钢",
+        "parameter_evidence": {
+            "model": {"quote": "产品型号 S20"},
+            "core_material": {"quote": "材质为电工钢", "quote_verified": True},
+        },
+    })
+    parameters = workflow._extract_parameters("产品型号 S20", prompt="extract", model="test")
+    profile = workflow._build_sample_profile(parameters, {})
+    assert profile["parameter_evidence"]["model"]["verification"] == "quote_verified"
+    assert profile["parameter_evidence"]["core_material"]["verification"] == "unverified"
+    assert "parameter_evidence" not in profile["from_report"]
+
+
+def test_decode_proposals_do_not_become_deterministic_report_selectors() -> None:
+    profile = workflow._build_sample_profile(
+        {"model": "S20", "rated_capacity": ""},
+        {"schema_fills": {"rated_capacity": "400 kVA"},
+         "decoded_features": [{"segment": "400", "evidence_quote": "400 kVA", "quote_verified": False}]},
+    )
+    applicability = workflow.resolve_applicability(profile)
+    assert applicability["parameters"]["capacity_kva"] is None
+    assert profile["parameter_evidence"]["rated_capacity"]["verification"] == "requires_review"
+    assert profile["parameter_evidence"]["rated_capacity"]["evidence"][0]["quote_verified"] is False
+    payload = workflow._agent_sidecar_payload(
+        case_id="case", sample_context=profile["reported_parameters"], test_item={},
+        reported_requirement={}, evidence_file_ids=[],
+        parameter_evidence=profile["parameter_evidence"], naming_rule_context="命名原文",
+    )
+    assert payload["sample_context"]["rated_capacity"] == ""
+    assert payload["parameter_evidence"]["rated_capacity"]["value"] == "400 kVA"
+    assert payload["naming_rule_context"] == "命名原文"
+
+
+def test_agent_applicability_failures_block_provisional_acceptance() -> None:
+    judgment = workflow._judgment_from_agent_result(
+        {"result": {"verdict": "match", "applicability_checks": [],
+                    "applicability_validation_issues": ["unverified_applicability_quote"]}},
+        reason_code="agent",
+    )
+    assert judgment is not None
+    assert judgment["validation_issues"] == ["unverified_applicability_quote"]
+    assert judgment["status"] == "insufficient_context"
+    assert judgment["agent_verdict"] == "match"
+    gate = workflow.decide_recovery(judgment=judgment, retrieval_trace={}, sample_profile={})
+    assert gate["action"] == "rejudge_only"
 
 
 def test_resolve_judge_concurrency_priority_and_bounds(monkeypatch) -> None:

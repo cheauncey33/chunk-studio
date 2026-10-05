@@ -87,7 +87,9 @@ def _numbers(value: Any) -> list[float]:
 def _profile_entries(sample_profile: dict[str, Any] | None) -> list[tuple[str, str]]:
     profile = sample_profile if isinstance(sample_profile, dict) else {}
     entries: list[tuple[str, str]] = []
-    for section_name in ("from_report", "from_model_decode"):
+    # Provenance-aware profiles must not promote model proposals into reported selectors.
+    sections = ("from_report",) if "parameter_evidence" in profile else ("from_report", "from_model_decode")
+    for section_name in sections:
         section = profile.get(section_name)
         if not isinstance(section, dict):
             continue

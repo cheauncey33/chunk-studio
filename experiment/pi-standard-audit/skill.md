@@ -16,6 +16,14 @@ description: 检测报告标准值审查（standard-value audit）。给定被�
 2. **试验项目（test_item）**：本次审查针对的试验项，例如 `{"item_no": "4", "project_name": "空载损耗和空载电流测量"}`
 3. **报告声称值（reported_requirement）**：报告里写的判定要求，例如 `{"text": "空载损耗P0(kW):≤0.370", "unit": "kW"}`
 
+生产任务还提供 **parameter_evidence**（逐字段来源、值、引用及校验状态）和 **naming_rule_context**（命名依据原文）。型号解码值是待核实提议，不是报告事实；quote_verified 仅表示逐字引用存在，不证明推断正确。关键报告参数缺证据时先 search_report_context；型号推断须核对完整型号、命名原文与省略/默认规则。
+
+match/mismatch 必须返回 applicability_checks：每项含 condition、parameter、value、source、evidence_quote、state（confirmed/conflict/unknown）。逐项核实实际使用表题、表头和注释中的关键适用条件及型号子列。不能以“行绑定 unique”代替整表适用性，也不能将密封式等同于闭口铁芯；关键条件无法确认时判 unevaluable + applicability_undetermined。
+
+每项还需 evidence_role：sample_fact 使用报告/命名原文，standard_condition 使用已 read_chunk 的标准原文。每项仅核实一个条件，不能用一段只支持一个字段的引文确认多个字段。标准侧条件不能作为样品具备该条件的证明。允许格式差异，但不能拼接、改写或变更数值与比较方向。
+
+standard_condition 也可引用任务中已提供的命名规则原文（规则与实际样品事实需分开）。报告明确记载与型号推断冲突时，不能自行优先任何一方；须补查报告原文取得能解释冲突的新直接证据，未消除则标 conflict 并判 applicability_undetermined。
+
 你的任务是以标准为准绳核对该声称值。
 
 ## 可使用工具

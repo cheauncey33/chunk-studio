@@ -279,6 +279,9 @@ def _agent_sidecar_payload(
     report_file_id: str = "",
     production_query: str | None = None,
     retrieved_candidates: list[dict[str, Any]] | None = None,
+    parameter_evidence: dict[str, Any] | None = None,
+    naming_rule_context: str = "",
+    parameter_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Case payload for the Pi sidecar. report_file_id binds search_report_context."""
     payload: dict[str, Any] = {
@@ -295,6 +298,13 @@ def _agent_sidecar_payload(
         payload["production_query"] = production_query
     if retrieved_candidates is not None:
         payload["retrieved_candidates"] = retrieved_candidates
+    if parameter_evidence is not None:
+        payload["parameter_evidence"] = parameter_evidence
+    if naming_rule_context:
+        payload["naming_rule_context"] = naming_rule_context
+    if parameter_review is not None:
+        payload["parameter_review"] = parameter_review
+        payload.pop("naming_rule_context", None)
     return payload
 
 
@@ -692,16 +702,67 @@ def _extract_parameters(
     prompt: str,
     model: str,
     parameter_schema: dict[str, Any] | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     schema = resolve_parameter_schema(parameter_schema)
     # Schema lives in the system prompt (extraction_brief); do not send it again.
     result = _call_model(
-        prompt,
+        prompt + "\n额外返回 parameter_evidence 对象：每个已提取字段的 key 对应 {quote: 报告中的逐字原文}。没有原文依据的字段留空，不要编造引用。",
         {"report_markdown": markdown},
         model=model,
         stage="report_parameters",
     )
-    return normalize_extracted_parameters(result, schema)
+    normalized: dict[str, Any] = normalize_extracted_parameters(
+        {key: value for key, value in result.items() if key != "parameter_evidence"}, schema
+    )
+    evidence = result.get("parameter_evidence")
+    normalized["_parameter_evidence"] = {
+        key: {
+            "quote": str((item or {}).get("quote") or ""),
+            "quote_verified": bool(isinstance(item.get("quote"), str) and item["quote"] and item["quote"] in markdown),
+        }
+        for key, item in (evidence.items() if isinstance(evidence, dict) else [])
+        if key in normalized and isinstance(item, dict)
+    }
+    return normalized
+
+
+def _normalize_parameter_review(raw: Any, parameters: dict[str, Any], naming: str) -> dict[str, Any]:
+    """Check the merged node's quotes against supplied source snippets only."""
+    fields = {}
+    report_evidence = parameters.get("_parameter_evidence") or {}
+    for key, value in parameters.items():
+        if key.startswith("_"):
+            continue
+        item = dict(raw.get(key) or {}) if isinstance(raw, dict) and isinstance(raw.get(key), dict) else {}
+        source = str(item.get("source") or "")
+        quote = item.get("evidence_quote")
+        evidence = report_evidence.get(key) or {}
+        report_quote = str(evidence.get("quote") or "") if evidence.get("quote_verified") is True else ""
+        corpus = naming if source == "naming" else report_quote if source == "report" else ""
+        valid = isinstance(quote, str) and bool(quote.strip()) and quote in corpus
+        if item.get("state") not in {"confirmed", "missing", "conflict", "unverified"}:
+            item["state"] = "unverified" if value else "missing"
+        if item.get("state") == "confirmed" and (not valid or not item.get("value")):
+            item["state"] = "unverified"
+        item["quote_verified"] = bool(valid)
+        item["extraction_evidence"] = [evidence] if evidence else []
+        fields[key] = item
+    return {"version": 2, "fields": fields}
+
+
+def _cached_model_decode(parameters: dict[str, Any], naming: str, *, prompt: str, model: str,
+                         parameter_schema: dict[str, Any] | None = None,
+                         cached: dict[str, Any] | None = None) -> dict[str, Any]:
+    import hashlib
+    source = json.dumps({"parameters": parameters, "naming": naming, "prompt": prompt,
+                         "model": model, "schema": parameter_schema, "version": 2},
+                        ensure_ascii=False, sort_keys=True)
+    input_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    if cached and cached.get("input_hash") == input_hash and cached.get("parameter_review", {}).get("version") == 2:
+        return cached
+    decoded = _decode_model(parameters, naming, prompt=prompt, model=model, parameter_schema=parameter_schema)
+    decoded["input_hash"] = input_hash
+    return decoded
 
 
 def _empty_schema_fields(
@@ -742,10 +803,17 @@ def _decode_model(
 ) -> dict[str, Any]:
     empty_fields = _empty_schema_fields(parameters, parameter_schema)
     result = _call_model(
-        prompt,
+        prompt + "\n在同一次输出中完成参数核对，额外返回 parameter_review.fields：每个预设字段包含 value、"
+        "state（confirmed/missing/conflict/unverified）、source（report/naming）、evidence_quote、reason。"
+        "核对报告参数片段与完整型号、命名原文及省略规则。命名规则明确支持的推导可 confirmed；"
+        "报告和型号冲突标 conflict，不自行选择一方。密封不能证明闭口。引用必须是提供原文的连续逐字片段。"
+        "报告参数没有已验证原文片段时不得确认其来源为 report。缺失不猜测。不要判标准适用性。",
         {
             "raw_model": parameters["model"],
-            "report_parameters": parameters,
+            "report_parameters": {key: value for key, value in parameters.items() if not key.startswith("_")},
+            "report_parameter_evidence": {key: evidence for key, evidence in (parameters.get("_parameter_evidence") or {}).items()
+                                          if isinstance(evidence, dict) and evidence.get("quote_verified") is True},
+            "parameter_fields": resolve_parameter_schema(parameter_schema).get("fields"),
             "empty_schema_fields": empty_fields,
             "naming_rule_markdown": naming_markdown,
         },
@@ -768,6 +836,9 @@ def _decode_model(
             if name in allowed and text:
                 fills[name] = text
     result["schema_fills"] = fills
+    raw_review = result.get("parameter_review")
+    result["parameter_review"] = _normalize_parameter_review(
+        raw_review.get("fields") if isinstance(raw_review, dict) else None, parameters, naming_markdown)
     return result
 
 
@@ -1819,12 +1890,26 @@ def _judgment_from_agent_result(
         "kind": result.get("kind"),
         "judge_source": "agent",
         "protocol_error": protocol_error,
+        "applicability_checks": result.get("applicability_checks") or [],
+        "validation_issues": list(result.get("applicability_validation_issues") or []),
         "deterministic_judge": {
             "applied": False,
             "mode": "agent",
             "reason_code": reason_code,
         },
     }
+    if judgment["validation_issues"]:
+        judgment.update({
+            "agent_verdict": verdict,
+            "agent_kind": result.get("kind"),
+            "status": "insufficient_context",
+            "verdict": "unevaluable",
+            "kind": "applicability_undetermined",
+            "reason": "适用条件证据校验未通过："
+            + ", ".join(judgment["validation_issues"])
+            + "。Agent 原始说明：" + judgment["reason"],
+        })
+        status = "insufficient_context"
     apply_status_layer(
         judgment,
         build_status_layer(
@@ -2283,13 +2368,7 @@ def _build_sample_profile(
     *,
     parameter_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Merge report parameters with model-decode output for downstream nodes.
-
-    Deterministic post-step of model_decode (not an LLM call): empty
-    ``from_report`` keys may be filled from decode ``schema_fills`` (LLM-mapped
-    Schema keys only). Downstream planner/judge should treat ``sample_profile``
-    as the single sample archive.
-    """
+    """Keep reported facts separate from inferred proposals and their evidence."""
     schema = resolve_parameter_schema(parameter_schema)
     allowed_keys = {
         str(field.get("key") or "").strip()
@@ -2300,7 +2379,7 @@ def _build_sample_profile(
     from_report: dict[str, Any] = {}
     for key, value in (parameters or {}).items():
         name = str(key or "").strip()
-        if not name:
+        if not name or name.startswith("_"):
             continue
         from_report[name] = value
 
@@ -2330,6 +2409,7 @@ def _build_sample_profile(
                 continue
             schema_fills[name] = text
 
+    reported_parameters = dict(from_report)
     filled_from_decode: list[str] = []
     for key, text in schema_fills.items():
         current = from_report.get(key)
@@ -2344,6 +2424,25 @@ def _build_sample_profile(
     for key in allowed_keys:
         if key not in from_report:
             from_report[key] = ""
+        reported_parameters.setdefault(key, "")
+
+    labels = {field["key"]: field.get("label") or field["key"] for field in schema.get("fields") or []}
+    report_evidence = (parameters or {}).get("_parameter_evidence") or {}
+    decode_evidence = [
+        {"segment": item.get("segment"), "meaning": item.get("meaning"),
+         "quote": item.get("evidence_quote") or "", "quote_verified": item.get("quote_verified") is True}
+        for item in decoded_payload.get("decoded_features") or [] if isinstance(item, dict)
+    ]
+    parameter_evidence = {}
+    for key, value in from_report.items():
+        inferred = key in filled_from_decode
+        evidence = report_evidence.get(key) if isinstance(report_evidence, dict) else None
+        parameter_evidence[key] = {
+            "label": labels.get(key, key), "value": value,
+            "source": "model_decode" if inferred else "report_extraction" if value else "missing",
+            "verification": "requires_review" if inferred else "quote_verified" if isinstance(evidence, dict) and evidence.get("quote_verified") else "unverified" if value else "missing",
+            "evidence": decode_evidence if inferred else [evidence] if evidence else [],
+        }
 
     raw_model = str(decoded_payload.get("raw_model") or from_report.get("model") or "").strip()
     retrieval_terms = [
@@ -2357,7 +2456,10 @@ def _build_sample_profile(
         if str(segment).strip()
     ]
     return {
-        "from_report": from_report,
+        "from_report": reported_parameters,
+        "effective_parameters": from_report,
+        "reported_parameters": reported_parameters,
+        "parameter_evidence": parameter_evidence,
         "from_model_decode": {
             "raw_model": raw_model,
             "features": features,
@@ -2507,10 +2609,10 @@ def _audit_one_case(
         "claim": requirement_extraction["claim"],
         "nodes": requirement_extraction["nodes"],
     }
-    # sample_context kept as report-extracted alias for production_query / UI.
+    # The flat context contains reported facts only; inferred proposals carry provenance separately.
     runtime_case = {
         "sample_profile": sample_profile,
-        "sample_context": from_report,
+        "sample_context": sample_profile.get("reported_parameters", from_report),
         "test_item": {
             "item_no": fresh["test_item"]["item_no"],
             "project_name": fresh["test_item"]["project_name"],
@@ -2695,6 +2797,9 @@ def _audit_one_case(
             report_file_id=report_file_id,
             production_query=queries["production"],
             retrieved_candidates=_retrieved_pool_for_agent(candidates),
+            parameter_evidence=sample_profile.get("parameter_evidence"),
+            naming_rule_context=str(sample_profile.get("naming_rule_context") or ""),
+            parameter_review=sample_profile.get("parameter_review"),
         )
         last_error: str | None = None
         for attempt in range(max(1, agent_retries + 1)):
@@ -3054,7 +3159,7 @@ def _agent_runtime_case(
     }
     runtime_case = {
         "sample_profile": sample_profile,
-        "sample_context": from_report,
+        "sample_context": sample_profile.get("reported_parameters", from_report),
         "test_item": {
             "item_no": fresh["test_item"]["item_no"],
             "project_name": fresh["test_item"]["project_name"],
@@ -3099,6 +3204,9 @@ def _audit_one_case_agent(
         reported_requirement=runtime_case["reported_requirement"],
         evidence_file_ids=evidence_file_ids,
         report_file_id=report_file_id,
+        parameter_evidence=profile_copy.get("parameter_evidence"),
+        naming_rule_context=str(profile_copy.get("naming_rule_context") or ""),
+        parameter_review=profile_copy.get("parameter_review"),
     )
     agent_response: dict[str, Any] | None = None
     agent_error: str | None = None
@@ -3149,6 +3257,8 @@ def _audit_one_case_agent(
                 "kind": result.get("kind"),
                 "judge_source": "agent",
                 "protocol_error": bool(stats.get("protocol_error")),
+                "applicability_checks": result.get("applicability_checks") or [],
+                "validation_issues": list(result.get("applicability_validation_issues") or []),
                 "agent_model": agent_model,
             }
     else:
@@ -3159,6 +3269,8 @@ def _audit_one_case_agent(
             "judge_source": "agent_error",
             "agent_error": agent_error,
         }
+    if agent_response and judgment.get("validation_issues"):
+        judgment = _judgment_from_agent_result(agent_response, reason_code="agent_applicability_invalid") or judgment
     return {
         "case_id": unit["case_id"],
         **runtime_case,
@@ -3380,14 +3492,15 @@ def main() -> None:
         job_id,
         stage="model_decode",
         percent=18,
-        message="正在解码型号命名…",
+        message="正在解析型号并核对样品参数…",
     )
-    decoded = checkpoint.get("model_decode") or _decode_model(
+    decoded = _cached_model_decode(
         parameters,
         args.naming_rule.read_text(encoding="utf-8"),
         prompt=naming_prompt,
         model=judge_model,
         parameter_schema=profile.get("parameter_schema"),
+        cached=checkpoint.get("model_decode"),
     )
     checkpoint["model_decode"] = decoded
     # Always rebuild from current parameters + decode (deterministic merge).
@@ -3397,6 +3510,18 @@ def main() -> None:
         parameter_schema=profile.get("parameter_schema"),
     )
     checkpoint["sample_profile"] = sample_profile
+    sample_profile["naming_rule_context"] = args.naming_rule.read_text(encoding="utf-8")
+    for parameter in sample_profile["parameter_evidence"].values():
+        is_decode = parameter["source"] == "model_decode"
+        parameter["source_file_id"] = args.naming_rule_file_id if is_decode else args.report_file_id
+        parameter["source_path"] = str(args.naming_rule if is_decode else args.report)
+    review = decoded["parameter_review"]
+    for field in review["fields"].values():
+        is_naming = field.get("source") == "naming"
+        field["source_file_id"] = args.naming_rule_file_id if is_naming else args.report_file_id
+        field["source_path"] = str(args.naming_rule if is_naming else args.report)
+    sample_profile["parameter_review"] = review
+    checkpoint["parameter_review"] = review
     write_checkpoint_atomic(checkpoint_path, checkpoint)
 
     units = _build_full_audit_units(extracted)

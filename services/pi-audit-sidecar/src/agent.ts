@@ -19,6 +19,7 @@ import {
 import { createAuditTools } from "./tools.ts";
 import { createEvidenceProgress, normalizeChunkId } from "./progress.ts";
 import { systemPrompt } from "./prompt.ts";
+import { applicabilityIssues, applicabilityDiagnostics } from "./applicability.ts";
 import { parseVerdictDetailed } from "./parse.ts";
 import { formatFirstRoundCards } from "./preview.ts";
 import { applyEvidenceClosure, closeEvidence } from "./closure.ts";
@@ -37,6 +38,9 @@ export type AgentCaseInput = {
 	run_id?: string | null;
 	job_attempt?: number | null;
 	sample_context?: Record<string, unknown> | null;
+	parameter_evidence?: Record<string, unknown> | null;
+	naming_rule_context?: string | null;
+	parameter_review?: { version: number; fields: Record<string, Record<string, unknown>>; input_hash?: string } | null;
 	test_item?: Record<string, unknown> | null;
 	reported_requirement?: Record<string, unknown> | null;
 	/** Default file_ids for search_standards (assistant-bound KB scope); [] = unrestricted. */
@@ -207,7 +211,9 @@ function firstRoundQuery(c: AgentCaseInput): string {
 }
 
 function casePrompt(c: AgentCaseInput): string {
-	const ctx = c.sample_context ?? {};
+	const ctx = c.parameter_review
+		? Object.fromEntries(Object.entries(c.parameter_review.fields).filter(([, field]) => field.state === 'confirmed').map(([key, field]) => [key, field.value]))
+		: c.sample_context ?? {};
 	const retrieved = Array.isArray(c.retrieved_candidates) ? c.retrieved_candidates : [];
 	const retrievedBlock =
 		retrieved.length > 0 ? `\n${formatFirstRoundCards(retrieved, firstRoundQuery(c))}` : "";
@@ -222,6 +228,13 @@ function casePrompt(c: AgentCaseInput): string {
 		``,
 		`## 产品型号参数`,
 		JSON.stringify(ctx, null, 2),
+		``,
+		c.parameter_review ? `## 报告级参数核对结果（已完成一次核对，所有项目复用）` : `## 参数来源与校验（型号解码值为待核实提议，不是报告事实）`,
+		JSON.stringify(c.parameter_review ?? c.parameter_evidence ?? {}, null, 2),
+		c.parameter_review ? `confirmed 参数直接复用，不要再次搜索报告或解码型号。只核对当前标准要求与这些参数的对应关系；missing/conflict/unverified 不能当成确认事实，仅当它影响当前项目时补证据。applicability_checks 的 sample_fact 复用该字段的 value 和 evidence_quote。` : '',
+		``,
+		`## 型号命名依据原文`,
+		c.parameter_review ? `已在报告级核对，当前项目不重复读取命名文件。` : c.naming_rule_context || `（未提供；不得把未验证的型号推断当成事实）`,
 		``,
 		`## 试验项目`,
 		JSON.stringify(c.test_item ?? {}, null, 2),
@@ -364,12 +377,24 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 	let gateReprompt = false;
 	let firstToolName: string | null = null;
 	const readBodies = new Map<string, string>();
+	const sampleSources: string[] = [input.naming_rule_context || ''];
+	for (const field of Object.values(input.parameter_review?.fields || {})) {
+		if (field.state === 'confirmed' && field.quote_verified === true) sampleSources.push(String(field.evidence_quote || ''));
+	}
+	for (const item of Object.values(input.parameter_evidence || {})) {
+		const record = item as any;
+		if (record?.source === 'report_extraction') {
+			for (const evidence of record.evidence || []) {
+				if (evidence?.quote_verified === true) sampleSources.push(String(evidence.quote || ''));
+			}
+		}
+	}
 	const pendingReads = new Map<string, string>();
 
 	const loader = new DefaultResourceLoader({
 		cwd: process.cwd(),
 		agentDir: join(process.env.HOME ?? process.env.USERPROFILE ?? ".", ".pi", "agent"),
-		systemPromptOverride: () => systemPrompt({ hasFirstRound }),
+		systemPromptOverride: () => systemPrompt({ hasFirstRound, hasParameterReview: !!input.parameter_review }),
 		appendSystemPromptOverride: () => [],
 		extensionFactories: [
 			// 硬预算：超过上限即阻止并让模型直接收尾出判定（省 token/时间）。
@@ -401,6 +426,9 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 	session.setActiveToolsByName(tools.map((t) => t.name));
 
 	session.subscribe((event: any) => {
+		if (event.type === 'tool_execution_end' && ['search_report_context', 'read_report'].includes(event.toolName) && !event.isError) {
+			sampleSources.push(toolResultText(event.result));
+		}
 		// host 端门禁计数：standard_not_found 必须建立在 read_chunk 证据上。
 		if (event.type === "tool_execution_start") {
 			toolCalls += 1;
@@ -495,6 +523,13 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 		);
 	}
 
+	if (!promptError && input.parameter_evidence && applicabilityIssues(parsed.value, sampleSources, [...readBodies.values(), input.naming_rule_context || ''], input.parameter_review?.fields).length) {
+		await repromptOnce(
+			`适用条件证据检查未通过：${applicabilityIssues(parsed.value, sampleSources, [...readBodies.values(), input.naming_rule_context || ''], input.parameter_review?.fields).join(', ')}。逐项诊断：${JSON.stringify(applicabilityDiagnostics(parsed.value, sampleSources, [...readBodies.values(), input.naming_rule_context || '']))}。请核实实际使用表格的关键适用条件，输出 applicability_checks 和样品依据的逐字 evidence_quote；${input.parameter_review ? "已确认参数应复用 parameter_review 的原文引用，不重复读取命名文件；仅对影响本项目的未解决参数搜索报告补证据。" : "报告依据需 search_report_context，型号推断需核对命名原文。"}不能拼接或改写引用，可以直接引用含 HTML 标签的原表行。无法确认的关键条件应判 unevaluable + applicability_undetermined，不能默认闭口或型号分支。`,
+			'applicability re-prompt',
+		);
+	}
+
 	// 引用协议只锁 read 之后的判定，不锁第一次 raw。
 	const postReadVerdict = parsed.value?.verdict;
 	const postReadKind = parsed.value?.kind;
@@ -538,6 +573,10 @@ export async function runCase(input: AgentCaseInput): Promise<AgentCaseOutcome> 
 
 	const closed = applyEvidenceClosure(parsed.value, readBodies);
 	parsed = { ...parsed, value: closed.result };
+	if (parsed.value && input.parameter_evidence) {
+		parsed.value.applicability_validation_issues = applicabilityIssues(parsed.value, sampleSources, [...readBodies.values(), input.naming_rule_context || ''], input.parameter_review?.fields);
+		parsed.value.applicability_validation = applicabilityDiagnostics(parsed.value, sampleSources, [...readBodies.values(), input.naming_rule_context || '']);
+	}
 	protocolError = Boolean(closed.closure.applied && !closed.closure.passed);
 
 	// Persist per-case trace JSONL (auto-pruned by server housekeeping).

@@ -6,7 +6,7 @@
  * tighter-than-standard), and the standard_not_found read-evidence gate.
  * Keep in sync with experiment/pi-standard-audit/skill.md.
  */
-export function systemPrompt(options?: { hasFirstRound?: boolean }): string {
+export function systemPrompt(options?: { hasFirstRound?: boolean; hasParameterReview?: boolean }): string {
 	const hasFirstRound = options?.hasFirstRound === true;
 	const taskLine = hasFirstRound
 		? `工作流已经检索过标准库并给出第一轮候选。你需要先阅读这些片段；读完仍不够再 search_standards 补召回，然后判定声称值是否与标准一致。`
@@ -37,9 +37,16 @@ export function systemPrompt(options?: { hasFirstRound?: boolean }): string {
 		`   允许通过标准证据补充标准侧的限值、公式、适用规则和允许偏差；不得凭行业常识、型号经验或猜测，补充报告中未提供的产品事实、试验事实或样品事实。`,
 		`   报告未给出样品/试验事实时，先 search_report_context 按字面检索当前检测报告正文；窗口里没有的才判 unevaluable + applicability_undetermined。标准侧适用规则应 read_chunk 后继续判定，不得仅因“还要读标准规则”而 unevaluable。`,
 		`   标准条款可以写“满足条件 X 时采用要求 Y”，但 X 必须来自报告输入。例如残余压力不低于施压的 70% 只适用于条款写明的油箱结构；报告未给出油箱型式时不得默认某一分支后判 match。`,
+		options?.hasParameterReview
+			? `   parameter_review 是报告级一次性核对结果：confirmed 值及原文引用直接复用，不要再次解码型号、阅读命名文件或搜索报告确认相同参数。当前任务只核对标准适用条件与确认参数的对应关系。missing/conflict/unverified 不能视为事实，只有影响当前标准适用性时才搜索报告补证据。sample_fact 填 parameter_review 的字段 key、value 及 evidence_quote。`
+			: `   parameter_evidence 逐字段标明来源与校验。model_decode 是推断提议，requires_review/unverified 不是已确认事实；quote_verified 只表示引用存在，不表示推断正确。用到关键参数时核对引用是否支持该值。型号推断须对照给出的命名依据原文、完整型号和默认/省略规则，不能凭经验。报告提取缺证据时先 search_report_context 核实。`,
+		`   报告明确记载的参数与完整型号结合命名规则的推断冲突时，不得自行宣布“以型号为准”或“以报告为准”。先补查报告原文，只有新的直接证据能解释并消除冲突时才可确认；无法核实或未消除时将相关条件标 conflict，判 unevaluable + applicability_undetermined。`,
+		`   match/mismatch 前逐项核实所采用表题、表头、注释中的关键适用条件（例如绝缘介质、调压方式、铁芯材料/结构、闭口、型号子列）。行绑定 unique 不表示整表适用。不得将密封式等同于闭口铁芯；关键条件缺失、冲突或未核实且无法补证据时判 unevaluable + applicability_undetermined。`,
 		`2. 每个判定都给出可定位的标准证据（标准号、表号/条款、片段）。match/mismatch 前必须对证据 chunk 执行 read_chunk。`,
 		`3. 最终一条消息只输出一个紧凑 JSON，不要 Markdown 代码块包裹。`,
-		`   JSON 字段：case_id, verdict, kind, standard_no, standard_value, reported_value, evidence[], reasoning。`,
+		`   JSON 字段：case_id, verdict, kind, standard_no, standard_value, reported_value, evidence[], applicability_checks[], reasoning。`,
+		`   applicability_checks 每项为 {condition, parameter, value, source, evidence_role, evidence_quote, state}，state 为 confirmed/conflict/unknown。evidence_role 为 sample_fact（样品事实：报告原文或命名规则结合完整型号）或 standard_condition（已 read_chunk 的标准表题、表头、行值，或任务中已提供的命名规则原文）。样品事实只能用样品来源证明，不能以标准表题证明样品具备该条件。match/mismatch 至少需要一项 sample_fact。每项只核实一个条件，引用必须支持该项值，不要用仅支持一个字段的引用证明多个字段。未知条件不得标 confirmed。`,
+		`   evidence_quote 必须是来源中连续出现的一段原文，保留原始标点和表格格式；不能把多个不连续片段拼接成一句或加入省略号。多个依据拆成多个检查项。`,
 		`   standard_value 只填写最终判定实际使用的标准要求，不要把无关型号参数、上下文数字或解释性数字混入该字段。`,
 		`   evidence 每项必须是对象 {chunk_id, source, location}：${chunkIdRule}；source=标准号，location=表号或条款（如「表6」「第4.3.2条」）。不要写 evidence.text，正文由 Host 从已读片段回填。out_of_scope 时 evidence 可为 []。`,
 		`   verdict ∈ {match, mismatch, unevaluable, out_of_scope}，kind 必填（仅 out_of_scope 时为 null）：`,
